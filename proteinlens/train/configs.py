@@ -11,6 +11,7 @@ from proteinlens.train.evaluation import EvaluationConfig
 from proteinlens.train.trainers.base_trainer import SAETrainerConfig
 from proteinlens.train.trainers.relu import ReLUTrainerConfig  
 from proteinlens.train.trainers.jump_relu import JumpReLUTrainerConfig
+from proteinlens.train.trainers.matryoshka_batch_top_k import MatryoshkaBatchTopKTrainerConfig
 from proteinlens.train.wandb_manager import WandbConfig
 import torch
 
@@ -21,10 +22,8 @@ def _get_trainer_config_class(trainer_data: dict) -> type:
         return ReLUTrainerConfig
     elif 'bandwidth' in trainer_data:
         return JumpReLUTrainerConfig
-    elif 'auxk_alpha' in trainer_data:
-        return BatchTopKTrainerConfig
-    elif 'k' in trainer_data:
-        return TopKTrainerConfig  
+    elif 'group_fractions' in trainer_data:
+        return MatryoshkaBatchTopKTrainerConfig  
     else:
         # Default to ReLU if we can't determine the type
         print("Warning: Could not determine trainer type, defaulting to ReLUTrainerConfig")

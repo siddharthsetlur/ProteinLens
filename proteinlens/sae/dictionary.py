@@ -369,7 +369,160 @@ class JumpReLUSAE(Dictionary, nn.Module):
             device = autoencoder.W_enc.device
         return autoencoder.to(dtype=dtype, device=device)
 
+class MatryoshkaBatchTopKSAE(Dictionary, nn.Module):
+    def __init__(
+        self, activation_dim: int, dict_size: int, k: int, group_sizes: list[int], normalize_to_sqrt_d=False
+    ):
+        super().__init__(normalize_to_sqrt_d)
+        self.activation_dim = activation_dim
+        self.dict_size = dict_size
 
+        assert sum(group_sizes) == dict_size, "group sizes must sum to dict_size"
+        assert all(s > 0 for s in group_sizes), "all group sizes must be positive"
+
+        assert isinstance(k, int) and k > 0, f"k={k} must be a positive integer"
+        self.register_buffer("k", t.tensor(k, dtype=t.int))
+        self.register_buffer("threshold", t.tensor(-1.0, dtype=t.float32))
+
+        self.active_groups = len(group_sizes)
+        group_indices = [0] + list(t.cumsum(t.tensor(group_sizes), dim=0))
+        self.group_indices = group_indices
+
+        self.register_buffer("group_sizes", t.tensor(group_sizes))
+
+        self.W_enc = nn.Parameter(t.empty(activation_dim, dict_size))
+        self.b_enc = nn.Parameter(t.zeros(dict_size))
+        self.W_dec = nn.Parameter(
+            t.nn.init.kaiming_uniform_(t.empty(dict_size, activation_dim))
+        )
+        self.b_dec = nn.Parameter(t.zeros(activation_dim))
+
+        # We must transpose because we are using nn.Parameter, not nn.Linear
+        self.W_dec.data = set_decoder_norm_to_unit_norm(
+            self.W_dec.data.T, activation_dim, dict_size
+        ).T
+        self.W_enc.data = self.W_dec.data.clone().T
+        # Initialize normalization factor buffer with ones
+        self.register_buffer("activation_rescale_factor", t.ones(dict_size))
+        self._make_contiguous()
+    def encode(
+        self, x: t.Tensor, return_active: bool = False, use_threshold: bool = True, normalize_features: bool = False
+    ):
+        post_relu_feat_acts_BF = nn.functional.relu(
+            (x - self.b_dec) @ self.W_enc + self.b_enc
+        )
+
+        if use_threshold:
+            encoded_acts_BF = post_relu_feat_acts_BF * (
+                post_relu_feat_acts_BF > self.threshold
+            )
+        else:
+            # Flatten and perform batch top-k
+            flattened_acts = post_relu_feat_acts_BF.flatten()
+            post_topk = flattened_acts.topk(self.k * x.size(0), sorted=False, dim=-1)
+
+            encoded_acts_BF = (
+                t.zeros_like(post_relu_feat_acts_BF.flatten())
+                .scatter_(-1, post_topk.indices, post_topk.values)
+                .reshape(post_relu_feat_acts_BF.shape)
+            )
+
+        max_act_index = self.group_indices[self.active_groups]
+        encoded_acts_BF[:, max_act_index:] = 0
+        if normalize_features:
+            encoded_acts_BF /= self.activation_rescale_factor
+        if return_active:
+            return encoded_acts_BF, encoded_acts_BF.sum(0) > 0, post_relu_feat_acts_BF
+        else:
+            return encoded_acts_BF
+
+    def decode(self, x: t.Tensor) -> t.Tensor:
+        return x @ self.W_dec + self.b_dec
+
+    def forward(self, x: t.Tensor, output_features: bool = False, unnormalize: bool = False):
+        """
+        Forward pass of an autoencoder.
+
+        Args:
+            x: activations to be autoencoded (unnormalized)
+            output_features: if True, return the encoded features as well as the decoded x
+            unnormalize: if True, un-normalize output to original space (for injection/steering).
+                        if False (default), keep output in normalized √d space (for training/analysis)
+        """
+        # Apply unit normalization and get original norms (calculated once)
+        x, original_norms = self._normalize_input_and_get_norms(x)
+
+        encoded_acts_BF = self.encode(x)
+        x_hat_BD = self.decode(encoded_acts_BF)
+         # Only un-normalize if explicitly requested (for fidelity/steering)
+        if unnormalize:
+            x_hat_BD = self._unnormalize_output(x_hat_BD, original_norms)
+        if not output_features:
+            return x_hat_BD
+        else:
+            return x_hat_BD, encoded_acts_BF
+
+    @t.no_grad()
+    def scale_biases(self, scale: float):
+        self.b_enc.data *= scale
+        self.b_dec.data *= scale
+        if self.threshold >= 0:
+            self.threshold *= scale
+
+    @t.no_grad()
+    def encode_feat_subset(self, x, feat_list, normalize_features: bool = False):
+        encoder_w_subset = self.encoder.weight[feat_list, :]
+        encoder_b_subset = self.encoder.bias[feat_list]
+        encoded_acts_BF = t.nn.ReLU()(
+            (x - self.b_dec) @ encoder_w_subset.T + encoder_b_subset
+        )
+        encoded_acts_BF = encoded_acts_BF * (encoded_acts_BF > self.threshold)
+
+        if normalize_features:
+            encoded_acts_BF /= self.activation_rescale_factor[feat_list]
+        return encoded_acts_BF
+    
+    @classmethod
+    def from_pretrained(
+        cls,
+        path: str | None = None,
+        k: int | None = None,
+        threshold: float | None = None,
+        device=None,
+    ):
+        """
+        Load a pretrained dictionary from a file.
+        """
+        if device is None:
+            device = get_device()
+        state_dict = t.load(path, map_location=device)
+        if k is None:
+            print(f"Loading k={state_dict['k'].item()} from state dict")
+            k = state_dict["k"].item()
+        else:
+            assert (
+                k == state_dict["k"].item()
+            ), f"k={k} != {state_dict['k'].item()}=state_dict['k']"
+
+        if threshold is None:
+            print(f"Loading threshold={state_dict['threshold'].item()} from state dict")
+            threshold = state_dict["threshold"].item()
+        else:
+            assert (
+                threshold == state_dict["threshold"].item()
+            ), f"threshold={threshold} != {state_dict['threshold'].item()}=state_dict['threshold']"
+
+        activation_dim, dict_size = state_dict["W_enc"].shape
+                
+        group_sizes = state_dict["group_sizes"].tolist()
+
+        normalize_to_sqrt_d = state_dict.get("normalize_to_sqrt_d", t.tensor(False)).item()
+
+        autoencoder = MatryoshkaBatchTopKSAE(activation_dim=activation_dim, dict_size=dict_size, k=k, group_sizes=group_sizes, normalize_to_sqrt_d=normalize_to_sqrt_d)
+        autoencoder.load_state_dict(state_dict)
+        if device is not None:
+            autoencoder.to(device)
+        return autoencoder
 
 class IdentityDict(Dictionary, nn.Module):
     """

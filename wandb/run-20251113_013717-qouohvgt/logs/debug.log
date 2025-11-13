@@ -1,0 +1,29 @@
+2025-11-13 01:37:17,460 INFO    MainThread:72906 [wandb_setup.py:_flush():76] Current SDK version is 0.17.6
+2025-11-13 01:37:17,461 INFO    MainThread:72906 [wandb_setup.py:_flush():76] Configure stats pid to 72906
+2025-11-13 01:37:17,461 INFO    MainThread:72906 [wandb_setup.py:_flush():76] Loading settings from /Users/siddharthsetlur/.config/wandb/settings
+2025-11-13 01:37:17,461 INFO    MainThread:72906 [wandb_setup.py:_flush():76] Loading settings from /Users/siddharthsetlur/Desktop/PhD/ProteinLens/wandb/settings
+2025-11-13 01:37:17,461 INFO    MainThread:72906 [wandb_setup.py:_flush():76] Loading settings from environment variables: {}
+2025-11-13 01:37:17,461 INFO    MainThread:72906 [wandb_setup.py:_flush():76] Applying setup settings: {'_disable_service': False}
+2025-11-13 01:37:17,461 INFO    MainThread:72906 [wandb_setup.py:_flush():76] Inferring run settings from compute environment: {'program_relpath': 'train_basic_sae.py', 'program_abspath': '/Users/siddharthsetlur/Desktop/PhD/ProteinLens/train_basic_sae.py', 'program': '/Users/siddharthsetlur/Desktop/PhD/ProteinLens/train_basic_sae.py'}
+2025-11-13 01:37:17,461 INFO    MainThread:72906 [wandb_setup.py:_flush():76] Applying login settings: {}
+2025-11-13 01:37:17,462 INFO    MainThread:72906 [wandb_init.py:_log_setup():521] Logging user logs to /Users/siddharthsetlur/Desktop/PhD/ProteinLens/wandb/run-20251113_013717-qouohvgt/logs/debug.log
+2025-11-13 01:37:17,462 INFO    MainThread:72906 [wandb_init.py:_log_setup():522] Logging internal logs to /Users/siddharthsetlur/Desktop/PhD/ProteinLens/wandb/run-20251113_013717-qouohvgt/logs/debug-internal.log
+2025-11-13 01:37:17,462 INFO    MainThread:72906 [wandb_init.py:init():559] calling init triggers
+2025-11-13 01:37:17,462 INFO    MainThread:72906 [wandb_init.py:init():566] wandb.init called with sweep_config: {}
+config: {'trainer_config': {'expansion_factor': 4.0, 'dictionary_size': 1280, 'lr': 0.0002, 'activation_dim': 320, 'epochs': 0.9610520991401112, 'steps': 9500, 'warmup_steps': 1000, 'decay_start': 8000, 'resample_steps': None, 'normalize_to_sqrt_d': False, 'l1_penalty': 0.06, 'l1_penalty_warmup_steps': 475}, 'data_config': {'plm_embd_dir': '/Users/siddharthsetlur/Desktop/PhD/ProteinLens/data/training_embeddings/esm2_8m/layer_4', 'batch_size': 128, 'seed': 0, 'samples_to_skip': 0, 'n_shards_to_include': None, 'zscore_means_file': None, 'zscore_vars_file': None, 'target_dtype': torch.float32}, 'evaluation_config': {'eval_seq_path': '/Users/siddharthsetlur/Desktop/PhD/ProteinLens/data/eval_sequences.txt', 'eval_embd_dir': None, 'eval_batch_size': 8, 'eval_steps': 10000, 'zscore_means_file': None, 'zscore_vars_file': None, 'target_dtype': torch.float32, 'model_name': 'esm2_t6_8M_UR50D', 'layer_idx': 4, 'corrupt': False}}
+2025-11-13 01:37:17,463 INFO    MainThread:72906 [wandb_init.py:init():609] starting backend
+2025-11-13 01:37:17,463 INFO    MainThread:72906 [wandb_init.py:init():613] setting up manager
+2025-11-13 01:37:17,467 INFO    MainThread:72906 [backend.py:_multiprocessing_setup():105] multiprocessing start_methods=spawn,fork,forkserver, using: spawn
+2025-11-13 01:37:17,470 INFO    MainThread:72906 [wandb_init.py:init():621] backend started and connected
+2025-11-13 01:37:17,519 INFO    MainThread:72906 [wandb_init.py:init():716] updated telemetry
+2025-11-13 01:37:17,561 INFO    MainThread:72906 [wandb_init.py:init():749] communicating run to backend with 90.0 second timeout
+2025-11-13 01:37:17,918 ERROR   MainThread:72906 [wandb_init.py:init():775] encountered error: It appears that you do not have permission to access the requested resource. Please reach out to the project owner to grant you access. If you have the correct permissions, verify that there are no issues with your networking setup.(Error 403: Forbidden)
+2025-11-13 01:37:17,919 ERROR   MainThread:72906 [wandb_init.py:init():1187] error in wandb.init()
+Traceback (most recent call last):
+  File "/Users/siddharthsetlur/opt/anaconda3/envs/interplm/lib/python3.11/site-packages/wandb/sdk/wandb_init.py", line 1177, in init
+    return wi.init()
+           ^^^^^^^^^
+  File "/Users/siddharthsetlur/opt/anaconda3/envs/interplm/lib/python3.11/site-packages/wandb/sdk/wandb_init.py", line 781, in init
+    raise error
+wandb.errors.CommError: It appears that you do not have permission to access the requested resource. Please reach out to the project owner to grant you access. If you have the correct permissions, verify that there are no issues with your networking setup.(Error 403: Forbidden)
+2025-11-13 01:37:19,061 WARNING MsgRouterThr:72906 [router.py:message_loop():77] message_loop has been closed

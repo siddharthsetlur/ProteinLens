@@ -306,7 +306,6 @@ dependencies:
       - platformdirs==4.4.0
       - plotly==5.23.0
       - propcache==0.3.2
-      - proteinlens==1.0.0
       - protobuf==5.29.5
       - psutil==7.1.0
       - py3dmol==2.4.0

@@ -51,24 +51,24 @@ class MatryoshkaBatchTopKTrainerConfig(SAETrainerConfig):
     dead_feature_threshold: int = 10_000_000
     
     def __post_init__(self):
-        # Auto-compute LR if not provided
-        if self.lr is None:
-            scale = self.activation_dim * self.expansion_factor / (2**14)
-            self.lr = 2e-4 / scale**0.5
+        # # Auto-compute LR if not provided
+        # if self.lr is None:
+        #     scale = self.activation_dim * self.expansion_factor / (2**14)
+        #     self.lr = 2e-4 / scale**0.5
         
-        # === CRITICAL GROUP CALCULATION LOGIC ===
-        dict_size = self.activation_dim * self.expansion_factor
-        
+        # # === CRITICAL GROUP CALCULATION LOGIC ===
+        # if self.dictionary_size is None:
+        #     self.dict_size = self.activation_dim * self.expansion_factor
         # Validation: fractions must sum to 1.0
         assert isclose(sum(self.group_fractions), 1.0), (
             "group_fractions must sum to 1.0"
         )
         
         # Calculate all groups EXCEPT the last one
-        group_sizes = [int(f * dict_size) for f in self.group_fractions[:-1]]
+        group_sizes = [int(f * self.dictionary_size) for f in self.group_fractions[:-1]]
         
         # Put REMAINDER in the last group (handles rounding errors)
-        group_sizes.append(dict_size - sum(group_sizes))
+        group_sizes.append(self.dictionary_size - sum(group_sizes))
         
         self.group_sizes = group_sizes
         
@@ -113,7 +113,7 @@ class MatryoshkaBatchTopKTrainer(SAETrainer):
         self.steps = trainer_config.steps
         self.decay_start = trainer_config.decay_start
         self.warmup_steps = trainer_config.warmup_steps
-        self.grad_clip_norm = trainer_config.grad_clip_norm
+        # self.grad_clip_norm = trainer_config.grad_clip_norm
         
         # Top-K parameters
         self.k = trainer_config.k
@@ -129,7 +129,7 @@ class MatryoshkaBatchTopKTrainer(SAETrainer):
         # Create the Matryoshka SAE
         self.ae = MatryoshkaBatchTopKSAE(
             activation_dim=trainer_config.activation_dim,
-            dict_size=trainer_config.activation_dim * trainer_config.expansion_factor,
+            dict_size=trainer_config.dictionary_size,
             k=trainer_config.k,
             group_sizes=self.group_sizes,
             normalize_to_sqrt_d=trainer_config.normalize_to_sqrt_d,
@@ -219,7 +219,7 @@ class MatryoshkaBatchTopKTrainer(SAETrainer):
             )
 
             # Use decoder method instead of direct matrix multiplication
-            x_reconstruct_aux = self.ae.decoder(auxk_acts_BF)
+            x_reconstruct_aux = self.ae.W_dec(auxk_acts_BF)
             
             l2_loss_aux = (
                 (residual_BD.float() - x_reconstruct_aux.float())
@@ -336,14 +336,15 @@ class MatryoshkaBatchTopKTrainer(SAETrainer):
         loss = self.loss(x, step=step)
         loss.backward()
 
-        self.ae.decoder.weight.grad = remove_gradient_parallel_to_decoder_directions(
-            self.ae.decoder.weight,
-            self.ae.decoder.weight.grad,
+        # We must transpose because we are using nn.Parameter, not nn.Linear
+        self.ae.W_dec.grad = remove_gradient_parallel_to_decoder_directions(
+            self.ae.W_dec.T,
+            self.ae.W_dec.grad.T,
             self.ae.activation_dim,
             self.ae.dict_size,
-        )
-        if self.grad_clip_norm is not None:
-            t.nn.utils.clip_grad_norm_(self.ae.parameters(), self.grad_clip_norm)
+        ).T
+        # if self.grad_clip_norm is not None:
+        #     t.nn.utils.clip_grad_norm_(self.ae.parameters(), self.grad_clip_norm)
 
 
         self.optimizer.step()
@@ -351,23 +352,24 @@ class MatryoshkaBatchTopKTrainer(SAETrainer):
         self.scheduler.step()
         self.update_annealed_k(step, self.ae.activation_dim, self.k_anneal_steps)
 
-        # Renormalize decoder
-        if hasattr(self.ae, 'decoder'):  # If using nn.Linear
-            self.ae.decoder.weight.data = set_decoder_norm_to_unit_norm(
-                self.ae.decoder.weight,
-                self.ae.activation_dim,
-                self.ae.dict_size,
-            )
-        else:  # If using nn.Parameter (W_dec)
-            self.ae.W_dec.data = set_decoder_norm_to_unit_norm(
-                self.ae.W_dec.T,
-                self.ae.activation_dim,
-                self.ae.dict_size,
-            ).T
+        # # Renormalize decoder
+        # if hasattr(self.ae, 'decoder'):  # If using nn.Linear
+        #     self.ae.decoder.weight.data = set_decoder_norm_to_unit_norm(
+        #         self.ae.decoder.weight,
+        #         self.ae.activation_dim,
+        #         self.ae.dict_size,
+        #     )
+        # else:  # If using nn.Parameter (W_dec)
+        #     self.ae.W_dec.data = set_decoder_norm_to_unit_norm(
+        #         self.ae.W_dec.T,
+        #         self.ae.activation_dim,
+        #         self.ae.dict_size,
+        #     ).T
         # Make sure the decoder is still unit-norm
-        self.ae.decoder.weight.data = set_decoder_norm_to_unit_norm(
-            self.ae.decoder.weight, self.ae.activation_dim, self.ae.dict_size
-        )
+        # We must transpose because we are using nn.Parameter, not nn.Linear
+        self.ae.W_dec.data = set_decoder_norm_to_unit_norm(
+            self.ae.W_dec.T, self.ae.activation_dim, self.ae.dict_size
+        ).T
 
         return loss.item()
     def get_per_dimension_mse(self, x):

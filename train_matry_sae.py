@@ -45,7 +45,7 @@ def main():
     EMBEDDINGS_DIR = Path(INTERPLM_DATA) / "training_embeddings" / "esm2_8m" / f"layer_{LAYER}"
     EVAL_SEQ_FILE = Path(INTERPLM_DATA) / "eval_sequences.txt"
     EVAL_FASTA = Path(INTERPLM_DATA) / "eval_shards" / "shard_0.fasta"
-    SAVE_DIR = Path("models") / "walkthrough_model" / f"layer_{LAYER}"
+    SAVE_DIR = Path("models") / "matryoshka" / f"layer_{LAYER}"
 
     # Model dimensions
     EMBEDDING_DIM = 320  # ESM2-8M layer dimension
@@ -54,9 +54,9 @@ def main():
     # Training hyperparameters (optimized for convergence)
     BATCH_SIZE = 128     # Batch size for walkthrough
     LEARNING_RATE = 2e-4 # Higher learning rate for faster convergence
-    L1_COEFFICIENT = 0.06 # L1 penalty for sparsity
     STEPS = 9_500        # Enough steps to see meaningful loss decrease
-
+    FRACTIONS = [0.25, 0.25, 0.5]
+    K=25
     # ========================================
 
     print("=" * 60)
@@ -90,15 +90,12 @@ def main():
         activation_dim=EMBEDDING_DIM,
         dictionary_size=HIDDEN_SIZE,
         lr=LEARNING_RATE,
-        l1_penalty=L1_COEFFICIENT,
-        k=25,
-        group_fractions=[0.25, 0.25, 0.5],
+        k=K,
+        group_fractions=FRACTIONS,
         warmup_steps=1000,  # 10% of total steps for warmup
         decay_start=8000,   # Start decay at 80% of training
         steps=STEPS,
         normalize_to_sqrt_d=False,
-        top_k=4,            # Top-4 features for Matryoshka batching
-        batch_expansion_factor=4,  # Expand batch size by 4x internally
     )
     
 
@@ -116,7 +113,7 @@ def main():
         use_wandb=True,
         wandb_entity="s-setlur-university-of-edinburgh",      # Your wandb username
         wandb_project="protein-sae-demo",  # Project name (creates if doesn't exist)
-        wandb_name="relu_test_run_1",      # This specific run's name
+        wandb_name="MatryoshkaBatchTopK_test_run_1",      # This specific run's name
         log_steps=100,                     # Log metrics to wandb every 100 steps
     )
     
@@ -140,7 +137,8 @@ def main():
     print(f"  Steps: {STEPS}")
     print(f"  Batch size: {BATCH_SIZE}")
     print(f"  Learning rate: {LEARNING_RATE:.1e}")
-    print(f"  L1 coefficient: {L1_COEFFICIENT:.1e}")
+    print(f"k: {trainer_cfg.k}")
+    print(f"Group fractions: {trainer_cfg.group_fractions}")
     print(f"  Warmup steps: {trainer_cfg.warmup_steps}")
     print(f"  Decay start: {trainer_cfg.decay_start}")
     print(f"  Checkpoints: Every {checkpoint_cfg.save_steps} steps")

@@ -34,7 +34,7 @@ def main():
     # These are the settings for the walkthrough
 
     # Get proteinlens_DATA from environment or use default
-    INTERPLM_DATA = '/Users/siddharthsetlur/Desktop/PhD/ProteinLens/data'
+    INTERPLM_DATA = '/home/s2721407/Desktop/ProteinLens/data'
 
     # Get LAYER from environment
     LAYER = os.environ.get("LAYER")
@@ -42,7 +42,7 @@ def main():
         raise RuntimeError("Environment variable 'LAYER' must be set (e.g., export LAYER=3)")
 
     # Paths
-    EMBEDDINGS_DIR = Path(INTERPLM_DATA) / "training_embeddings" / "esm2_8m" / f"layer_{LAYER}"
+    EMBEDDINGS_DIR = Path(INTERPLM_DATA) / "esm2_8m" / f"layer_{LAYER}"
     EVAL_SEQ_FILE = Path(INTERPLM_DATA) / "eval_sequences.txt"
     EVAL_FASTA = Path(INTERPLM_DATA) / "eval_shards" / "shard_0.fasta"
     SAVE_DIR = Path("models") / "matryoshka" / f"layer_{LAYER}"
@@ -55,8 +55,8 @@ def main():
     BATCH_SIZE = 128     # Batch size for walkthrough
     LEARNING_RATE = 2e-4 # Higher learning rate for faster convergence
     STEPS = 9_500        # Enough steps to see meaningful loss decrease
-    FRACTIONS = [0.25, 0.25, 0.5]
-    K=25
+    FRACTIONS = [0.125, 0.125, 0.25, 0.5]
+    K=30
     # ========================================
 
     print("=" * 60)
@@ -113,7 +113,7 @@ def main():
         use_wandb=True,
         wandb_entity="s-setlur-university-of-edinburgh",      # Your wandb username
         wandb_project="protein-sae-demo",  # Project name (creates if doesn't exist)
-        wandb_name="MatryoshkaBatchTopK_test_run_1",      # This specific run's name
+        wandb_name="MatryoshkaBatchTopK_test_run_2",      # This specific run's name
         log_steps=100,                     # Log metrics to wandb every 100 steps
     )
     

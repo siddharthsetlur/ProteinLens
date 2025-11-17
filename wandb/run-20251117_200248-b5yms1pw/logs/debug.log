@@ -1,0 +1,21 @@
+2025-11-17 20:02:48,307 INFO    MainThread:92032 [wandb_setup.py:_flush():81] Current SDK version is 0.22.3
+2025-11-17 20:02:48,307 INFO    MainThread:92032 [wandb_setup.py:_flush():81] Configure stats pid to 92032
+2025-11-17 20:02:48,307 INFO    MainThread:92032 [wandb_setup.py:_flush():81] Loading settings from /home/s2721407/.config/wandb/settings
+2025-11-17 20:02:48,307 INFO    MainThread:92032 [wandb_setup.py:_flush():81] Loading settings from /home/s2721407/Desktop/ProteinLens/wandb/settings
+2025-11-17 20:02:48,308 INFO    MainThread:92032 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2025-11-17 20:02:48,308 INFO    MainThread:92032 [wandb_init.py:setup_run_log_directory():706] Logging user logs to /home/s2721407/Desktop/ProteinLens/wandb/run-20251117_200248-b5yms1pw/logs/debug.log
+2025-11-17 20:02:48,308 INFO    MainThread:92032 [wandb_init.py:setup_run_log_directory():707] Logging internal logs to /home/s2721407/Desktop/ProteinLens/wandb/run-20251117_200248-b5yms1pw/logs/debug-internal.log
+2025-11-17 20:02:48,308 INFO    MainThread:92032 [wandb_init.py:init():833] calling init triggers
+2025-11-17 20:02:48,308 INFO    MainThread:92032 [wandb_init.py:init():838] wandb.init called with sweep_config: {}
+config: {'trainer_config': {'expansion_factor': 4.0, 'dictionary_size': 1280, 'lr': 0.0002, 'activation_dim': 320, 'epochs': 0.9412464084018627, 'steps': 9500, 'warmup_steps': 1000, 'decay_start': 8000, 'resample_steps': None, 'normalize_to_sqrt_d': False, 'k': 30, 'auxk_alpha': 0.03125, 'threshold_beta': 0.999, 'threshold_start_step': 1000, 'k_anneal_steps': None, 'group_fractions': [0.125, 0.125, 0.25, 0.5], 'group_weights': [0.25, 0.25, 0.25, 0.25], 'dead_feature_threshold': 10000000}, 'data_config': {'plm_embd_dir': '/home/s2721407/Desktop/ProteinLens/data/esm2_8m/layer_4', 'batch_size': 128, 'seed': 0, 'samples_to_skip': 0, 'n_shards_to_include': None, 'zscore_means_file': None, 'zscore_vars_file': None, 'target_dtype': torch.float32}, 'evaluation_config': {'eval_seq_path': '/home/s2721407/Desktop/ProteinLens/data/eval_sequences.txt', 'eval_embd_dir': None, 'eval_batch_size': 8, 'eval_steps': 10000, 'zscore_means_file': None, 'zscore_vars_file': None, 'target_dtype': torch.float32, 'model_name': 'esm2_t6_8M_UR50D', 'layer_idx': 4, 'corrupt': False}, '_wandb': {}}
+2025-11-17 20:02:48,308 INFO    MainThread:92032 [wandb_init.py:init():881] starting backend
+2025-11-17 20:02:48,528 INFO    MainThread:92032 [wandb_init.py:init():884] sending inform_init request
+2025-11-17 20:02:48,537 INFO    MainThread:92032 [wandb_init.py:init():892] backend started and connected
+2025-11-17 20:02:48,539 INFO    MainThread:92032 [wandb_init.py:init():962] updated telemetry
+2025-11-17 20:02:48,547 INFO    MainThread:92032 [wandb_init.py:init():986] communicating run to backend with 90.0 second timeout
+2025-11-17 20:02:49,329 INFO    MainThread:92032 [wandb_init.py:init():1033] starting run threads in backend
+2025-11-17 20:02:49,482 INFO    MainThread:92032 [wandb_run.py:_console_start():2506] atexit reg
+2025-11-17 20:02:49,482 INFO    MainThread:92032 [wandb_run.py:_redirect():2354] redirect: wrap_raw
+2025-11-17 20:02:49,482 INFO    MainThread:92032 [wandb_run.py:_redirect():2423] Wrapping output streams.
+2025-11-17 20:02:49,482 INFO    MainThread:92032 [wandb_run.py:_redirect():2446] Redirects installed.
+2025-11-17 20:02:49,485 INFO    MainThread:92032 [wandb_init.py:init():1073] run started, returning control to user process

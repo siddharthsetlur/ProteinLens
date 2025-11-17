@@ -1,9 +1,19 @@
+Setup 
+```
+### install the conda env 
+conda env create -f environment.yml
+conda activate proteinlens
+# Install package
+pip install -e .
+
+```
 ### Extract PLM embeddings (training data for SAE)
 As a small test we're going to use Swiss-Prot as suggested (later scale to random subsets of UniProt50). 
 **Set the layer to analyze:**
 ```bash
 # Choose which layer to extract and analyze (4 is middle layer for ESM-2-8M)
 export LAYER=4
+export INTERPLM_DATA = `PATH`
 ```
 For now InterPLMDATA = `/Users/siddharthsetlur/Desktop/PhD/ProteinLens/data`
 **Download the sequences from UNiprot**
@@ -33,10 +43,14 @@ mv $INTERPLM_DATA/uniprot_shards/shard_0.fasta $INTERPLM_DATA/eval_shards/
 ```bash
 # Extract embeddings for training shards only (shard_0 is held out for evaluation)
 python scripts/extract_embeddings.py \
-    --fasta_dir /Users/siddharthsetlur/Desktop/PhD/ProteinLens/data/uniprot_shards/ \
-    --output_dir /Users/siddharthsetlur/Desktop/PhD/ProteinLens/data/training_embeddings/esm2_8m/ \
+    --fasta_dir $INTERPLM_DATA/uniprot_shards/ \
+    --output_dir $INTERPLM_DATA/esm2_8m/ \
     --embedder_type esm \
     --model_name facebook/esm2_t6_8M_UR50D \
     --layers $LAYER \
-    --batch_size 32
+    --batch_size 8
+```
+#Train sae
+```
+python scripts/trainer.py 
 ```

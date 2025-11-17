@@ -286,7 +286,6 @@ dependencies:
       - h11==0.16.0
       - h5py==3.11.0
       - huggingface-hub==0.24.5
-      - interplm==1.0.0
       - joblib==1.5.2
       - jsonschema==4.25.1
       - jsonschema-specifications==2025.9.1

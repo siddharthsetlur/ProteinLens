@@ -4,4 +4,4 @@ wandb: For more information, check out the docs at: https://weave-docs.wandb.ai/
 Saving configs to models/matryoshka/layer_4/config.yaml
 Epoch 0/1:   0%|          | 0/10093 [00:00<?, ?it/s]/home/s2721407/miniconda3/envs/interplm/lib/python3.11/site-packages/torch/_utils.py:831: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
   return self.fget.__get__(instance, owner)()
-Epoch 0/1:  62%|██████▏   | 6300/10093 [1:02:13<03:09, 19.97it/s]  
+Epoch 0/1:  73%|███████▎  | 7396/10093 [1:13:13<02:18, 19.48it/s]  

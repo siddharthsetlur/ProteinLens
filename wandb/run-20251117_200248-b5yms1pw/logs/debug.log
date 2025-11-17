@@ -19,3 +19,8 @@ config: {'trainer_config': {'expansion_factor': 4.0, 'dictionary_size': 1280, 'l
 2025-11-17 20:02:49,482 INFO    MainThread:92032 [wandb_run.py:_redirect():2423] Wrapping output streams.
 2025-11-17 20:02:49,482 INFO    MainThread:92032 [wandb_run.py:_redirect():2446] Redirects installed.
 2025-11-17 20:02:49,485 INFO    MainThread:92032 [wandb_init.py:init():1073] run started, returning control to user process
+2025-11-17 21:37:20,020 INFO    MainThread:92032 [wandb_run.py:_finish():2272] finishing run s-setlur-university-of-edinburgh/protein-sae-demo/b5yms1pw
+2025-11-17 21:37:20,020 INFO    MainThread:92032 [wandb_run.py:_atexit_cleanup():2471] got exitcode: 0
+2025-11-17 21:37:20,021 INFO    MainThread:92032 [wandb_run.py:_restore():2453] restore
+2025-11-17 21:37:20,021 INFO    MainThread:92032 [wandb_run.py:_restore():2459] restore done
+2025-11-17 21:37:21,018 INFO    MainThread:92032 [wandb_run.py:_footer_sync_info():3835] logging synced files

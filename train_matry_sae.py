@@ -42,7 +42,7 @@ def main():
         raise RuntimeError("Environment variable 'LAYER' must be set (e.g., export LAYER=3)")
 
     # Paths
-    EMBEDDINGS_DIR = Path(INTERPLM_DATA) / "esm2_8m" / f"layer_{LAYER}"
+    EMBEDDINGS_DIR = Path(INTERPLM_DATA) / "training_embeddings" / "esm2_8m" / f"layer_{LAYER}"
     EVAL_SEQ_FILE = Path(INTERPLM_DATA) / "eval_sequences.txt"
     EVAL_FASTA = Path(INTERPLM_DATA) / "eval_shards" / "shard_0.fasta"
     SAVE_DIR = Path(MODEL_DIR) / "matryoshka" / f"layer_{LAYER}"

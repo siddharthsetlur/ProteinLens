@@ -34,8 +34,8 @@ def main():
     # These are the settings for the walkthrough
 
     # Get proteinlens_DATA from environment or use default
-    INTERPLM_DATA = '/home/s2721407/Desktop/ProteinLens/data'
-
+    INTERPLM_DATA = os.environ.get("INTERPLM_DATA", "data")
+    MODEL_DIR = os.environ.get("MODEL_DIR", "models")
     # Get LAYER from environment
     LAYER = os.environ.get("LAYER")
     if LAYER is None:
@@ -45,22 +45,23 @@ def main():
     EMBEDDINGS_DIR = Path(INTERPLM_DATA) / "esm2_8m" / f"layer_{LAYER}"
     EVAL_SEQ_FILE = Path(INTERPLM_DATA) / "eval_sequences.txt"
     EVAL_FASTA = Path(INTERPLM_DATA) / "eval_shards" / "shard_0.fasta"
-    SAVE_DIR = Path("models") / "matryoshka" / f"layer_{LAYER}"
+    SAVE_DIR = Path(MODEL_DIR) / "matryoshka" / f"layer_{LAYER}"
 
     # Model dimensions
     EMBEDDING_DIM = 320  # ESM2-8M layer dimension
-    HIDDEN_SIZE = 1280   # Number of SAE features (4x expansion for this example)
+    # EXPANSION_FACTOR = 32 #InterPLM has an expansion factor of 32
+    HIDDEN_SIZE = 10240   # Number of SAE features (32x expansion as in the paper)
 
     # Training hyperparameters (optimized for convergence)
-    BATCH_SIZE = 128     # Batch size for walkthrough
-    LEARNING_RATE = 2e-4 # Higher learning rate for faster convergence
-    STEPS = 9_500        # Enough steps to see meaningful loss decrease
-    FRACTIONS = [0.125, 0.125, 0.25, 0.5]
+    BATCH_SIZE = 2048     # Batch size FROM THE inTERpLM pAPER
+    LEARNING_RATE = 2e-4 # lr FROM paper was 1
+    STEPS = 500000        # num_steps from paper 
+    FRACTIONS = [1/32,3/32,7/32,15/32,6/32] #from paper Matryshoka Batch Top K paper
     K=30
     # ========================================
 
     print("=" * 60)
-    print("InterPLM SAE Training Walkthrough")
+    print("InterPLM SAE Training MatryoshkaBatchTopK")
     print("=" * 60)
     print(f"Training embeddings: {EMBEDDINGS_DIR}")
     print(f"Evaluation FASTA: {EVAL_FASTA}")
@@ -88,12 +89,12 @@ def main():
     )
     trainer_cfg = MatryoshkaBatchTopKTrainerConfig(
         activation_dim=EMBEDDING_DIM,
-        dictionary_size=HIDDEN_SIZE,
+        dictionary_size =HIDDEN_SIZE,
         lr=LEARNING_RATE,
         k=K,
         group_fractions=FRACTIONS,
-        warmup_steps=1000,  # 10% of total steps for warmup
-        decay_start=8000,   # Start decay at 80% of training
+        warmup_steps=50000,  # 10% of total steps for warmup
+        decay_start=400000,   # Start decay at 80% of training
         steps=STEPS,
         normalize_to_sqrt_d=False,
     )
@@ -105,15 +106,15 @@ def main():
         model_name="esm2_t6_8M_UR50D",
         layer_idx=int(LAYER),
         eval_steps=10000,  # Don't run during training (only at end)
-        eval_batch_size=8,
+        eval_batch_size=256,
     )
     
     # W&B config (disabled for walkthrough)
     wandb_cfg = WandbConfig(
         use_wandb=True,
         wandb_entity="s-setlur-university-of-edinburgh",      # Your wandb username
-        wandb_project="protein-sae-demo",  # Project name (creates if doesn't exist)
-        wandb_name="MatryoshkaBatchTopK_test_run_2",      # This specific run's name
+        wandb_project="protein-sae-demo-eidf",  # Project name (creates if doesn't exist)
+        wandb_name="MatryoshkaBatchTopK_base",      # This specific run's name
         log_steps=100,                     # Log metrics to wandb every 100 steps
     )
     

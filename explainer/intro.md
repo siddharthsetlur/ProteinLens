@@ -30,27 +30,49 @@ In this post, I want to document myself stumbling my way to understanding what I
 Let's first get a high-level view of the project structure. If like me, you're not used to modular projects it's a bit hard to understand what each part of the tree below does. 
  ```
  .
-├── __init__.py
-├── embedders
-│   ├── README.md
-│   ├── __init__.py
-│   ├── base.py
-│   └── esm.py
-├── sae
-│   ├── __init__.py
-│   ├── dictionary.py
-│   ├── inference.py
-│   ├── intervention.py
-│   └── normalize.py
-├── train
-│   ├── checkpoint_manager.py
-│   ├── configs.py
-│   ├── data_loader.py
-│   ├── evaluation.py
-│   ├── fidelity.py
-│   ├── trainers
-│   ├── training_run.py
-│   └── wandb_manager.py
-└── utils.py
+
+├── environment.yml
+├── README.MD
+├── proteinlens
+     ├── __init__.py
+│   ├── embedders
+│   │   ├── base.py
+│   │   ├── esm.py
+│   │   ├── __init__.py
+│   │   └── README.md
+│   ├── sae
+│   │   ├── dictionary.py
+│   │   ├── inference.py
+│   │   ├── __init__.py
+│   │   ├── intervention.py
+│   │   ├── normalize.py
+│   ├── train
+│   │   ├── checkpoint_manager.py
+│   │   ├── configs.py
+│   │   ├── data_loader.py
+│   │   ├── evaluation.py
+│   │   ├── fidelity.py
+│   │   ├── trainers
+│   │   │   ├── base_trainer.py
+│   │   │   ├── common.py
+│   │   │   ├── __init__.py
+│   │   │   ├── jump_relu.py
+│   │   │   ├── matryoshka_batch_top_k.py
+│   │   │   └── relu.py
+│   │   ├── training_run.py
+│   │   └── wandb_manager.py
+│   └── utils.py
+├── scripts
+│   ├── collect_feature_activations.py
+│   ├── embed_annotations.py
+│   ├── evaluate_sae.py
+│   ├── extract_embeddings.py
+│   ├── shard_fasta.py
+│   └── subset_fasta.py
+├── setup.py
 ```
-Let's tackle the tree from top to bottom. The first thing we see is an `__init__.py` file. In general, these init files, make the stuff in the directory importable as a package. For example when we run `pip install proteinlens`, the `__init__.py` allows us to do things like `from proteinlens.utils import get_device`. We then see the subdirectory `embedders` which contains the code that takes batches of protein sequences, feeds it to a PLM and returns the embeddings of these sequences at various layers of the PLM. Next up is the `sae` directory that implements the sparse autoencoder and associated functions like normalization, intervention (ablations), and inference. The `train` subdirectory defines training routines for the SAE variants defined in `sae` and some helper functions. Each subdirectory has its own `__init__.py` file that enables things like `from proteinlens.sae.embedders.esm import embed_single_sequence`
+
+
+Let's tackle the tree from top to bottom. The first thing we see is an `environment.yml` which specifies the packages we need in order to run everything and allows us to generate an appropriate conda environment. The only other file in the top-level directory is `setup.py` which simply allows us to make `proteinlens` a package that can be installed using `pip install -e . ` and enables us to write things like `import proteinlens`. The actual code for the package is contained in the `proteinlens`, and it is important that the name specified in `setup.py` matches the name of this subdirectory.  The first file we see in the `proteinlens` subdirectory (or any of the subdirectories of `proteinlens` for that matter) is the `__init__` file, which in general make the stuff inside the directory importable. For example, the `__init__.py` in the top level allows us to do things like `from proteinlens.utils import get_device`. Each subdirectory has its own `__init__.py` file that enables things like `from proteinlens.sae.embedders.esm import embed_single_sequence`. 
+
+Each subdirectory of `proteinlens` implements a different functionality primarily by implementing classes. For example, the subdirectory `embedders` which contains the code that takes batches of protein sequences, feeds it to a PLM and returns the embeddings of these sequences at various layers of the PLM. Next up is the `sae` directory that implements the sparse autoencoder and associated functions like normalization, intervention (ablations), and inference. The `train` subdirectory defines training routines for the SAE variants defined in `sae` and some helper functions. 

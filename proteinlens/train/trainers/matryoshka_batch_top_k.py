@@ -100,11 +100,6 @@ class MatryoshkaBatchTopKTrainer(SAETrainer):
             logging_parameters=[
                 "training/learning_rate",
                 "training/threshold",
-                "features/total_dead",
-                "features/effective_l0",
-                "loss/pre_norm_auxk",
-                "loss/min_l2",
-                "loss/max_l2",
             ],
         )
         
@@ -219,7 +214,7 @@ class MatryoshkaBatchTopKTrainer(SAETrainer):
             )
 
             # Use decoder method instead of direct matrix multiplication
-            x_reconstruct_aux = self.ae.W_dec(auxk_acts_BF)
+            x_reconstruct_aux = self.ae.decode(auxk_acts_BF)
             
             l2_loss_aux = (
                 (residual_BD.float() - x_reconstruct_aux.float())
@@ -316,9 +311,7 @@ class MatryoshkaBatchTopKTrainer(SAETrainer):
         else:
             # Namespaced loss dictionary
             loss_dict = {
-                "loss/reconstruction_mean": mean_l2_loss.item(),
-                "loss/reconstruction_min": min_l2_loss,
-                "loss/reconstruction_max": max_l2_loss,
+                "loss/reconstruction": l2_loss.item(),
                 "loss/auxiliary": auxk_loss.item(),
                 "loss/total": loss.item(),
             }

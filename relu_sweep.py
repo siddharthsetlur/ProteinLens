@@ -57,14 +57,14 @@ def main():
     print(f"  Batch size: {BATCH_SIZE}")
     
     # Create eval sequences if needed
-    if not EVAL_SEQ_FILE.exists() and EVAL_FASTA.exists():
-        from Bio import SeqIO
-        EVAL_SEQ_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(EVAL_FASTA) as f_in, open(EVAL_SEQ_FILE, 'w') as f_out:
-            for i, record in enumerate(SeqIO.parse(f_in, "fasta")):
-                if i >= 100:
-                    break
-                f_out.write(str(record.seq) + "\n")
+    # if not EVAL_SEQ_FILE.exists() and EVAL_FASTA.exists():
+    #     from Bio import SeqIO
+    #     EVAL_SEQ_FILE.parent.mkdir(parents=True, exist_ok=True)
+    #     with open(EVAL_FASTA) as f_in, open(EVAL_SEQ_FILE, 'w') as f_out:
+    #         for i, record in enumerate(SeqIO.parse(f_in, "fasta")):
+    #             if i >= 100:
+    #                 break
+    #             f_out.write(str(record.seq) + "\n")
     
     # Create configuration
     dataloader_cfg = DataloaderConfig(
@@ -96,7 +96,7 @@ def main():
         use_wandb=True,
         wandb_entity="s-setlur-university-of-edinburgh",
         wandb_project="protein-sae-eidf",
-        wandb_name=None,  # Use default name from sweep
+        wandb_name=wandb.run.name,  # Use default name from sweep
         log_steps=100,
     )
     

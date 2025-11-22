@@ -8,8 +8,9 @@ dependencies:
   - python=3.11
   - pip=24.0
   - numpy=2.2.6
-  - pytorch::pytorch-cuda
-  - pytorch::torchvision
+  - pytorch::pytorch=2.5.1
+  - pytorch::torchvision=0.20.1
+  - pytorch::pytorch-cuda=12.1
   - pip:
     - nnsight==0.2.21
     - transformers==4.44.0

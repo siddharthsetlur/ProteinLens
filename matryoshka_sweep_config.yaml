@@ -1,0 +1,74 @@
+program: matryoshka_sweep.py
+method: bayes
+metric:
+  name: fidelity/pct_loss_recovered
+  goal: maximize
+
+parameters:
+  # Learning rate
+  learning_rate:
+    distribution: log_uniform_values
+    min: 0.00005
+    max: 0.0005
+
+  # Top-k parameter
+  k:
+    values: [10,15,20, 30, 40, 50]
+
+  # Auxiliary loss coefficient
+  auxk_alpha:
+    values: [0.03125, 0.0625, 0.125]  # 1/32, 1/16, 1/8
+
+  # Model size
+  hidden_size:
+    values: [5120,10240, 20480]  # 16x,32x, 64x expansion
+  # Batch size
+  batch_size:
+    values: [1024, 2048, 4096]
+    
+  warmup_ratio:
+    distribution: uniform
+    min: 0.05
+    max: 0.15
+  
+  decay_start_ratio:
+    distribution: uniform
+    min: 0.7
+    max: 0.9
+
+  # Group fractions - different distribution strategies and number of groups
+  group_fractions:
+    values:
+      # === 3 GROUPS ===
+      # Balanced 3-group
+      - [0.10, 0.30, 0.60]
+      # Large-focused 3-group
+      - [0.05, 0.20, 0.75]
+      # More balanced 3-group
+      - [0.15, 0.35, 0.50]
+
+      # === 4 GROUPS ===
+      # Balanced 4-group
+      - [0.05, 0.15, 0.30, 0.50]
+      # Large-focused 4-group
+      - [0.03, 0.10, 0.25, 0.62]
+      # Uniform 4-group
+      - [0.10, 0.20, 0.30, 0.40]
+
+      # === 5 GROUPS (baseline) ===
+      # Baseline from config
+      - [0.03125, 0.09375, 0.21875, 0.46875, 0.1875]
+      # More emphasis on larger groups
+      - [0.02, 0.06, 0.15, 0.55, 0.22]
+      # More balanced distribution
+      - [0.05, 0.10, 0.20, 0.40, 0.25]
+      # Heavy emphasis on largest group
+      - [0.01, 0.04, 0.10, 0.60, 0.25]
+      # More emphasis on smaller groups
+      - [0.10, 0.15, 0.25, 0.35, 0.15]
+
+      # === 6 GROUPS ===
+      # Balanced 6-group
+      - [0.03, 0.07, 0.12, 0.20, 0.28, 0.30]
+      # Large-focused 6-group
+      - [0.02, 0.05, 0.08, 0.15, 0.25, 0.45]

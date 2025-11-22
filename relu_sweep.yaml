@@ -1,0 +1,37 @@
+# sweep.yaml
+program: relu_sweep.py
+method: bayes
+metric:
+  name: performance/pct_loss_recovered  # Matches what's already logged
+  goal: maximize
+
+parameters:
+  learning_rate:
+    distribution: log_uniform_values
+    min: 0.00005
+    max: 0.001
+  
+  l1_coefficient:
+    distribution: log_uniform_values
+    min: 0.01
+    max: 0.2
+  
+  hidden_size:
+    values: [2560, 5120, 10240,20480] #expansion factors 8x,16x,32x,64x for input size 320
+  
+  batch_size:
+    values: [1024, 2048, 4096]
+  
+  warmup_ratio:
+    distribution: uniform
+    min: 0.05
+    max: 0.15
+  
+  decay_start_ratio:
+    distribution: uniform
+    min: 0.7
+    max: 0.9
+
+early_terminate:
+  type: hyperband
+  min_iter: 100000

@@ -1,0 +1,44 @@
+dataloader_cfg:
+  plm_embd_dir: /data/data/training_embeddings/esm2_8m/layer_3
+  batch_size: 4096
+  seed: 0
+  samples_to_skip: 0
+  n_shards_to_include: null
+  zscore_means_file: null
+  zscore_vars_file: null
+  target_dtype: float32
+trainer_cfg:
+  expansion_factor: 16.0
+  dictionary_size: 5120
+  lr: 0.00020709854974787243
+  activation_dim: 320
+  epochs: 170.41581458759373
+  steps: 500000
+  warmup_steps: 48939
+  decay_start: 356227
+  resample_steps: null
+  normalize_to_sqrt_d: false
+  l1_penalty: 0.04757703515948188
+  l1_penalty_warmup_steps: 25000
+eval_cfg:
+  eval_seq_path: /data/data/eval_sequences.txt
+  eval_embd_dir: null
+  eval_batch_size: 256
+  eval_steps: 100000
+  zscore_means_file: null
+  zscore_vars_file: null
+  target_dtype: float32
+  model_name: esm2_t6_8M_UR50D
+  layer_idx: 3
+  corrupt: false
+wandb_cfg:
+  use_wandb: true
+  wandb_entity: s-setlur-university-of-edinburgh
+  wandb_project: protein-sae-eidf
+  wandb_name: fiery-sweep-34
+  wandb_id: xkd1maao
+  log_steps: 100
+checkpoint_cfg:
+  save_dir: /data/models/sweeps/layer_3/xkd1maao
+  save_steps: 50000
+  max_ckpts_to_keep: 1

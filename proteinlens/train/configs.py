@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Type, Union, get_type_hints

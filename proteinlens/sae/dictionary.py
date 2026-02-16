@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Defines the SAE classes.
 (Originally built off of code from https://github.com/saprmarks/dictionary_learning/blob/2d586e417cd30473e1c608146df47eb5767e2527/dictionary.py)

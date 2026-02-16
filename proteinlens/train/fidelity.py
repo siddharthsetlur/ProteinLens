@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Calculate the loss (cross entropy) fidelity metric for a Sparse Autoencoder (SAE) trained on ESM embeddings
 1. Calculates original cross entropy and cross entropy after zero-ablation.

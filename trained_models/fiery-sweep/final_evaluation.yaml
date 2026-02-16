@@ -1,0 +1,27 @@
+eval_seq_path: /data/data/eval_sequences.txt
+fidelity:
+  CE_w_sae_patching: !!python/object/apply:numpy.core.multiarray.scalar
+  - &id001 !!python/object/apply:numpy.dtype
+    args:
+    - f8
+    - false
+    - true
+    state: !!python/tuple
+    - 3
+    - <
+    - null
+    - null
+    - null
+    - -1
+    - -1
+    - 0
+  - !!binary |
+    16NwJa1U3D8=
+  pct_loss_recovered: !!python/object/apply:numpy.core.multiarray.scalar
+  - *id001
+  - !!binary |
+    h2kTNw33WEA=
+layer: 3
+model_name: esm2_t6_8M_UR50D
+model_path: /data/models/sweeps/layer_3/xkd1maao/ae.pt
+total_training_steps: 499999

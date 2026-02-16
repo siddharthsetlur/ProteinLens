@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Implements the standard SAE training scheme.
 (Originally from https://github.com/saprmarks/dictionary_learning/blob/2d586e417cd30473e1c608146df47eb5767e2527/trainers/standard.py)

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Data loader utilities for sharded protein language model (PLM) activations.
 

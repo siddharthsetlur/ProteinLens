@@ -1,3 +1,4 @@
+from __future__ import annotations
 import torch
 from nnsight import NNsight
 from transformers import EsmForMaskedLM

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 General training script for training SAEs using the trainer
 (Originally based off https://github.com/saprmarks/dictionary_learning/blob/2d586e417cd30473e1c608146df47eb5767e2527/training.py)

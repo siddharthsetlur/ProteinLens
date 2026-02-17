@@ -580,6 +580,7 @@ def hairpin_score(coords, w=17):
 
         compact = 1.0 - min(1.0, ee / max(1e-8, contour))  # close ends -> higher
         # this is scoring distance of end points versus contour, if contour is long and loops back - hairpin
+        
 
         # tangent reversal (start vs end)
         rev = 0.5 * (1.0 - np.dot(T[s], T[e-1]))  # 0 if aligned, 1 if opposite

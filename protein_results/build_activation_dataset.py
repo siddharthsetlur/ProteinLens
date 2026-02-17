@@ -549,9 +549,22 @@ def plot_correlation_heatmap(pearson_r, geom_names, save_path):
 
 
 def plot_top_scatter(geom_matrix, act_matrix, summary, geom_names,
-                     top_k=18, plots_per_figure=6, save_dir=None):
-    """Plot the top-k correlations, splitting across multiple figures."""
-    k = min(top_k, len(summary))
+                     plots_per_figure=6, save_dir=None):
+    """
+    For each geometric feature, pick its single most-correlated SAE node
+    and plot the scatter.  Splits across multiple figures.
+    """
+    # Deduplicate: keep the best (highest |pearson_r|) entry per feature
+    best_per_feat: dict[str, dict] = {}
+    for entry in summary:
+        feat = entry["geom_feature"]
+        if feat not in best_per_feat or abs(entry["pearson_r"]) > abs(best_per_feat[feat]["pearson_r"]):
+            best_per_feat[feat] = entry
+
+    # Order by |pearson_r| descending across the unique features
+    unique_entries = sorted(best_per_feat.values(),
+                            key=lambda d: abs(d["pearson_r"]), reverse=True)
+    k = len(unique_entries)
     if k == 0:
         return
     n_figures = (k + plots_per_figure - 1) // plots_per_figure
@@ -565,29 +578,24 @@ def plot_top_scatter(geom_matrix, act_matrix, summary, geom_names,
         axes = np.atleast_2d(axes)
         for idx in range(n_plots):
             ax = axes.flat[idx]
-            entry = summary[start + idx]
+            entry = unique_entries[start + idx]
             gi = geom_names.index(entry["geom_feature"])
             ni = entry["sae_node"]
             x = geom_matrix[:, gi]
             y = act_matrix[:, ni]
             valid = np.isfinite(x) & np.isfinite(y) & (y > 0)
             ax.scatter(x[valid], y[valid], s=12, alpha=0.6, edgecolors="none")
-            ax.set_title(
-                f"#{start + idx + 1}  r={entry['pearson_r']:.3f}  "
-                f"ρ={entry['spearman_r']:.3f}  (n={valid.sum()})",
-                fontsize=10,
-            )
             ax.set_xlabel(entry["geom_feature"])
             ax.set_ylabel(f"SAE node {ni} act.")
             ax.set_title(
-                f"#{start + idx + 1}  r={entry['pearson_r']:.3f}  "
-                f"ρ={entry['spearman_r']:.3f}",
+                f"{entry['geom_feature']}  →  node {ni}\n"
+                f"r={entry['pearson_r']:.3f}  ρ={entry['spearman_r']:.3f}",
                 fontsize=10,
             )
         for idx in range(n_plots, rows * cols):
             axes.flat[idx].set_visible(False)
         plt.suptitle(
-            f"Top Geometry ↔ SAE Correlations  (#{start+1}–#{end})",
+            f"Best SAE Node per Geometric Feature  (#{start+1}–#{end})",
             y=1.02,
         )
         plt.tight_layout()
@@ -856,7 +864,7 @@ def main():
     print(f"  [✓] {len(summary)} significant correlations (p < 0.05).\n")
 
     # Print top
-    TOP_PRINT = 20
+    TOP_PRINT = 40
     print(f"{'=' * 72}")
     print(f"Top {min(TOP_PRINT, len(summary))} geometry ↔ SAE node correlations")
     print(f"{'=' * 72}")
@@ -884,7 +892,7 @@ def main():
     )
     plot_top_scatter(
         geom_matrix, act_matrix, summary, GEOM_FEATURE_NAMES,
-        top_k=18, plots_per_figure=6, save_dir=out,
+        plots_per_figure=6, save_dir=out,
     )
     for feat in [
         "writhe", "avg_curvature", "radius_of_gyration", "kink_index",

@@ -60,6 +60,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pdb_plotter import ca_backbone, detect_alpha_helices_from_ca
+from kabsch_top_alignment import plot_kabsch_alignments
 from geometry.compute_geometric_features import (
     writhe,
     vassiliev,
@@ -908,6 +909,17 @@ def main():
             pearson_r, GEOM_FEATURE_NAMES, feat, top_k=20,
             save_path=out / f"bar_{feat}.png",
         )
+
+    # ── Step 7: Kabsch-aligned backbone overlays ─────────────────────────
+    print("[7/7] Plotting Kabsch-aligned backbone overlays …")
+    kabsch_dir = out / "kabsch_overlays"
+    plot_kabsch_alignments(
+        summary=summary,
+        top_k_map=top_k_map,
+        pdb_cache=pdb_cache,
+        save_dir=kabsch_dir,
+        n_proteins=2,
+    )
 
     print("\n" + "=" * 72)
     print("✅  Pipeline complete!")

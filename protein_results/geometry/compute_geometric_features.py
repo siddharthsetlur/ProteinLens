@@ -9,6 +9,9 @@ With additional Fulton-MacPherson compactification for the configurational space
 The above is essential to let us compute higher order interactions with much higher accuracy. (Vassiliev invs)
 '''
 
+# Helpers: geometry primitives
+# Keeping lots of comments to make everything concrete
+
 @njit()
 def writhe(ring1, ring2):
     '''
@@ -21,32 +24,7 @@ def writhe(ring1, ring2):
             matrix[i,j] = compute_kernel_chord(ring1, ring2, i, j)
     return matrix
 
-@njit()
-def FM_compactification(one, two, three, four, rho_factor=1e-3):
-    '''
-    Fulton MacPherson compactification. Should motivate the theory a bit I think.
-    '''
 
-    length_one = np.linalg.norm(two-one)
-    length_two = np.linalg.norm(four-three)
-    # Either a==d or b==c (can't have the edge points of a meet c for example - according to the formulation here).
-    rho = rho_factor * max(1e-12, min(length_one, length_two))
-    tau_1 = (two-one)/length_one # this is whats determining the signage below btw
-    tau_2 = (four-three)/length_two
-
-    if np.allclose(two, three):
-        two_compact = two - rho * tau_1
-        three_compact = three + rho * tau_2
-        return one, two_compact, three_compact, four
-    
-    if np.allclose(one, four):
-        one_compact = one + rho * tau_1
-        four_compact = four - rho * tau_2
-        return one_compact, two, three, four_compact
-    
-    else:
-        return one, two, three, four
-    
 @njit()    
 def vec_cross(vec_1, vec_2):
     '''
@@ -81,11 +59,6 @@ def compute_kernel_chord(ring1, ring2, i, j):
 
     if i == j: 
         return 0.0
-    
-    if (j-i)%P in (1, P-1):
-        # Build Fulton-Macpherson compactification on edges which share vertices.
-        # https://www.jstor.org/stable/pdf/2946631.pdf
-        one, two, three, four = FM_compactification(one, two, three, four)
 
     # Standard Klenin techniques
     r12=two-one
@@ -315,9 +288,425 @@ def helix_statistics(coords, helices):
         dist_mean = np.mean(dist_stats)
         dist_std = np.std(dist_stats)
         parallel_mean = np.mean(parallel_stats)
-        parallel_std = np.mean(parallel_stats)
+        parallel_std = np.std(parallel_stats)
 
         return parallel_mean, parallel_std, dist_mean, dist_std
     
     else:
         return 0, 0, 0, 0
+
+@njit()
+def _safe_norm(v, eps=1e-12):
+    '''
+    Return norm but make it safe for any divisions
+    '''
+    n = np.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2])
+    return n if n > eps else eps
+
+@njit()
+def _unit(v):
+    '''
+    Compute unit vector (v/|v|)
+    '''
+    n = _safe_norm(v)
+    return v / n
+
+@njit()
+def ca_dihedral(p0, p1, p2, p3):
+    '''
+    Signed dihedral angle (radians) for four points
+    '''
+    b0 = p1 - p0
+    b1 = p2 - p1
+    b2 = p3 - p2
+
+    b1u = _unit(b1)
+
+    v = b0 - np.dot(b0, b1u) * b1u # project b0 onto b1u
+    w = b2 - np.dot(b2, b1u) * b1u # project b2 onto b1u
+
+    x = np.dot(v, w) # angle between projected vectors
+    y = np.dot(np.cross(b1u, v), w) 
+    return np.arctan2(y, x) # dihedral angle
+
+@njit()
+def tangent_vectors(coords):
+    '''
+    Simply tangents
+    '''
+    n = coords.shape[0]
+    T = np.zeros_like(coords)
+    for i in range(n):
+        if i == 0:
+            d = coords[1] - coords[0]
+        elif i == n - 1:
+            d = coords[n-1] - coords[n-2]
+        else:
+            d = coords[i+1] - coords[i-1]
+        T[i] = _unit(d)
+    return T 
+
+@njit()
+def ca_curvature_profile(coords):
+    '''
+    Discrete curvature proxy per residue using 3 consecutive points:
+    kappa_i = ||(t_{i-1} x t_i)|| / ds
+    i.e. turning of tangents.
+    '''
+    n = coords.shape[0]
+    T = tangent_vectors(coords)
+    kappa = np.zeros(n, dtype=np.float64)
+    for i in range(1, n-1):
+        cp = np.cross(T[i-1], T[i])
+        kappa[i] = np.sqrt(cp[0]*cp[0] + cp[1]*cp[1] + cp[2]*cp[2])
+    return kappa
+
+@njit()
+def ca_torsion_profile(coords):
+    '''
+    Total torsion using dihedral formula
+    '''
+    n = coords.shape[0]
+    tau = np.zeros(n, dtype=np.float64)
+    for i in range(1, n-2):
+        tau[i+1] = ca_dihedral(coords[i-1], coords[i], coords[i+1], coords[i+2])
+    return tau
+
+@njit()
+def local_planarity_profile(coords, w=7):
+    '''
+    Should double check this.
+    '''
+    n = coords.shape[0]
+    half = w // 2
+    out = np.zeros(n, dtype=np.float64)
+    for i in range(half, n-half):
+        X = coords[i-half:i+half+1]
+        c = np.zeros(3, dtype=np.float64)
+        for k in range(X.shape[0]):
+            c += X[k]
+        c /= X.shape[0]
+        # covariance
+        C = np.zeros((3,3), dtype=np.float64)
+        for k in range(X.shape[0]):
+            v = X[k] - c
+            C[0,0]+=v[0]*v[0]; C[0,1]+=v[0]*v[1]; C[0,2]+=v[0]*v[2]
+            C[1,0]+=v[1]*v[0]; C[1,1]+=v[1]*v[1]; C[1,2]+=v[1]*v[2]
+            C[2,0]+=v[2]*v[0]; C[2,1]+=v[2]*v[1]; C[2,2]+=v[2]*v[2]
+        # eigvals (3x3): use numpy eigvals is fine in object mode; for njit keep simple:
+        # We'll approximate by calling np.linalg.eigvals (numba supports for small arrays in many setups),
+        # if it fails in your environment, move this function out of njit.
+        vals = np.linalg.eigvals(C).real
+        s = vals[0]+vals[1]+vals[2]
+        m = vals[0]
+        if vals[1] < m: m = vals[1]
+        if vals[2] < m: m = vals[2]
+        out[i] = (m/s) if s > 1e-15 else 0.0
+    return out
+
+# Sliding windows + pooling
+
+def sliding_windows(n, w, stride=1):
+    '''
+    Windows (start, end) indices with end exclusive.
+    '''
+    for i in range(0, n - w + 1, stride):
+        yield i, i + w
+
+def window_pool(x, start, end, mode="mean", k=3):
+    '''
+    Pool values x[start:end] where x is 1D.
+    mode: "mean", "max", "topk_mean" -> Here we take the output 1D signal of a protein and compute some local stats.
+    '''
+    seg = x[start:end]
+    if seg.size == 0:
+        return 0.0
+    if mode == "mean":
+        return float(np.mean(seg))
+    if mode == "max":
+        return float(np.max(seg))
+    if mode == "topk_mean":
+        kk = min(k, seg.size)
+        # partial sort for speed
+        idx = np.argpartition(seg, -kk)[-kk:]
+        return float(np.mean(seg[idx]))
+
+# Helix features: improve stats and bundle features
+
+def helix_parallel_top_k(parallel_stats, k=3):
+    '''
+    Given list of dot products, return mean of top-k (most parallel by |dot|).
+    '''
+    if len(parallel_stats) == 0:
+        return 0.0
+    arr = np.abs(np.array(parallel_stats))
+    kk = min(k, arr.size)
+    idx = np.argpartition(arr, -kk)[-kk:]
+    return float(np.mean(arr[idx]))
+
+def fraction_parallel_vs_threshold(parallel_stats, thr=0.8):
+    '''
+    Fraction of dot above threshold; this way we can localise helix features
+    '''
+    if len(parallel_stats) == 0:
+        return 0.0
+    arr = np.abs(np.array(parallel_stats))
+    return float(np.mean(arr >= thr))
+
+def helix_crossing_angle_stats(parallel_stats):
+    '''
+    dot product to degrees for interpretability
+    '''
+    if len(parallel_stats) == 0:
+        return 0.0, 0.0, 0.0, 0.0
+    arr = np.abs(np.array(parallel_stats))
+    arr = np.clip(arr, 0.0, 1.0)
+    theta = np.degrees(np.arccos(arr))
+    return float(theta.mean()), float(theta.std()), float(np.mean(theta < 15.0)), float(np.mean(theta > 60.0))
+
+def min_interhelix_distance(coords, helix_a, helix_b):
+    '''
+    Minimum Ca-Ca distance between two helix segments (start,end).
+    '''
+
+    a0,a1 = helix_a
+    b0,b1 = helix_b
+    A = coords[a0:a1]
+    B = coords[b0:b1]
+    # brute force, helices are small so this is ok
+    # This is just finding the minimum helix dist
+    mind = 1e9
+    for i in range(A.shape[0]):
+        for j in range(B.shape[0]):
+            d = np.linalg.norm(A[i] - B[j])
+            if d < mind:
+                mind = d
+    return float(mind)
+
+def helix_statistics_contact_filtered(coords, helices, contact_ca_dist=10.0):
+    '''
+    Like helix_statistics but only uses helix pairs that are in contact.
+    Returns a bunch of stats:
+      parallel_mean, parallel_std, dist_mean, dist_std,
+      parallel_top3, frac_parallel_0p8,
+      angle_mean, angle_std, angle_frac_lt15, angle_frac_gt60,
+      n_helices, n_contact_pairs
+    '''
+    if len(helices) == 0:
+        return (0,0,0,0,0,0,0,0,0,0,0,0)
+
+    helix_stats = []
+    for (s,e) in helices: # check helix struct
+        helix = coords[s:e]
+        centroid = helix.mean(axis=0) # com
+        X = helix - centroid # vec
+        C = (X.T @ X) / max(1, helix.shape[0]) # Covariance matrix
+        vals, vecs = np.linalg.eigh(C) # eigen vals, eigen vecs
+        axis = vecs[:, np.argmax(vals)] # choose eigenvect with max eigen val -> this is just the helix axis
+        if np.dot(helix[-1] - helix[0], axis) < 0:
+            axis = -axis
+        helix_stats.append((centroid, axis, (s,e)))
+
+    parallel_stats = []
+    dist_stats = []
+    n_contact = 0
+
+    # run over all helix axis extracted as above
+
+    for i in range(len(helix_stats)-1):
+        for j in range(i+1, len(helix_stats)):
+            (c1, a1, seg1) = helix_stats[i]
+            (c2, a2, seg2) = helix_stats[j]
+            # contact filter using min Ca distance (more specific than centroid)
+            mind = min_interhelix_distance(coords, seg1, seg2)
+            if mind <= contact_ca_dist:
+                n_contact += 1
+                parallel_stats.append(float(np.dot(a1, a2)))
+                dist_stats.append(float(np.linalg.norm(c1 - c2)))
+
+    if len(parallel_stats) == 0:
+        # helices exist but no contacting pairs
+        return (0,0,0,0,0,0,0,0,0,0, len(helices), 0)
+
+    parallel_mean = float(np.mean(parallel_stats))
+    parallel_std  = float(np.std(parallel_stats))
+    dist_mean = float(np.mean(dist_stats))
+    dist_std  = float(np.std(dist_stats))
+
+    parallel_top3 = helix_parallel_top_k(parallel_stats, k=3)
+    frac_par_0p8  = fraction_parallel_vs_threshold(parallel_stats, thr=0.8)
+    ang_mean, ang_std, ang_lt15, ang_gt60 = helix_crossing_angle_stats(parallel_stats)
+
+    return (parallel_mean, parallel_std, dist_mean, dist_std,
+            parallel_top3, frac_par_0p8,
+            ang_mean, ang_std, ang_lt15, ang_gt60,
+            len(helices), n_contact)
+
+# Turn / hairpin / strand-ish (Ca-only)
+
+def turn_density(coords, w=7, curvature_thr=0.6):
+    '''
+    Fraction of centers whose local curvature exceeds threshold.
+    Threshold should be tuned using your dataset distributions.
+    '''
+    kappa = ca_curvature_profile(coords)
+    # ignore ends a bit
+    if kappa.size < w:
+        return 0.0
+    half = w//2
+    centers = kappa[half:-half]
+    return float(np.mean(centers > curvature_thr))
+
+def hairpin_score(coords, w=17):
+    '''
+    Simple beta-hairpin proxy:
+      - window end-to-end distance small relative to contour length
+      - tangent reversal across window
+    Returns average score over windows (0..1ish).
+    '''
+    n = coords.shape[0]
+    if n < w:
+        return 0.0
+    T = tangent_vectors(coords)
+    scores = []
+    for s,e in sliding_windows(n, w, stride=1):
+        seg = coords[s:e]
+        # contour length
+        contour = 0.0
+        for i in range(seg.shape[0]-1):
+            contour += np.linalg.norm(seg[i+1]-seg[i])
+
+        ee = np.linalg.norm(seg[-1]-seg[0]) # end to end distance
+
+        compact = 1.0 - min(1.0, ee / max(1e-8, contour))  # close ends -> higher
+        # this is scoring distance of end points versus contour, if contour is long and loops back - hairpin
+
+        # tangent reversal (start vs end)
+        rev = 0.5 * (1.0 - np.dot(T[s], T[e-1]))  # 0 if aligned, 1 if opposite
+        # direction of hairpin.
+
+        scores.append(compact * rev)
+    return float(np.mean(scores)) if len(scores) else 0.0
+
+def extended_fraction(coords, align_thr=0.9, curvature_thr=0.2):
+    '''
+    Strand proxy: straight (high tangent alignment) AND low curvature.
+    '''
+    T = tangent_vectors(coords)
+    kappa = ca_curvature_profile(coords)
+    n = coords.shape[0]
+    if n < 3:
+        return 0.0
+    ok = 0
+    tot = 0
+    for i in range(n-1):
+        dot = np.dot(T[i], T[i+1])
+        if dot > align_thr and kappa[i] < curvature_thr:
+            ok += 1
+        tot += 1
+    return float(ok / max(1, tot))
+
+
+# Chirality / handedness features
+
+def signed_torsion(coords):
+    '''
+    mean torsion (dihedral), std torsion,
+    frac positive, frac negative
+    '''
+
+    tau = ca_torsion_profile(coords)
+    # ignore ends where tau is 0 by construction
+    core = tau[2:-2] if tau.size > 4 else tau
+    if core.size == 0:
+        return 0.0, 0.0, 0.0, 0.0
+    mean = float(np.mean(core))
+    std  = float(np.std(core))
+    frac_pos = float(np.mean(core > 0))
+    frac_neg = float(np.mean(core < 0))
+    return mean, std, frac_pos, frac_neg
+
+def dihedral_sign_consistency(coords, w=9):
+    '''
+    Fraction of windows where the majority dihedral sign is consistent.
+    High when torsion sign doesn't flip often (helices tend to be consistent).
+    '''
+
+    tau = ca_torsion_profile(coords)
+    n = tau.size
+    if n < w:
+        return 0.0
+    half = w//2
+    good = 0
+    tot = 0
+    for i in range(half, n-half):
+        seg = tau[i-half:i+half+1]
+        # ignore near-zero
+        pos = np.sum(seg > 1e-6)
+        neg = np.sum(seg < -1e-6)
+        if pos + neg == 0:
+            continue
+        maj = max(pos, neg) / (pos + neg)
+        if maj >= 0.8:
+            good += 1
+        tot += 1
+    return float(good / max(1, tot))
+
+
+# Local/windowed summaries (for correlation per window)
+
+def local_curvature(coords, w=21, stride=1, pool="mean"):
+    kappa = ca_curvature_profile(coords)
+    vals = []
+    for s,e in sliding_windows(len(kappa), w, stride):
+        vals.append(window_pool(kappa, s, e, mode=pool))
+    return np.array(vals, dtype=np.float64)
+
+def local_torsion(coords, w=21, stride=1, pool="mean"):
+    tau = ca_torsion_profile(coords)
+    vals = []
+    for s,e in sliding_windows(len(tau), w, stride):
+        vals.append(window_pool(tau, s, e, mode=pool))
+    return np.array(vals, dtype=np.float64)
+
+def local_planarity(coords, w=21, stride=1, inner_w=7, pool="mean"):
+    pl = local_planarity_profile(coords, w=inner_w)
+    vals = []
+    for s,e in sliding_windows(len(pl), w, stride):
+        vals.append(window_pool(pl, s, e, mode=pool))
+    return np.array(vals, dtype=np.float64)
+
+def local_writhe(coords, w=41, stride=3):
+    """
+    Expensive. Computes writhe of each subchain with itself.
+    Use larger w and stride. Returns array of writhe sums per window.
+    """
+    n = coords.shape[0]
+    if n < w:
+        return np.zeros(0, dtype=np.float64)
+    out = []
+    for s,e in sliding_windows(n, w, stride):
+        seg = coords[s:e]
+        wr_mat = writhe(seg, seg)
+        # sum upper triangle to avoid double count
+        out.append(float(np.sum(wr_mat)))
+    return np.array(out, dtype=np.float64)
+
+
+# Secondary structure things
+
+def helix_segments(coords, helices):
+    '''
+    Return simple helix summary features:
+      n_helices, helix_fraction, mean_helix_len, std_helix_len, max_helix_len
+    '''
+    n = coords.shape[0]
+    if len(helices) == 0 or n == 0:
+        return 0, 0.0, 0.0, 0.0, 0
+    lens = np.array([e - s for (s,e) in helices], dtype=np.float64)
+    helix_res = float(np.sum(lens))
+    return (int(len(helices)),
+            float(helix_res / n),
+            float(lens.mean()),
+            float(lens.std()),
+            int(lens.max()))

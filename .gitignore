@@ -1,3 +1,7 @@
 models/
 data/
 explainer/_build/
+*.txt
+*.png
+*.npy
+*.yaml

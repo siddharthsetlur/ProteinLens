@@ -72,6 +72,18 @@ from geometry.compute_geometric_features import (
     end_to_end_distance,
     helical_consistency,
     helix_statistics,
+    helix_statistics_contact_filtered,
+    helix_segments,
+    turn_density,
+    hairpin_score,
+    extended_fraction,
+    signed_torsion,
+    dihedral_sign_consistency,
+    # local / windowed profiles
+    local_curvature,
+    local_torsion,
+    local_planarity,
+    local_writhe,
 )
 from proteinlens.sae.inference import load_sae
 from proteinlens.embedders.esm import ESM
@@ -109,7 +121,52 @@ GEOM_FEATURE_NAMES = [
     "end_to_end_distance",
     "tangent_alignment",
     "binormal_consistency",
-    # "chain_length",  # excluded — trivial feature
+    # ── contact-filtered helix pair stats ──
+    "contact_parallel_mean",
+    "contact_parallel_std",
+    "contact_dist_mean",
+    "contact_dist_std",
+    "contact_parallel_top3",
+    "contact_frac_parallel_0p8",
+    "contact_angle_mean",
+    "contact_angle_std",
+    "contact_angle_frac_lt15",
+    "contact_angle_frac_gt60",
+    "n_helices",
+    "n_contact_pairs",
+    # ── helix segment stats ──
+    "helix_fraction",
+    "mean_helix_len",
+    "std_helix_len",
+    "max_helix_len",
+    # ── turn / hairpin / strand proxies ──
+    "turn_density",
+    "hairpin_score",
+    "extended_fraction",
+    # ── signed torsion stats ──
+    "signed_torsion_mean",
+    "signed_torsion_std",
+    "signed_torsion_frac_pos",
+    "signed_torsion_frac_neg",
+    # ── dihedral consistency ──
+    "dihedral_sign_consistency",
+    # ── local (windowed) profile summaries ──
+    "local_curvature_mean",
+    "local_curvature_std",
+    "local_curvature_max",
+    "local_curvature_range",
+    "local_torsion_mean",
+    "local_torsion_std",
+    "local_torsion_max",
+    "local_torsion_range",
+    "local_planarity_mean",
+    "local_planarity_std",
+    "local_planarity_max",
+    "local_planarity_range",
+    "local_writhe_mean",
+    "local_writhe_std",
+    "local_writhe_max",
+    "local_writhe_range",
 ]
 
 
@@ -304,7 +361,7 @@ def compute_activation(
 # ==================== 4. GEOMETRY FROM PDB TEXT =============================
 
 def compute_geometry(pdb_text: str) -> dict | None:
-    """Compute all 16 geometric features from a PDB text string."""
+    """Compute all geometric features from a PDB text string."""
     try:
         ca = ca_backbone(pdb_text, chain_id=None)
         plt.close("all")
@@ -314,9 +371,12 @@ def compute_geometry(pdb_text: str) -> dict | None:
         return None
     try:
         helices = detect_alpha_helices_from_ca(ca)
+
+        # ── original features ──
         wr_d = writhe(ca, ca)
         wr = float(np.sum(wr_d))
-        _v2 = float(vassiliev(wr_d))
+        # _v2 = float(vassiliev(wr_d))  # O(n^4) bottleneck — skipped
+        _v2 = 0.0
         cur = float(average_curvature(ca))
         tor = float(average_torsion(ca))
         ki = float(kink_index(ca))
@@ -326,12 +386,77 @@ def compute_geometry(pdb_text: str) -> dict | None:
         planar = float(local_planarity_score(ca))
         end = float(end_to_end_distance(ca))
         ta, bc = helical_consistency(ca)
-        L = float(len(ca))
+
+        # ── contact-filtered helix pair stats (12 values) ──
+        (cp_m, cp_s, cd_m, cd_s, cp_top3, cp_frac,
+         ca_mean, ca_std, ca_lt15, ca_gt60,
+         n_hel, n_cpairs) = helix_statistics_contact_filtered(ca, helices)
+
+        # ── helix segment stats ──
+        _n_hel, h_frac, h_mean_len, h_std_len, h_max_len = helix_segments(
+            ca, helices
+        )
+
+        # ── turn / hairpin / strand proxies ──
+        td = float(turn_density(ca))
+        hp = float(hairpin_score(ca))
+        ef = float(extended_fraction(ca))
+
+        # ── signed torsion stats ──
+        st_mean, st_std, st_fp, st_fn = signed_torsion(ca)
+
+        # ── dihedral sign consistency ──
+        dsc = float(dihedral_sign_consistency(ca))
+
+        # ── local (windowed) profile summaries ──
+        def _profile_stats(arr):
+            """Reduce a 1-D windowed profile to (mean, std, max, range)."""
+            if arr.size == 0:
+                return 0.0, 0.0, 0.0, 0.0
+            mn  = float(np.mean(arr))
+            sd  = float(np.std(arr))
+            mx  = float(np.max(arr))
+            rng = float(mx - np.min(arr))
+            return mn, sd, mx, rng
+
+        lc = local_curvature(ca)          # w=21, stride=1, pool="mean"
+        lc_mean, lc_std, lc_max, lc_rng = _profile_stats(lc)
+
+        lt = local_torsion(ca)            # w=21, stride=1, pool="mean"
+        lt_mean, lt_std, lt_max, lt_rng = _profile_stats(lt)
+
+        lp = local_planarity(ca)          # w=21, stride=1, inner_w=7
+        lp_mean, lp_std, lp_max, lp_rng = _profile_stats(lp)
+
+        lw = local_writhe(ca)             # w=41, stride=3
+        lw_mean, lw_std, lw_max, lw_rng = _profile_stats(lw)
+
     except Exception:
         return None
-    values = [wr, _v2, cur, tor, ki, ga,
-              float(p_m), float(p_s), float(d_m), float(d_s),
-              rog, planar, end, float(ta), float(bc)]
+
+    values = [
+        wr, _v2, cur, tor, ki, ga,
+        float(p_m), float(p_s), float(d_m), float(d_s),
+        rog, planar, end, float(ta), float(bc),
+        # contact-filtered helix
+        float(cp_m), float(cp_s), float(cd_m), float(cd_s),
+        float(cp_top3), float(cp_frac),
+        float(ca_mean), float(ca_std), float(ca_lt15), float(ca_gt60),
+        float(n_hel), float(n_cpairs),
+        # helix segments
+        float(h_frac), float(h_mean_len), float(h_std_len), float(h_max_len),
+        # turn / hairpin / strand
+        td, hp, ef,
+        # signed torsion
+        float(st_mean), float(st_std), float(st_fp), float(st_fn),
+        # dihedral consistency
+        dsc,
+        # local profiles
+        lc_mean, lc_std, lc_max, lc_rng,
+        lt_mean, lt_std, lt_max, lt_rng,
+        lp_mean, lp_std, lp_max, lp_rng,
+        lw_mean, lw_std, lw_max, lw_rng,
+    ]
     return dict(zip(GEOM_FEATURE_NAMES, values))
 
 
@@ -366,7 +491,7 @@ def correlation_analysis(geom_matrix, act_matrix, geom_names, top_k=20):
     spearman_r = np.zeros((n_geom, n_nodes))
     spearman_p = np.ones((n_geom, n_nodes))
 
-    MIN_ACTIVE = 100  # require at least this many proteins with act > 0
+    MIN_ACTIVE = 30  # require at least this many proteins with act > 0
 
     for gi in range(n_geom):
         g = geom_matrix[:, gi]
@@ -594,17 +719,49 @@ def main():
     acc_cache = out / "processed_accessions.txt"
 
     if args.resume and act_cache.exists() and geom_cache.exists():
-        print("[3/6] Loading cached activation + geometry matrices …")
+        print("[3/6] Loading cached activation matrix …")
         act_matrix = np.load(act_cache)
-        geom_matrix = np.load(geom_cache)
         accessions_ok = acc_cache.read_text().strip().split("\n")
-        # Handle column mismatch (e.g. chain_length removed after a run)
-        n_expected = len(GEOM_FEATURE_NAMES)
-        if geom_matrix.shape[1] > n_expected:
-            print(f"  ⚠ Cached matrix has {geom_matrix.shape[1]} geom cols, "
-                  f"trimming to {n_expected} to match current feature list.")
-            geom_matrix = geom_matrix[:, :n_expected]
-        print(f"  {len(accessions_ok)} proteins loaded from cache.\n")
+        print(f"  {len(accessions_ok)} proteins loaded from cache.")
+
+        # Recompute geometry from cached PDB files
+        print("  Recomputing geometry from cached PDB files …\n")
+        geom_rows: list[list[float]] = []
+        act_rows_keep: list[int] = []
+        n_geom_skip = 0
+        for idx, acc in enumerate(accessions_ok):
+            if idx % 500 == 0 or idx == len(accessions_ok) - 1:
+                print(
+                    f"    [{idx + 1:>6d}/{len(accessions_ok)}]  "
+                    f"ok={len(geom_rows)}  skip={n_geom_skip}  current={acc}"
+                )
+            # Find cached PDB
+            cached_files = list(pdb_cache.glob(f"AF-{acc}-F1-model_v*.pdb"))
+            if not cached_files:
+                n_geom_skip += 1
+                continue
+            pdb_text = cached_files[0].read_text()
+            geom = compute_geometry(pdb_text)
+            if geom is None:
+                n_geom_skip += 1
+                continue
+            geom_rows.append([geom[k] for k in GEOM_FEATURE_NAMES])
+            act_rows_keep.append(idx)
+
+        if not geom_rows:
+            print("\n✘ No geometry recomputed. Check PDB cache.")
+            sys.exit(1)
+
+        geom_matrix = np.array(geom_rows, dtype=float)
+        act_matrix = act_matrix[act_rows_keep]
+        accessions_ok = [accessions_ok[i] for i in act_rows_keep]
+
+        # Save updated matrices
+        np.save(geom_cache, geom_matrix)
+        np.save(act_cache, act_matrix)
+        acc_cache.write_text("\n".join(accessions_ok))
+        print(f"\n  [✓] Geometry recomputed for {len(accessions_ok)} proteins, "
+              f"{n_geom_skip} skipped.\n")
     else:
         print("[3/6] Computing activations & geometry for each protein …")
         print("  This fetches AlphaFold structures from the EBI API (cached on disk).\n")
@@ -616,7 +773,7 @@ def main():
         n_skip = 0
 
         for idx, acc in enumerate(accessions):
-            if idx % 50 == 0 or idx == len(accessions) - 1:
+            if idx % 10 == 0 or idx == len(accessions) - 1:
                 print(
                     f"  [{idx + 1:>6d}/{len(accessions)}]  "
                     f"ok={len(accessions_ok)}  skip={n_skip}  current={acc}"
@@ -729,7 +886,16 @@ def main():
         geom_matrix, act_matrix, summary, GEOM_FEATURE_NAMES,
         top_k=18, plots_per_figure=6, save_dir=out,
     )
-    for feat in ["writhe", "avg_curvature", "radius_of_gyration", "kink_index"]:
+    for feat in [
+        "writhe", "avg_curvature", "radius_of_gyration", "kink_index",
+        "turn_density", "hairpin_score", "extended_fraction",
+        "signed_torsion_mean", "dihedral_sign_consistency",
+        "helix_fraction", "contact_angle_mean",
+        "local_curvature_std", "local_curvature_max",
+        "local_torsion_std", "local_torsion_max",
+        "local_planarity_std",
+        "local_writhe_std", "local_writhe_max",
+    ]:
         plot_per_feature_bar(
             pearson_r, GEOM_FEATURE_NAMES, feat, top_k=20,
             save_path=out / f"bar_{feat}.png",

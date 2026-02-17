@@ -918,7 +918,7 @@ def main():
         top_k_map=top_k_map,
         pdb_cache=pdb_cache,
         save_dir=kabsch_dir,
-        n_proteins=2,
+        n_proteins=5,
     )
 
     print("\n" + "=" * 72)

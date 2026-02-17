@@ -105,6 +105,34 @@ def plot_aligned_backbones(
     plt.close()
 
 
+def plot_single_backbone(
+    coords: np.ndarray,
+    title: str = "",
+    save_path: Path | None = None,
+    colour: str = "#2980b9",
+):
+    """
+    Plot a single Cα backbone in 3D and save to *save_path*.
+    """
+    fig = plt.figure(figsize=(7, 6))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.plot(coords[:, 0], coords[:, 1], coords[:, 2],
+            color=colour, linewidth=1.6, alpha=0.9)
+    # Mark N- and C-termini
+    ax.scatter(*coords[0], color="#27ae60", s=60, zorder=5, label="N-term")
+    ax.scatter(*coords[-1], color="#e74c3c", s=60, zorder=5, label="C-term")
+    ax.set_xlabel("X (Å)")
+    ax.set_ylabel("Y (Å)")
+    ax.set_zlabel("Z (Å)")
+    ax.set_title(title, fontsize=10)
+    ax.legend(fontsize=8, loc="upper left")
+    plt.tight_layout()
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+
 # ─── Main entry point ────────────────────────────────────────────────────────
 
 def plot_kabsch_alignments(
@@ -112,7 +140,7 @@ def plot_kabsch_alignments(
     top_k_map: dict[int, list[str]],
     pdb_cache: Path,
     save_dir: Path,
-    n_proteins: int = 2,
+    n_proteins: int = 5,
 ):
     """
     For each geometric feature (deduplicated from summary), take the best
@@ -168,7 +196,20 @@ def plot_kabsch_alignments(
             n_skipped += 1
             continue
 
-        # Kabsch-align all onto the first backbone
+        safe_name = feat.replace("/", "_").replace(" ", "_")
+
+        # ── Individual structure plots ────────────────────────────────
+        indiv_dir = save_dir / f"{safe_name}_node{node}"
+        indiv_dir.mkdir(parents=True, exist_ok=True)
+        for rank, (acc, ca) in enumerate(backbones, 1):
+            plot_single_backbone(
+                ca,
+                title=f"{acc}  (rank {rank}, {feat}, node {node})",
+                save_path=indiv_dir / f"{rank}_{acc}.png",
+                colour=COLOURS[(rank - 1) % len(COLOURS)],
+            )
+
+        # ── Kabsch-aligned overlay ────────────────────────────────────
         ref_acc, ref_coords = backbones[0]
         aligned_list = [ref_coords]
         labels = [f"{ref_acc} (ref)"]
@@ -183,7 +224,6 @@ def plot_kabsch_alignments(
             f"{feat} → node {node}  "
             f"(r={entry['pearson_r']:.3f}, ρ={entry['spearman_r']:.3f})"
         )
-        safe_name = feat.replace("/", "_").replace(" ", "_")
         save_path = save_dir / f"kabsch_{safe_name}_node{node}.png"
 
         plot_aligned_backbones(aligned_list, labels, title=title,

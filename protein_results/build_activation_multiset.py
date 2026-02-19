@@ -43,7 +43,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy import stats
-from sklearn.linear_model import Ridge, Lasso
+from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score
 
@@ -125,7 +125,7 @@ def fit_linear_regressors(
         X_sc = scaler.fit_transform(X)
 
         # Fit Lasso
-        model = Lasso(alpha=alpha, max_iter=5000)
+        model = Ridge(alpha=alpha)
         model.fit(X_sc, y)
 
         y_pred = model.predict(X_sc)
@@ -140,7 +140,7 @@ def fit_linear_regressors(
         # Cross-validated R²
         try:
             cv_scores = cross_val_score(
-                Lasso(alpha=alpha, max_iter=5000), X_sc, y,
+                Ridge(alpha=alpha), X_sc, y,
                 cv=min(cv_folds, n), scoring="r2",
             )
             r2_cv = float(np.mean(cv_scores))

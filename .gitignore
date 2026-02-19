@@ -5,3 +5,4 @@ explainer/_build/
 *.png
 *.npy
 *.yaml
+protein_results/alphafold_analysis/pdb_cache/

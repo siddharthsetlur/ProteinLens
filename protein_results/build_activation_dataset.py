@@ -106,6 +106,30 @@ UNIPROT_SEARCH_URL = (
     "https://rest.uniprot.org/uniprotkb/stream"
 )
 
+# Taxonomically diverse organism set for geometry-focused analysis
+DIVERSE_ORGANISMS = {
+    9606:    "Homo sapiens",
+    10090:   "Mus musculus",
+    559292:  "Saccharomyces cerevisiae",
+    83333:   "Escherichia coli K-12",
+    3702:    "Arabidopsis thaliana",
+    7227:    "Drosophila melanogaster",
+    6239:    "Caenorhabditis elegans",
+    7955:    "Danio rerio",
+    224308:  "Bacillus subtilis",
+    243232:  "Methanocaldococcus jannaschii",
+    273057:  "Sulfolobus solfataricus",
+    192222:  "Campylobacter jejuni",
+    71421:   "Haemophilus influenzae",
+    9913:    "Bos taurus",
+    9031:    "Gallus gallus",
+    44689:   "Dictyostelium discoideum",
+    284812:  "Schizosaccharomyces pombe",
+    99287:   "Salmonella typhimurium",
+    1111708: "Synechocystis sp. PCC 6803",
+    243273:  "Mycoplasma genitalium",
+}
+
 GEOM_FEATURE_NAMES = [
     "writhe",
     "vassiliev_v2",
@@ -173,6 +197,69 @@ GEOM_FEATURE_NAMES = [
 
 # ====================== 1. ACCESSION RETRIEVAL =============================
 
+def fetch_mixed_organism_accessions(
+    organisms: dict[int, str] | None = None,
+    max_proteins: int | None = None,
+    per_organism_cap: int | None = None,
+    seed: int = 42,
+) -> list[str]:
+    """
+    Fetch reviewed (Swiss-Prot) accessions from multiple organisms,
+    shuffle them together, and optionally cap the total.
+
+    This gives taxonomically diverse coverage so SAE–geometry correlations
+    reflect shared structural motifs rather than phylogenetic families.
+
+    Parameters
+    ----------
+    organisms : dict | None
+        {taxon_id: name} mapping.  Defaults to DIVERSE_ORGANISMS.
+    max_proteins : int | None
+        Total cap across all organisms.
+    per_organism_cap : int | None
+        Max proteins to take from any single organism (prevents one large
+        proteome from dominating).  If None, defaults to
+        max_proteins // len(organisms) * 2  (soft balancing).
+    seed : int
+        Random seed for reproducible shuffling.
+    """
+    if organisms is None:
+        organisms = DIVERSE_ORGANISMS
+
+    if per_organism_cap is None and max_proteins is not None:
+        # Soft cap: allow up to 2× fair share per organism
+        per_organism_cap = max(200, (max_proteins // len(organisms)) * 2)
+
+    rng = np.random.default_rng(seed)
+    all_accessions: list[str] = []
+
+    print(f"[1/7] Fetching reviewed proteins from {len(organisms)} organisms …")
+    for taxid, name in organisms.items():
+        try:
+            batch = fetch_swissprot_accessions(
+                organism_taxid=taxid,
+                max_proteins=per_organism_cap,
+            )
+        except Exception as e:
+            print(f"  ⚠ Failed for {name} ({taxid}): {e}")
+            continue
+        # Shuffle within organism so the cap isn't biased toward alphabetical
+        rng.shuffle(batch)
+        if per_organism_cap and len(batch) > per_organism_cap:
+            batch = batch[:per_organism_cap]
+        print(f"    {name:<40s} ({taxid:>7d}): {len(batch):>5d} accessions")
+        all_accessions.extend(batch)
+
+    # Shuffle everything together
+    rng.shuffle(all_accessions)
+
+    if max_proteins and len(all_accessions) > max_proteins:
+        all_accessions = all_accessions[:max_proteins]
+
+    print(f"  → {len(all_accessions)} total accessions (shuffled across organisms).")
+    return all_accessions
+
+
 def fetch_swissprot_accessions(
     organism_taxid: int = 9606,
     max_proteins: int | None = None,
@@ -181,10 +268,10 @@ def fetch_swissprot_accessions(
     Query UniProt for reviewed (Swiss-Prot) accessions for a given organism.
 
     Recommended organisms:
-      9606  – Homo sapiens  (~20 400 proteins)
-      10090 – Mus musculus   (~17 200)
-      559292 – S. cerevisiae  (~6 700)
-      83333 – E. coli K-12    (~4 500)
+      9606 Homo sapiens  (~20 400 proteins)
+      10090 Mus musculus   (~17 200)
+      559292 S. cerevisiae  (~6 700)
+      83333 E. coli K-12    (~4 500)
 
     Returns a list of UniProt accession strings.
     """
@@ -639,6 +726,12 @@ def main():
              "10090 = mouse, 559292 = yeast, 83333 = E. coli"
     )
     src.add_argument(
+        "--mixed-organisms", action="store_true",
+        help="Pull from ~20 taxonomically diverse organisms and shuffle. "
+             "Reduces phylogenetic bias so correlations reflect geometry, "
+             "not protein families."
+    )
+    src.add_argument(
         "--fasta", type=Path, default=None,
         help="Path to a FASTA file with protein sequences."
     )
@@ -649,6 +742,14 @@ def main():
     parser.add_argument(
         "--max-proteins", type=int, default=None,
         help="Cap the number of proteins to process."
+    )
+    parser.add_argument(
+        "--per-organism-cap", type=int, default=None,
+        help="Max proteins from any single organism (only with --mixed-organisms)."
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42,
+        help="Random seed for organism shuffling (reproducibility)."
     )
     parser.add_argument(
         "--top-k", type=int, default=TOP_K_PER_NODE,
@@ -674,7 +775,8 @@ def main():
     args = parser.parse_args()
 
     # Default to human if nothing specified
-    if args.organism is None and args.fasta is None and args.accession_list is None:
+    if (args.organism is None and args.fasta is None
+            and args.accession_list is None and not args.mixed_organisms):
         args.organism = 9606
 
     out = args.output_dir
@@ -692,7 +794,13 @@ def main():
 
     # ── Step 1: Get accession list ────────────────────────────────────────
     fasta_seqs: dict[str, str] | None = None
-    if args.fasta:
+    if args.mixed_organisms:
+        accessions = fetch_mixed_organism_accessions(
+            max_proteins=args.max_proteins,
+            per_organism_cap=getattr(args, 'per_organism_cap', None),
+            seed=args.seed,
+        )
+    elif args.fasta:
         accessions, fasta_seqs = load_accessions_from_fasta(args.fasta)
         print(f"[1/6] Loaded {len(accessions)} proteins from FASTA: {args.fasta}")
     elif args.accession_list:

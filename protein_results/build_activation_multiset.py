@@ -43,7 +43,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy import stats
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Lasso, LassoCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score
 
@@ -80,7 +80,7 @@ from proteinlens.utils import get_device
 
 # =================== LINEAR REGRESSION ANALYSIS ============================
 
-MIN_ACTIVE = 30  # need at least this many active proteins to fit a model
+MIN_ACTIVE = 300  # need at least this many active proteins to fit a model
 
 
 def fit_linear_regressors(
@@ -92,40 +92,66 @@ def fit_linear_regressors(
     top_n: int = 50,
 ) -> list[dict]:
     """
-    For every SAE node, fit a Ridge regression:
+    For every SAE node, fit a LassoCV regression:
         activation ~ w · geometry + b
     on the subset of proteins that actually fire on that node.
 
-    Returns a list of dicts sorted by R² descending, containing:
+    LassoCV automatically selects the best regularisation via cross-validation
+    and drives irrelevant weights to exactly zero, yielding sparse monomials
+    that generalise instead of memorising.
+
+    Returns a list of dicts sorted by R²_cv descending, containing:
         sae_node, r2, r2_adj, r2_cv, pearson_r, weights, intercept,
-        n_samples, top_features.
+        n_samples, n_nonzero, top_features.
     """
     n_prot, n_nodes = act_matrix.shape
     n_geom = geom_matrix.shape[1]
 
+    # Pre-compute once (not per node)
+    geom_valid = np.all(np.isfinite(geom_matrix), axis=1)
+
     results: list[dict] = []
+    n_skipped = 0
+    n_negative_cv = 0
+    import time as _time
+    _t0 = _time.time()
 
     for ni in range(n_nodes):
+        if ni % 100 == 0:
+            elapsed = _time.time() - _t0
+            print(f"    node {ni:>5d}/{n_nodes}  "
+                  f"kept={len(results)}  skipped={n_skipped}  "
+                  f"neg_cv={n_negative_cv}  [{elapsed:.1f}s]")
+
         # Only fit on proteins that actually activate at this node
         active = act_matrix[:, ni] > 0
-        geom_valid = np.all(np.isfinite(geom_matrix), axis=1)
         mask = active & geom_valid
 
         if mask.sum() < MIN_ACTIVE:
+            n_skipped += 1
             continue
 
         X = geom_matrix[mask]
         y = act_matrix[mask, ni]
 
         if y.std() < 1e-12:
+            n_skipped += 1
             continue
 
         # Standardise features so weights are comparable
         scaler = StandardScaler()
         X_sc = scaler.fit_transform(X)
 
-        # Fit Lasso
-        model = Ridge(alpha=alpha)
+        n = int(mask.sum())
+        n_cv = min(cv_folds, n)
+
+        # Fit LassoCV — picks best alpha AND gives CV scores internally
+        model = LassoCV(
+            cv=n_cv,
+            max_iter=5000,
+            n_alphas=30,
+            tol=1e-3,
+        )
         model.fit(X_sc, y)
 
         y_pred = model.predict(X_sc)
@@ -133,19 +159,20 @@ def fit_linear_regressors(
         ss_tot = np.sum((y - y.mean()) ** 2)
         r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
-        n = int(mask.sum())
-        p = n_geom
+        # Count nonzero weights (the sparse "monomial" terms)
+        n_nonzero = int(np.sum(np.abs(model.coef_) > 1e-8))
+        p = n_nonzero  # adjusted R² uses only the active features
         r2_adj = 1.0 - (1.0 - r2) * (n - 1) / max(n - p - 1, 1)
 
-        # Cross-validated R²
-        try:
-            cv_scores = cross_val_score(
-                Ridge(alpha=alpha), X_sc, y,
-                cv=min(cv_folds, n), scoring="r2",
-            )
-            r2_cv = float(np.mean(cv_scores))
-        except Exception:
-            r2_cv = 0.0
+        # R²_cv from LassoCV's internal cross-validation (no extra call needed)
+        best_alpha_idx = np.argmin(model.mse_path_.mean(axis=1))
+        mse_cv = model.mse_path_[best_alpha_idx].mean()
+        r2_cv = 1.0 - mse_cv / y.var() if y.var() > 0 else 0.0
+
+        # Skip nodes that don't generalise at all
+        if r2_cv < 0.0:
+            n_negative_cv += 1
+            continue
 
         # Pearson between actual and predicted
         pr, _ = stats.pearsonr(y, y_pred)
@@ -153,14 +180,16 @@ def fit_linear_regressors(
         # Standardised weights → tells which features matter most
         w = model.coef_
         order = np.argsort(np.abs(w))[::-1]
+        # Only include nonzero features in top_features
         top_feats = [
             {"feature": geom_names[int(i)],
              "weight": float(w[i]),
              "abs_weight": float(abs(w[i]))}
-            for i in order[:10]
-        ]
+            for i in order
+            if abs(w[i]) > 1e-8
+        ][:10]
 
-        # Store un-standardised weights too for actual prediction
+        # Store un-standardised weights for actual prediction
         # y_pred = X_raw @ w_raw + b_raw
         w_raw = w / scaler.scale_
         b_raw = float(model.intercept_ - (w * scaler.mean_ / scaler.scale_).sum())
@@ -172,6 +201,8 @@ def fit_linear_regressors(
             "r2_cv": float(r2_cv),
             "pearson_r": float(pr),
             "n_samples": n,
+            "n_nonzero": n_nonzero,
+            "alpha_chosen": float(model.alpha_),
             "intercept": float(model.intercept_),
             "weights_standardised": [float(x) for x in w],
             "weights_raw": [float(x) for x in w_raw],
@@ -179,11 +210,57 @@ def fit_linear_regressors(
             "top_features": top_feats,
         })
 
-    results.sort(key=lambda d: d["r2"], reverse=True)
+    # Sort by cross-validated R² — the trustworthy metric
+    results.sort(key=lambda d: d["r2_cv"], reverse=True)
     return results[:top_n]
 
 
 # ======================== PLOTTING =========================================
+
+def format_monomial(
+    weights_raw: list[float],
+    intercept_raw: float,
+    geom_names: list[str],
+    threshold: float = 1e-6,
+    max_terms: int = 10,
+) -> str:
+    """
+    Format the linear model as a human-readable monomial string:
+        ŷ = 0.342·hairpin_score − 0.187·avg_curvature + 0.003
+
+    Only includes terms with |weight| > threshold (important for Lasso
+    where most weights are exactly zero).  Sorted by |weight| descending.
+    """
+    pairs = [
+        (geom_names[i], w)
+        for i, w in enumerate(weights_raw)
+        if abs(w) > threshold
+    ]
+    # Sort by absolute weight descending
+    pairs.sort(key=lambda p: abs(p[1]), reverse=True)
+    pairs = pairs[:max_terms]
+
+    if not pairs:
+        return f"ŷ = {intercept_raw:.4g}"
+
+    terms = []
+    for idx, (name, w) in enumerate(pairs):
+        if idx == 0:
+            terms.append(f"{w:.4g}·{name}")
+        elif w < 0:
+            terms.append(f"− {abs(w):.4g}·{name}")
+        else:
+            terms.append(f"+ {w:.4g}·{name}")
+
+    # Intercept
+    if abs(intercept_raw) > threshold:
+        if intercept_raw < 0:
+            terms.append(f"− {abs(intercept_raw):.4g}")
+        else:
+            terms.append(f"+ {intercept_raw:.4g}")
+
+    return "ŷ = " + " ".join(terms)
+
 
 COLOURS = ["#2980b9", "#e74c3c", "#27ae60", "#f39c12", "#8e44ad",
            "#1abc9c", "#d35400", "#c0392b", "#2c3e50", "#16a085"]
@@ -359,7 +436,7 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
         "--alpha", type=float, default=1.0,
-        help="Ridge regularisation strength."
+        help="Lasso regularisation strength (LassoCV auto-tunes, this is fallback)."
     )
     parser.add_argument(
         "--top-nodes", type=int, default=50,
@@ -548,35 +625,44 @@ def main():
     print(f"  Saved → {top_k_path}\n")
 
     # ── Step 5: Multivariate linear regression ────────────────────────────
-    print(f"[5/7] Fitting Ridge regression (α={args.alpha}) for each node …")
+    print(f"[5/7] Fitting LassoCV regression for each node …")
     results = fit_linear_regressors(
         geom_matrix, act_matrix, GEOM_FEATURE_NAMES,
         alpha=args.alpha, top_n=args.top_nodes,
     )
-    print(f"  [✓] {len(results)} nodes fitted (of {n_nodes} total).\n")
+    print(f"  [✓] {len(results)} nodes fitted with R²_cv > 0 "
+          f"(of {n_nodes} total).\n")
 
     # Print top
     TOP_PRINT = 40
-    print("=" * 80)
-    print(f"Top {min(TOP_PRINT, len(results))} nodes by R² "
+    print("=" * 110)
+    print(f"Top {min(TOP_PRINT, len(results))} nodes by R²_cv "
           f"(multivariate geometry → activation)")
-    print("=" * 80)
+    print("=" * 110)
     print(
         f"{'Node':>6s} {'R²':>8s} {'R²_adj':>8s} {'R²_cv':>8s} "
-        f"{'r':>8s} {'N':>6s}   Top features"
+        f"{'r':>8s} {'N':>6s} {'NZ':>4s}   Monomial"
     )
-    print("-" * 80)
+    print("-" * 110)
     for entry in results[:TOP_PRINT]:
-        top3 = ", ".join(f["feature"] for f in entry["top_features"][:3])
+        monomial = format_monomial(
+            entry["weights_raw"], entry["intercept_raw"],
+            GEOM_FEATURE_NAMES, max_terms=5,
+        )
         print(
             f"{entry['sae_node']:>6d} {entry['r2']:>8.4f} "
             f"{entry['r2_adj']:>8.4f} {entry['r2_cv']:>8.4f} "
-            f"{entry['pearson_r']:>8.4f} {entry['n_samples']:>6d}   {top3}"
+            f"{entry['pearson_r']:>8.4f} {entry['n_samples']:>6d} "
+            f"{entry['n_nonzero']:>4d}   {monomial}"
         )
 
     # Save summary YAML (full weight vectors are large, save top features only)
     summary_for_yaml = []
     for entry in results:
+        monomial = format_monomial(
+            entry["weights_raw"], entry["intercept_raw"],
+            GEOM_FEATURE_NAMES, max_terms=10,
+        )
         summary_for_yaml.append({
             "sae_node": entry["sae_node"],
             "r2": round(entry["r2"], 5),
@@ -584,6 +670,9 @@ def main():
             "r2_cv": round(entry["r2_cv"], 5),
             "pearson_r": round(entry["pearson_r"], 5),
             "n_samples": entry["n_samples"],
+            "n_nonzero": entry["n_nonzero"],
+            "alpha_chosen": round(entry["alpha_chosen"], 8),
+            "monomial": monomial,
             "top_features": entry["top_features"],
         })
     corr_path = out / "multivariate_regression.yaml"

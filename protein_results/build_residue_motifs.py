@@ -1871,8 +1871,18 @@ def main():
     parser.add_argument("--tree-depth", type=int, default=4,
                         help="Max depth for decision tree classifier.")
     parser.add_argument("--max-nodes", type=int, default=None,
-                        help="Max number of active nodes to analyse (for quick testing). "
-                             "Nodes are sorted by total activity so the most active are analysed first.")
+                        help="Hard safety cap on nodes to scan (default: unlimited). "
+                             "Analysis stops when --target-good-nodes are found OR "
+                             "this many nodes have been scanned, whichever comes first.")
+    parser.add_argument("--target-good-nodes", type=int, default=None,
+                        help="Stop scanning once this many nodes pass quality filters. "
+                             "If not set, all active nodes (up to --max-nodes) are analysed.")
+    parser.add_argument("--min-motif-rmsd", type=float, default=6.0,
+                        help="Max mean RMSD for a node to be 'good' (lower = tighter motif).")
+    parser.add_argument("--min-motif-auc", type=float, default=0.65,
+                        help="Min GBM leave-proteins-out AUC for a node to be 'good'.")
+    parser.add_argument("--min-motif-spearman", type=float, default=0.15,
+                        help="Min Spearman rho (concordance) for a node to be 'good'.")
     args = parser.parse_args()
 
     if (args.organism is None and args.fasta is None
@@ -2024,23 +2034,45 @@ def main():
     print(f"  {len(active_nodes)}/{n_nodes} nodes have ≥{MIN_ACTIVATED_POSITIONS} "
           f"activated residue positions.")
 
-    if args.max_nodes is not None and len(active_nodes) > args.max_nodes:
+    # Apply hard safety cap
+    nodes_to_scan = len(active_nodes)
+    if args.max_nodes is not None and nodes_to_scan > args.max_nodes:
         active_nodes = active_nodes[:args.max_nodes]
-        print(f"  → Limited to {args.max_nodes} most-active nodes (--max-nodes).")
+        nodes_to_scan = args.max_nodes
+
+    if args.target_good_nodes is not None:
+        print(f"  → Scanning up to {nodes_to_scan} nodes, stopping when "
+              f"{args.target_good_nodes} good nodes found.")
+        print(f"    Quality filters: RMSD ≤ {args.min_motif_rmsd:.1f},  "
+              f"LPO AUC ≥ {args.min_motif_auc:.2f},  "
+              f"Spearman ρ ≥ {args.min_motif_spearman:.2f}")
+    else:
+        print(f"  → Analysing all {nodes_to_scan} active nodes.")
     print()
 
     # ── Step 5: Fragment collection + superposition + classification ──────
-    print(f"[5/8] Analysing {len(active_nodes)} active nodes …")
+    print(f"[5/8] Analysing active nodes …")
     print(f"  (fragment extraction → Kabsch superposition → decision tree → enrichment)\n")
 
     all_results: list[dict] = []
+    good_results: list[dict] = []
+    n_scanned = 0
     t0 = _time.time()
 
     for rank, ni in enumerate(active_nodes):
-        # if rank % 50 == 0:
+        # Early-stop if we've found enough good nodes
+        if (args.target_good_nodes is not None
+                and len(good_results) >= args.target_good_nodes):
+            print(f"\n  ✓ Reached target of {args.target_good_nodes} good nodes "
+                  f"after scanning {n_scanned} nodes.")
+            break
+
         elapsed = _time.time() - t0
-        print(f"  [{rank + 1:>5d}/{len(active_nodes)}]  "
-                f"node={ni}  [{elapsed:.0f}s]")
+        good_str = (f"  ({len(good_results)}/{args.target_good_nodes} good)"
+                    if args.target_good_nodes else "")
+        print(f"  [{rank + 1:>5d}/{nodes_to_scan}]  "
+              f"node={ni}  [{elapsed:.0f}s]{good_str}", flush=True)
+        n_scanned += 1
 
         # 5a. Collect fragments
         frag_data = collect_node_fragments(
@@ -2117,13 +2149,33 @@ def main():
         }
         all_results.append(result)
 
+        # Quality gate: check if this node passes all thresholds
+        is_good = (
+            result["mean_rmsd"] <= args.min_motif_rmsd
+            and result.get("lpo_auc", 0.0) >= args.min_motif_auc
+            and result.get("concordance", {}).get("spearman_r", 0.0)
+                >= args.min_motif_spearman
+        )
+        if is_good:
+            good_results.append(result)
+            print(f"          ★ GOOD  RMSD={result['mean_rmsd']:.2f}  "
+                  f"LPO={result.get('lpo_auc', 0.0):.3f}  "
+                  f"ρ={result.get('concordance', {}).get('spearman_r', 0.0):.3f}")
+
     # Sort by mean RMSD (lower = more consistent motif)
     all_results.sort(key=lambda r: r["mean_rmsd"])
-    top_results = all_results[:args.top_nodes]
+
+    # If target mode, prefer good nodes; otherwise take top by RMSD
+    if args.target_good_nodes is not None and good_results:
+        good_results.sort(key=lambda r: r["mean_rmsd"])
+        top_results = good_results[:args.top_nodes]
+    else:
+        top_results = all_results[:args.top_nodes]
 
     elapsed = _time.time() - t0
-    print(f"\n  [✓] {len(all_results)} nodes analysed in {elapsed:.0f}s.")
-    print(f"  Top {len(top_results)} selected by fragment RMSD consistency.\n")
+    print(f"\n  [✓] {n_scanned} nodes scanned, {len(all_results)} analysed, "
+          f"{len(good_results)} passed quality filters, in {elapsed:.0f}s.")
+    print(f"  Top {len(top_results)} selected for output.\n")
 
     # ── Step 6: Print summary table ───────────────────────────────────────
     print("=" * 120)

@@ -6,3 +6,4 @@ explainer/_build/
 *.npy
 *.yaml
 protein_results/alphafold_analysis/pdb_cache/
+protein_results/residue_motifs/

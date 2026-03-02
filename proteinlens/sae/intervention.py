@@ -54,11 +54,11 @@ def get_esm_output_with_intervention(
             batch_tokens, attention_mask=batch_attn_mask
         ) as tracer:
             embd_to_patch = (
-                submodule.input[0][0]
+                submodule.input[0]
                 if input_or_output == "input"
                 else submodule.output
             )
             embd_to_patch[:] = hidden_state_override
             modified_logits = nnsight_model.output.save()
 
-        return modified_logits.value.logits, orig_output.hidden_states[hidden_layer_idx]
+        return modified_logits.logits, orig_output.hidden_states[hidden_layer_idx]

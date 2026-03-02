@@ -30,6 +30,7 @@ All heavy data (activation_matrix.npy, geometry_matrix.npy, pdb_cache/) is
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -76,6 +77,7 @@ from kabsch_top_alignment import plot_kabsch_alignments
 from proteinlens.sae.inference import load_sae
 from proteinlens.embedders.esm import ESM
 from proteinlens.utils import get_device
+from domain_annotation import annotate_domains_from_pdb_cache
 
 
 # =================== LINEAR REGRESSION ANALYSIS ============================
@@ -442,6 +444,22 @@ def main():
         "--top-nodes", type=int, default=50,
         help="Number of best-fitting nodes to keep and plot."
     )
+    parser.add_argument(
+        "--skip-domains", action="store_true",
+        help="Skip Pfam domain annotation (geometric features only)."
+    )
+    parser.add_argument(
+        "--pfam-dir", type=Path, default=None,
+        help="Directory for Pfam HMM database (default: <output-dir>/pfam)."
+    )
+    parser.add_argument(
+        "--min-domain-freq", type=int, default=5,
+        help="Min proteins a Pfam domain must appear in to be a feature."
+    )
+    parser.add_argument(
+        "--domain-cpus", type=int, default=4,
+        help="CPU threads for pyhmmer domain scanning."
+    )
     args = parser.parse_args()
 
     if (args.organism is None and args.fasta is None
@@ -614,6 +632,60 @@ def main():
     print(f"  Dataset: {n_prot} proteins × {n_geom} geom features × "
           f"{n_nodes} SAE nodes\n")
 
+    # ── Step 3b: Pfam domain annotation ───────────────────────────────────
+    if not args.skip_domains:
+        print("[3b] Annotating Pfam domains with pyhmmer + biotite …")
+        pfam_dir = args.pfam_dir or out / "pfam"
+        dom_cache = out / "domain_matrix.npy"
+        dom_names_cache = out / "domain_names.json"
+
+        if args.resume and dom_cache.exists() and dom_names_cache.exists():
+            print("  Loading cached domain matrix …")
+            domain_matrix = np.load(dom_cache)
+            with open(dom_names_cache) as _f:
+                domain_names = json.load(_f)
+            print(f"  {domain_matrix.shape[1]} domain features loaded "
+                  f"from cache.")
+        else:
+            domain_matrix, domain_names, domain_counts = (
+                annotate_domains_from_pdb_cache(
+                    accessions_ok, pdb_cache, pfam_dir,
+                    cpus=args.domain_cpus,
+                    min_freq=args.min_domain_freq,
+                )
+            )
+            np.save(dom_cache, domain_matrix)
+            with open(dom_names_cache, "w") as _f:
+                json.dump(domain_names, _f)
+            # Save readable domain counts for inspection
+            sparse_counts = {
+                acc: counts
+                for acc, counts in domain_counts.items()
+                if counts
+            }
+            dom_yaml = out / "domain_counts.yaml"
+            with open(dom_yaml, "w") as _f:
+                yaml.dump(sparse_counts, _f, default_flow_style=False)
+            print(f"  Domain counts saved → {dom_yaml}")
+
+        n_dom = domain_matrix.shape[1]
+        if n_dom > 0:
+            combined_matrix = np.hstack([geom_matrix, domain_matrix])
+            combined_names = list(GEOM_FEATURE_NAMES) + [
+                f"pfam_{d}" for d in domain_names
+            ]
+            print(f"  Combined features: {combined_matrix.shape[1]} "
+                  f"({n_geom} geometric + {n_dom} Pfam domains)\n")
+        else:
+            combined_matrix = geom_matrix.copy()
+            combined_names = list(GEOM_FEATURE_NAMES)
+            print("  No domain features passed filtering — "
+                  "using geometric features only.\n")
+    else:
+        combined_matrix = geom_matrix.copy()
+        combined_names = list(GEOM_FEATURE_NAMES)
+        print("[3b] Skipping domain annotation (--skip-domains).\n")
+
     # ── Step 4: Top-K per node ────────────────────────────────────────────
     print(f"[4/7] Finding top-{args.top_k} activating proteins per SAE node …")
     top_k_map = find_top_k_per_node(accessions_ok, act_matrix, k=args.top_k)
@@ -627,7 +699,7 @@ def main():
     # ── Step 5: Multivariate linear regression ────────────────────────────
     print(f"[5/7] Fitting LassoCV regression for each node …")
     results = fit_linear_regressors(
-        geom_matrix, act_matrix, GEOM_FEATURE_NAMES,
+        combined_matrix, act_matrix, combined_names,
         alpha=args.alpha, top_n=args.top_nodes,
     )
     print(f"  [✓] {len(results)} nodes fitted with R²_cv > 0 "
@@ -647,7 +719,7 @@ def main():
     for entry in results[:TOP_PRINT]:
         monomial = format_monomial(
             entry["weights_raw"], entry["intercept_raw"],
-            GEOM_FEATURE_NAMES, max_terms=5,
+            combined_names, max_terms=5,
         )
         print(
             f"{entry['sae_node']:>6d} {entry['r2']:>8.4f} "
@@ -661,7 +733,7 @@ def main():
     for entry in results:
         monomial = format_monomial(
             entry["weights_raw"], entry["intercept_raw"],
-            GEOM_FEATURE_NAMES, max_terms=10,
+            combined_names, max_terms=10,
         )
         summary_for_yaml.append({
             "sae_node": entry["sae_node"],
@@ -688,7 +760,7 @@ def main():
     b_raw_vec = np.array([r["intercept_raw"] for r in results])
     np.savez(weights_path, node_ids=node_ids, weights_std=w_std_mat,
              weights_raw=w_raw_mat, intercepts_raw=b_raw_vec,
-             geom_names=GEOM_FEATURE_NAMES)
+             feature_names=np.array(combined_names))
     print(f"  Raw weight matrices → {weights_path}\n")
 
     # ── Step 6: Plots ─────────────────────────────────────────────────────
@@ -696,13 +768,13 @@ def main():
 
     # 6a. Actual vs predicted scatter
     plot_pred_vs_actual(
-        geom_matrix, act_matrix, results,
+        combined_matrix, act_matrix, results,
         save_dir=out, plots_per_figure=6,
     )
 
     # 6b. Weight bar charts for top nodes
     weight_dir = out / "regression_weights"
-    plot_weight_bars(results, GEOM_FEATURE_NAMES, save_dir=weight_dir)
+    plot_weight_bars(results, combined_names, save_dir=weight_dir)
 
     # 6c. R² ranking overview
     plot_r2_ranking(results, save_path=out / "r2_ranking.png")
@@ -735,7 +807,13 @@ def main():
     print("=" * 72)
     print(f"All outputs in: {out}/")
     print(f"  • activation_matrix.npy           – ({n_prot}, {n_nodes})")
+    n_total_feats = combined_matrix.shape[1]
+    n_dom_feats = n_total_feats - n_geom
     print(f"  • geometry_matrix.npy             – ({n_prot}, {n_geom})")
+    if n_dom_feats > 0:
+        print(f"  • domain_matrix.npy               – ({n_prot}, {n_dom_feats})")
+        print(f"  • domain_counts.yaml              – per-protein Pfam counts")
+        print(f"  • domain_names.json               – {n_dom_feats} domain names")
     print(f"  • multivariate_regression.yaml    – top {len(results)} nodes")
     print(f"  • regression_weights.npz          – raw weight matrices")
     print(f"  • regression_weights/             – per-node weight bar charts")

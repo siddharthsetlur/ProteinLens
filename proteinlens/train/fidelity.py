@@ -127,7 +127,7 @@ class ESMFidelityFunction(EvaluationManager):
             batch_mask = (batch_tokens != alphabet.padding_idx).to(int)
             self.tokenized_batches.append((batch_tokens, batch_mask))
 
-        self.nnsight_model = NNsight(self.model, device=self.device)
+        self.nnsight_model = NNsight(self.model)
         self.layer_idx = self.layer_idx
 
         self.orig_loss, self.zero_loss = self._CE_for_orig_and_zero_ablation(

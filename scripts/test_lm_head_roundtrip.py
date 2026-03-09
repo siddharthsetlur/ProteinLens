@@ -51,11 +51,11 @@ DEFAULT_ESM_MODEL = "facebook/esm2_t6_8M_UR50D"
 # Covers enzymes, signalling, transport, immune, structural, and metabolic roles.
 BENCHMARK_ACCESSIONS = [
     # Small / model proteins
-    "P62988",  # Ubiquitin                      76 aa
-    "P62805",  # Histone H4                    102 aa
+    "P0CG47",  # Ubiquitin (UBB)                76 aa
+    "P62805",  # Histone H4                    103 aa
     "P01308",  # Insulin (preproinsulin)        110 aa
     "P61769",  # Beta-2-microglobulin          119 aa
-    "P00698",  # Lysozyme C (chicken)          129 aa
+    "P00698",  # Lysozyme C (chicken)          147 aa (preprotein; mature 129 aa)
     "P00167",  # Cytochrome b5                 134 aa
     "Q16695",  # Histone H3.3                  136 aa
     "P69905",  # Hemoglobin alpha              142 aa
@@ -118,7 +118,7 @@ BENCHMARK_ACCESSIONS = [
 def roundtrip_sequence(seq, esm, tok, device, max_len=1024):
     """Run ESM2 → lm_head → argmax for one sequence.
 
-    Returns (seq_prime, n_same, seq_len).
+    Returns (seq_truncated, seq_prime, n_same, seq_len).
     """
     if len(seq) > max_len:
         seq = seq[:max_len]
@@ -128,11 +128,12 @@ def roundtrip_sequence(seq, esm, tok, device, max_len=1024):
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
     with torch.no_grad():
-        logits = esm(**inputs).logits  # (1, L+2, vocab)
+        logits = esm(**inputs).logits  # (1, L+2, vocab): CLS at 0, residues 1..L, EOS at L+1
 
+    # logits_to_sequence slices [0, 1:seq_len+1, :] — correctly skips CLS and EOS.
     seq_prime = logits_to_sequence(logits, tok, seq_len, temperature=0.0)
     n_same = sum(a == b for a, b in zip(seq, seq_prime))
-    return seq_prime, n_same, seq_len
+    return seq, seq_prime, n_same, seq_len
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -151,7 +152,7 @@ def run_batch(accessions, esm, tok, device, fold=False, out_dir=None):
     col_w = 12
     header = (
         f"{'Accession':<{col_w}}  {'Len':>5}  {'Identity':>10}  {'Mutations':>10}"
-        + ("  {'pLDDT(S)':>10}  {'pLDDT(S')':>10}  {'ΔPLDDT':>8}" if fold else "")
+        + ("  {:>10}  {:>10}  {:>8}".format("pLDDT(S)", "pLDDT(S')", "dPLDDT") if fold else "")
     )
     print(f"\n{header}")
     print("─" * len(header))
@@ -160,7 +161,7 @@ def run_batch(accessions, esm, tok, device, fold=False, out_dir=None):
         row = {"accession": acc, "error": None}
         try:
             seq = fetch_sequence(acc)
-            seq_prime, n_same, seq_len = roundtrip_sequence(seq, esm, tok, device)
+            seq, seq_prime, n_same, seq_len = roundtrip_sequence(seq, esm, tok, device)
             pct = 100.0 * n_same / seq_len
             row.update({"seq_len": seq_len, "n_same": n_same, "identity_pct": pct,
                         "n_mut": seq_len - n_same, "seq": seq, "seq_prime": seq_prime})

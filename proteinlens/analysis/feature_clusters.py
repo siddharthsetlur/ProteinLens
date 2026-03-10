@@ -50,17 +50,13 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional
+from typing import List, Optional
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 import yaml
 from sklearn.cluster import SpectralClustering
-
-if TYPE_CHECKING:
-    # Avoid a hard import of intervene_and_fold at module load time.
-    pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -78,7 +74,9 @@ def _get_decoder_weights(sae) -> torch.Tensor:
     if hasattr(sae, "W_dec"):
         return sae.W_dec.detach().cpu().float()
     if hasattr(sae, "decoder") and hasattr(sae.decoder, "weight"):
-        return sae.decoder.weight.detach().cpu().float()
+        # nn.Linear stores weight as (out_features, in_features) = (activation_dim, dict_size).
+        # Transpose so rows correspond to features: (dict_size, activation_dim).
+        return sae.decoder.weight.T.detach().cpu().float()
     raise AttributeError(
         f"Cannot locate decoder weights on SAE of type {type(sae).__name__}. "
         "Expected attribute 'W_dec' or 'decoder.weight'."
@@ -109,6 +107,9 @@ def _spectral_cluster(
     n = W_dec.shape[0]
     W_norm = F.normalize(W_dec, dim=1)  # (n, dim), unit rows
 
+    # NOTE: The full (n, n) float32 matrix is always allocated here.
+    # For n=5120 this is ~100 MB. For n>>10k this will require significant RAM.
+    # The chunk_size parameter only reduces intermediate GPU/CPU tensors, not this allocation.
     all_sims = np.zeros((n, n), dtype=np.float32)
 
     for start in range(0, n, chunk_size):
@@ -263,8 +264,12 @@ class FeatureClusters:
         vote_counter: Counter = Counter()
 
         for feat in features:
-            # YAML keys may be stored as int or str
-            proteins = max_examples.get(feat) or max_examples.get(str(feat)) or []
+            # YAML keys may be stored as int or str; use explicit None check so that
+            # an existing empty list [] does not fall through to the string-key lookup.
+            val = max_examples.get(feat)
+            if val is None:
+                val = max_examples.get(str(feat))
+            proteins = val or []
             for prot in proteins[:n_per_feature]:
                 vote_counter[prot] += 1
 

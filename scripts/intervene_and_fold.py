@@ -575,7 +575,7 @@ def run_pipeline(args):
             positions=cluster_positions,
         )
         print(
-            f"[3/7] Cluster {args.cluster_idx}: {len(cluster_ivs)} features, "
+            f"[3a/7] Cluster {args.cluster_idx}: {len(cluster_ivs)} features, "
             f"action={args.cluster_action}"
             + (f" value={args.cluster_value}" if args.cluster_action != "zero" else "")
         )
@@ -583,7 +583,8 @@ def run_pipeline(args):
 
         # Show top proteins for the cluster whenever max_examples is provided
         if args.max_examples:
-            max_ex = yaml.safe_load(open(args.max_examples))
+            with open(args.max_examples) as fh:
+                max_ex = yaml.safe_load(fh)
             top_prots = fc.get_top_proteins(
                 args.cluster_idx, max_ex, n_per_feature=args.cluster_top_n
             )

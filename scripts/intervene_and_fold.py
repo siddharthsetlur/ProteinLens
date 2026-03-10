@@ -74,6 +74,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from proteinlens.sae.inference import load_sae
 from proteinlens.sae.intervention import get_esm_output_with_intervention
 from proteinlens.utils import get_device
+from proteinlens.analysis.feature_clusters import FeatureClusters
 
 # ── Constants ─────────────────────────────────────────────────────
 DEFAULT_ESM_MODEL = "facebook/esm2_t6_8M_UR50D"
@@ -558,6 +559,39 @@ def run_pipeline(args):
     elif args.intervention_file:
         interventions = load_interventions_from_yaml(args.intervention_file)
 
+    # Cluster-based interventions (additive with any individual interventions above)
+    if args.cluster_idx is not None:
+        if not args.cluster_file:
+            raise SystemExit("Error: --cluster-idx requires --cluster-file")
+        fc = FeatureClusters.from_file(args.cluster_file)
+        cluster_positions = (
+            _parse_position_spec(args.cluster_positions)
+            if args.cluster_positions else None
+        )
+        cluster_ivs = fc.make_interventions(
+            args.cluster_idx,
+            action=args.cluster_action,
+            value=args.cluster_value,
+            positions=cluster_positions,
+        )
+        print(
+            f"[3/7] Cluster {args.cluster_idx}: {len(cluster_ivs)} features, "
+            f"action={args.cluster_action}"
+            + (f" value={args.cluster_value}" if args.cluster_action != "zero" else "")
+        )
+        interventions = interventions + cluster_ivs
+
+        # Show top proteins for the cluster whenever max_examples is provided
+        if args.max_examples:
+            max_ex = yaml.safe_load(open(args.max_examples))
+            top_prots = fc.get_top_proteins(
+                args.cluster_idx, max_ex, n_per_feature=args.cluster_top_n
+            )
+            print(f"\n  Top proteins for cluster {args.cluster_idx} "
+                  f"(n_per_feature={args.cluster_top_n}):")
+            for i, prot in enumerate(top_prots[:20], 1):
+                print(f"    {i:2d}. {prot}")
+
     if not interventions:
         # ── Inspect mode (no interventions) ───────────────────────
         print("[3/7] No interventions specified – running in inspect mode.")
@@ -755,6 +789,25 @@ Examples
                    help="Fold with ESMFold after steering")
     p.add_argument("--fold-device", default=None,
                    help="Device for ESMFold (default: cuda or cpu)")
+
+    # Cluster-based interventions
+    cl = p.add_argument_group("cluster interventions")
+    cl.add_argument("--cluster-file", default=None,
+                    help="Path to clusters YAML produced by cluster_sae_features.py")
+    cl.add_argument("--cluster-idx", type=int, default=None,
+                    help="Cluster index to intervene on (requires --cluster-file)")
+    cl.add_argument("--cluster-action", default="zero",
+                    choices=["scale", "set", "zero", "add"],
+                    help="Action to apply to all features in the cluster (default: zero)")
+    cl.add_argument("--cluster-value", type=float, default=1.0,
+                    help="Scalar value for scale/set/add cluster action (default: 1.0)")
+    cl.add_argument("--cluster-positions", default=None,
+                    help="Position spec for cluster interventions, e.g. '10-20,30' "
+                         "(default: all positions)")
+    cl.add_argument("--max-examples", default=None,
+                    help="Path to Per_feature_max_examples.yaml for cluster top-protein display")
+    cl.add_argument("--cluster-top-n", type=int, default=3,
+                    help="n_per_feature when showing top proteins for a cluster (default: 3)")
 
     # Output
     p.add_argument("--output-dir", default=None,

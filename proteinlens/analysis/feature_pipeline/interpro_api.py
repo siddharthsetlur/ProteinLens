@@ -377,8 +377,9 @@ def _extract_fragments(entry: dict) -> List[tuple]:
 
     Returns:
         List of ``(start, end)`` tuples (1-based inclusive).
-        Returns ``[(1, 1)]`` as a fallback if no fragments are found,
-        to avoid dropping the entry entirely.
+        Returns an empty list if no fragments are found, so that
+        the entry produces no ``InterProDomain`` objects and does
+        not inject phantom residue-level domain labels.
     """
     fragments = []
     proteins = entry.get("proteins", [])

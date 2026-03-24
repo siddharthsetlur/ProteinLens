@@ -168,16 +168,23 @@ class TestParseInterProResponse:
 
 
 class TestPagination:
-    """Tests for InterPro API pagination handling."""
+    """Tests for InterPro API pagination handling.
 
-    def test_parse_multiple_pages(self):
-        """_parse_interpro_response should handle a response with a 'next' key.
+    Uses monkeypatching to simulate a paginated API response, verifying
+    that fetch_interpro_annotations actually follows 'next' URLs and
+    accumulates domains from all pages.
+    """
 
-        In fetch_interpro_annotations, when the API returns paginated results,
-        each page is parsed separately and domains are accumulated.  Here we
-        verify that the parsing function correctly processes each page."""
-        # Page 1
-        page1 = {
+    def test_fetch_follows_next_urls(self, tmp_path, monkeypatch):
+        """fetch_interpro_annotations must follow 'next' URLs to collect
+        domains from all pages, not just the first.
+
+        We monkeypatch session.get to simulate a 2-page response.  If
+        the pagination while-loop is deleted, this test fails because
+        only IPR000001 (page 1) would be returned, not IPR000002 (page 2).
+        """
+        # Define the two pages the fake server will return
+        page1_json = {
             "results": [
                 {
                     "metadata": {
@@ -193,10 +200,9 @@ class TestPagination:
                     }],
                 }
             ],
-            "next": "http://example.com/page2",
+            "next": "http://fake.ebi.ac.uk/page2",
         }
-        # Page 2
-        page2 = {
+        page2_json = {
             "results": [
                 {
                     "metadata": {
@@ -212,14 +218,50 @@ class TestPagination:
                     }],
                 }
             ],
+            # No "next" key — this is the last page
         }
-        domains_p1 = _parse_interpro_response("TEST", page1)
-        domains_p2 = _parse_interpro_response("TEST", page2)
-        all_domains = domains_p1 + domains_p2
 
-        assert len(all_domains) == 2
-        codes = {d.interpro_accession for d in all_domains}
-        assert codes == {"IPR000001", "IPR000002"}
+        # Track which URLs were requested
+        urls_requested = []
+
+        class FakeResponse:
+            def __init__(self, json_data):
+                self.status_code = 200
+                self._json = json_data
+
+            def json(self):
+                return self._json
+
+        def fake_get(url, timeout=None):
+            urls_requested.append(url)
+            if "page2" in url:
+                return FakeResponse(page2_json)
+            return FakeResponse(page1_json)
+
+        # Monkeypatch requests.Session.get
+        session = requests.Session()
+        monkeypatch.setattr(session, "get", fake_get)
+
+        rate_limiter = RateLimiter(rate=1000.0)  # fast for testing
+        domains = fetch_interpro_annotations(
+            "PAGINATED_TEST", tmp_path, session, rate_limiter
+        )
+
+        # Verify both pages were fetched
+        assert len(urls_requested) == 2, (
+            f"Expected 2 HTTP requests (page 1 + page 2), got {len(urls_requested)}. "
+            "The pagination loop may not be following 'next' URLs."
+        )
+
+        # Verify domains from BOTH pages are present
+        codes = {d.interpro_accession for d in domains}
+        assert "IPR000001" in codes, "Missing domain from page 1"
+        assert "IPR000002" in codes, "Missing domain from page 2"
+        assert len(domains) == 2
+
+        # Verify the result was cached (so re-fetching skips the API)
+        cache_path = tmp_path / "PAGINATED_TEST.json"
+        assert cache_path.exists()
 
 
 class TestCaching:

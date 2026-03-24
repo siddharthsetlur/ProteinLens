@@ -69,6 +69,26 @@ def run_assembly(config: PipelineConfig) -> None:
                     rep, member = parts
                     cluster_map[member] = rep
 
+    # ── Load the survey memmap for fallback max-activation lookups ──
+    # When a .npz file is missing (interrupted collection), we still need
+    # the correct per-protein per-feature max from the survey pass.
+    # Without this, missing .npz entries would show max_activation=0.0
+    # which is scientifically incorrect.
+    protein_maxes: Optional[np.ndarray] = None
+    acc_to_idx: Dict[str, int] = {}
+    if config.protein_feature_maxes_path.exists() and config.pipeline_state_path.exists():
+        with open(config.pipeline_state_path, "r") as f:
+            pipeline_state = json.load(f)
+        n_proteins = pipeline_state.get("total_proteins", 0)
+        acc_to_idx = pipeline_state.get("accession_index", {})
+        if n_proteins > 0:
+            protein_maxes = np.memmap(
+                config.protein_feature_maxes_path,
+                dtype="float32",
+                mode="r",
+                shape=(n_proteins, num_features),
+            )
+
     # ── Cache of loaded .npz files ──
     # We keep a small LRU-style cache so that proteins appearing in
     # multiple features don't trigger repeated disk reads.  However,
@@ -92,6 +112,8 @@ def run_assembly(config: PipelineConfig) -> None:
             config=config,
             npz_cache=_npz_cache,
             max_cache=MAX_NPZ_CACHE,
+            protein_maxes=protein_maxes,
+            acc_to_idx=acc_to_idx,
         )
 
         # Track referenced accessions
@@ -156,6 +178,8 @@ def _assemble_single_feature(
     config: PipelineConfig,
     npz_cache: Dict[str, np.ndarray],
     max_cache: int,
+    protein_maxes: Optional[np.ndarray] = None,
+    acc_to_idx: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Build the JSON dict for one feature.
 
@@ -183,6 +207,10 @@ def _assemble_single_feature(
         config: Pipeline configuration.
         npz_cache: Mutable dict used as an activation-array cache.
         max_cache: Max number of entries to keep in the cache.
+        protein_maxes: Optional ``(n_proteins, num_features)`` memmap from
+            the survey pass.  Used as a fallback to look up the correct
+            per-feature max activation when a ``.npz`` file is missing.
+        acc_to_idx: Optional accession -> row-index mapping for *protein_maxes*.
 
     Returns:
         Dict matching the per-feature JSON schema.
@@ -198,8 +226,12 @@ def _assemble_single_feature(
 
     top_sequences = []
     for acc in top_accessions:
+        # Use survey top list for max_activation fallback
+        fallback_max = _lookup_survey_max(
+            acc, feat_idx, survey_lookup, protein_maxes, acc_to_idx
+        )
         entry = _build_protein_entry(
-            acc, feat_idx, survey_lookup.get(acc, 0.0),
+            acc, feat_idx, fallback_max,
             sequences, config, npz_cache, max_cache,
         )
         if entry is not None:
@@ -214,8 +246,14 @@ def _assemble_single_feature(
     for bin_label, bin_accessions in bins_selection.items():
         bin_entries = []
         for acc in bin_accessions:
+            # Look up the correct max from the survey memmap so that
+            # even if the .npz is missing, we report the true value
+            # rather than 0.0.
+            fallback_max = _lookup_survey_max(
+                acc, feat_idx, survey_lookup, protein_maxes, acc_to_idx
+            )
             entry = _build_protein_entry(
-                acc, feat_idx, 0.0,  # max_activation will be recomputed from npz
+                acc, feat_idx, fallback_max,
                 sequences, config, npz_cache, max_cache,
             )
             if entry is not None:
@@ -231,6 +269,39 @@ def _assemble_single_feature(
         "top_sequences": top_sequences,
         "activation_bins": bins_data,
     }
+
+
+def _lookup_survey_max(
+    accession: str,
+    feat_idx: int,
+    survey_lookup: Dict[str, float],
+    protein_maxes: Optional[np.ndarray],
+    acc_to_idx: Optional[Dict[str, int]],
+) -> float:
+    """Look up the survey-pass max activation for one protein/feature pair.
+
+    First checks the survey top-N lookup dict.  If the protein is not in
+    the top-N list, falls back to the memmap (which has every protein).
+    Returns 0.0 only if both sources are unavailable.
+
+    Args:
+        accession: UniProt accession.
+        feat_idx: Feature index.
+        survey_lookup: ``{accession: max_activation}`` from survey top-N.
+        protein_maxes: ``(n_proteins, num_features)`` memmap (may be None).
+        acc_to_idx: Accession -> row-index mapping (may be None).
+
+    Returns:
+        The max activation value from the survey pass.
+    """
+    # Prefer the survey top-N list (exact float from the JSON)
+    if accession in survey_lookup:
+        return survey_lookup[accession]
+    # Fall back to the memmap
+    if protein_maxes is not None and acc_to_idx is not None and accession in acc_to_idx:
+        row = int(acc_to_idx[accession])
+        return float(protein_maxes[row, feat_idx])
+    return 0.0
 
 
 def _build_protein_entry(

@@ -197,12 +197,6 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="PyTorch device (default: auto-detect)",
     )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=8,
-        help="Embedding batch size (default: 8)",
-    )
     return parser.parse_args()
 
 
@@ -218,7 +212,6 @@ def main() -> None:
         esm_model_name=args.esm_model,
         esm_layer=args.esm_layer,
         device=args.device,
-        embedding_batch_size=args.batch_size,
     )
 
     state = PipelineState(config.pipeline_state_path)

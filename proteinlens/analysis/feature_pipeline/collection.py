@@ -73,42 +73,51 @@ def run_collection(config: PipelineConfig) -> None:
     # ── Load sequences ──
     _, sequences = _parse_fasta(config.fasta_path)
 
-    # ── Determine which proteins still need processing ──
-    todo = _get_remaining_proteins(
+    # ── Determine which proteins still need activation computation ──
+    todo_npz = _get_remaining_proteins(
         selected_accessions, sequences, config
     )
+    # Also find proteins that have .npz but are missing a PDB (retry)
+    todo_pdb_only = [
+        acc for acc in selected_accessions
+        if acc in sequences
+        and acc not in todo_npz
+        and not _has_pdb(acc, config.pdb_cache_dir)
+    ]
     print(
         f"[collection] {len(selected_accessions)} selected, "
-        f"{len(selected_accessions) - len(todo)} already done, "
-        f"{len(todo)} remaining."
+        f"{len(todo_npz)} need activations, "
+        f"{len(todo_pdb_only)} need PDB retry only."
     )
 
-    if not todo:
+    if not todo_npz and not todo_pdb_only:
         print("[collection] Nothing to do.")
         return
 
-    # ── Load models ──
+    # ── Load models (only if we have activations to compute) ──
     device = config.device or get_device()
-    print(f"[collection] Loading SAE from {config.sae_dir} ...")
-    sae = load_sae(config.sae_dir, device=device)
+    sae = None
+    esm_model = None
+    if todo_npz:
+        print(f"[collection] Loading SAE from {config.sae_dir} ...")
+        sae = load_sae(config.sae_dir, device=device)
+        print(f"[collection] Loading ESM model {config.esm_model_name} ...")
+        esm_model = ESM(model_name=config.esm_model_name, device=device)
 
-    print(f"[collection] Loading ESM model {config.esm_model_name} ...")
-    esm = ESM(model_name=config.esm_model_name, device=device)
-
-    # ── Process each protein ──
+    # ── Process proteins needing activations ──
     session = requests.Session()
     n_npz_saved = 0
     n_pdb_saved = 0
     n_pdb_failed = 0
 
-    for acc in tqdm(todo, desc="Collecting per-residue data"):
+    for acc in tqdm(todo_npz, desc="Collecting per-residue data"):
         seq = sequences[acc]
 
         # Step 1 — Compute per-residue activations
         npz_path = config.residue_activations_dir / f"{acc}.npz"
         if not npz_path.exists():
             activations = _compute_residue_activations(
-                esm, sae, seq, config.esm_layer, device
+                esm_model, sae, seq, config.esm_layer, device
             )
             # Save as compressed npz.
             # Key "activations" holds shape (seq_len, num_features), float32.
@@ -122,6 +131,14 @@ def run_collection(config: PipelineConfig) -> None:
                 n_pdb_saved += 1
             else:
                 n_pdb_failed += 1
+
+    # ── Retry PDB downloads for proteins that already have .npz ──
+    for acc in tqdm(todo_pdb_only, desc="Retrying PDB downloads"):
+        pdb_text = fetch_alphafold_pdb(acc, config.pdb_cache_dir, session)
+        if pdb_text is not None:
+            n_pdb_saved += 1
+        else:
+            n_pdb_failed += 1
 
     print(
         f"[collection] Done. {n_npz_saved} new .npz files, "
@@ -225,8 +242,12 @@ def _compute_residue_activations(
     embeddings_tensor = torch.tensor(embeddings, device=device)
 
     with torch.no_grad():
-        # sae.encode returns shape (seq_len, num_features)
-        activations = sae.encode(embeddings_tensor)
+        # Apply the SAE's input normalization before encoding.
+        # sae.encode() does NOT normalise internally — only forward() does.
+        # For SAEs with normalize_to_sqrt_d=False this is a no-op, but
+        # skipping it for normalised SAEs would produce wrong activations.
+        normed_input, _ = sae._normalize_input_and_get_norms(embeddings_tensor)
+        activations = sae.encode(normed_input)
 
     return activations.cpu().numpy()
 

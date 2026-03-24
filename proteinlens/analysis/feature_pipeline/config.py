@@ -42,8 +42,6 @@ class PipelineConfig:
             normalised) for a protein to count as "activated" by a feature.
         survey_checkpoint_every: How many proteins to process between
             checkpoint saves in the survey pass.
-        embedding_batch_size: Number of sequences to embed in one ESM
-            forward pass.
         device: PyTorch device string.  ``None`` means auto-detect via
             ``get_device()``.
         mmseqs_min_seq_id: Minimum sequence identity for MMseqs2
@@ -73,7 +71,6 @@ class PipelineConfig:
 
     # --- Operational ---
     survey_checkpoint_every: int = 1000
-    embedding_batch_size: int = 8
     device: Optional[str] = None
     mmseqs_min_seq_id: float = 0.3
 

@@ -138,8 +138,14 @@ def run_survey(
         embeddings_tensor = torch.tensor(embeddings, device=device)
 
         # Step 2 — Encode with SAE -> shape (seq_len, num_features)
+        # We must apply the SAE's input normalization before encoding,
+        # because sae.encode() does NOT normalise internally — only
+        # sae.forward() does.  For SAEs trained with normalize_to_sqrt_d=False
+        # this is a no-op, but for normalised SAEs skipping this would
+        # produce incorrect activations.
         with torch.no_grad():
-            activations = sae.encode(embeddings_tensor)
+            normed_input, _ = sae._normalize_input_and_get_norms(embeddings_tensor)
+            activations = sae.encode(normed_input)
 
         # Step 3 — Per-feature max across residues -> shape (num_features,)
         per_feature_max = activations.max(dim=0).values.cpu().numpy()

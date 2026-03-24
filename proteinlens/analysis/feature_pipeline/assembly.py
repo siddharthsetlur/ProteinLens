@@ -301,6 +301,16 @@ def _lookup_survey_max(
     if protein_maxes is not None and acc_to_idx is not None and accession in acc_to_idx:
         row = int(acc_to_idx[accession])
         return float(protein_maxes[row, feat_idx])
+    # Both lookup sources failed — this should never happen in a normal
+    # pipeline run because every selected protein passes through the
+    # survey (populating the memmap).  Warn loudly so it doesn't go
+    # unnoticed in a scientific analysis.
+    import warnings
+    warnings.warn(
+        f"[assembly] No survey max found for {accession} / feature {feat_idx}. "
+        f"Falling back to 0.0 — this may indicate a corrupted pipeline state.",
+        stacklevel=2,
+    )
     return 0.0
 
 

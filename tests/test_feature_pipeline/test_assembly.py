@@ -251,3 +251,64 @@ class TestRunAssembly:
         assert feat["top_sequences"] == []
         for bin_entries in feat["activation_bins"].values():
             assert bin_entries == []
+
+    def test_bin_entries_have_correct_max_when_npz_missing(self, assembly_setup):
+        """Regression: bin entries must report correct max_activation even
+        when the .npz file is missing (falls back to survey memmap)."""
+        config, sequences = assembly_setup
+
+        # Delete one protein's .npz to simulate interrupted collection
+        npz_path = config.residue_activations_dir / "PROT_C.npz"
+        assert npz_path.exists()
+        npz_path.unlink()
+
+        # Create a pipeline_state.json with accession index and memmap
+        # so the memmap fallback is available
+        from proteinlens.analysis.feature_pipeline.checkpoint import PipelineState
+        accessions = list(sequences.keys())
+        state = PipelineState(config.pipeline_state_path)
+        state.set_accession_index({a: i for i, a in enumerate(accessions)})
+        state.set_total_proteins(len(accessions))
+
+        # Create a memmap with known activation values
+        num_features = 3
+        mm = np.memmap(
+            config.protein_feature_maxes_path,
+            dtype="float32",
+            mode="w+",
+            shape=(len(accessions), num_features),
+        )
+        # Give PROT_C a known activation of 0.8 for feature 0
+        prot_c_idx = accessions.index("PROT_C")
+        mm[prot_c_idx, 0] = 0.8
+        mm.flush()
+
+        run_assembly(config)
+
+        with open(config.features_dir / "0000.json") as f:
+            feat = json.load(f)
+
+        # Find PROT_C in the bin entries
+        for bin_entries in feat["activation_bins"].values():
+            for entry in bin_entries:
+                if entry["accession"] == "PROT_C":
+                    # Must NOT be 0.0 — should be 0.8 from the memmap
+                    assert entry["max_activation"] == pytest.approx(0.8, abs=1e-5), (
+                        f"PROT_C max_activation should be 0.8 from memmap fallback, "
+                        f"got {entry['max_activation']}"
+                    )
+                    # per_residue_activations should be None (npz is missing)
+                    assert entry["per_residue_activations"] is None
+                    return  # found and verified
+
+    def test_missing_lookup_sources_warns(self):
+        """Regression: _lookup_survey_max warns when both sources are unavailable."""
+        from proteinlens.analysis.feature_pipeline.assembly import _lookup_survey_max
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = _lookup_survey_max("UNKNOWN", 0, {}, None, None)
+            assert result == 0.0
+            assert len(w) == 1
+            assert "No survey max found" in str(w[0].message)

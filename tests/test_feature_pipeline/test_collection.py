@@ -147,3 +147,43 @@ class TestRunCollection:
             activations = data["activations"]
             assert activations.shape[0] == len(TEST_SEQUENCES[acc])
             assert activations.shape[1] == 5120
+
+    def test_collection_retries_missing_pdbs(self, tmp_path):
+        """Regression: re-running collection should retry failed PDB downloads.
+
+        Proteins that already have .npz but no PDB should get another
+        attempt at PDB download without reloading models.
+        """
+        config = PipelineConfig(
+            sae_dir=SAE_DIR,
+            output_dir=tmp_path,
+        )
+
+        # Write a test FASTA with one known AlphaFold protein
+        test_seqs = {"P68871": "MVHLTPEEKSAVTALWGKVNVDEVGGEALGRLLVVYPWTQRFFESFGDLST"}
+        with open(config.fasta_path, "w") as f:
+            for acc, seq in test_seqs.items():
+                f.write(f">{acc}\n{seq}\n")
+
+        selection = {
+            "per_feature": {},
+            "all_selected_accessions": list(test_seqs.keys()),
+        }
+        with open(config.selection_path, "w") as f:
+            json.dump(selection, f)
+
+        # First run: creates .npz + PDB
+        run_collection(config)
+        npz_exists = (config.residue_activations_dir / "P68871.npz").exists()
+        assert npz_exists
+
+        # Delete the PDB to simulate a failed download
+        for pdb in config.pdb_cache_dir.glob("*P68871*"):
+            pdb.unlink()
+        assert not _has_pdb("P68871", config.pdb_cache_dir)
+
+        # Second run: should retry PDB without reloading models
+        run_collection(config)
+        assert _has_pdb("P68871", config.pdb_cache_dir), (
+            "PDB should have been re-downloaded on resume"
+        )

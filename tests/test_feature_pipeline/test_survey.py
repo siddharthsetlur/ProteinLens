@@ -119,6 +119,42 @@ class TestRunSurvey:
         expected_max = np.max(memmap, axis=0)
         np.testing.assert_allclose(global_max, expected_max, rtol=1e-5)
 
+    def test_survey_activations_match_forward_pass(self, survey_config):
+        """Regression: survey encode must match sae.forward() activations.
+
+        This verifies that the normalization fix (calling
+        _normalize_input_and_get_norms before encode) produces the same
+        result as the canonical forward() path.
+        """
+        config = survey_config
+        device = config.device or "cpu"
+
+        from proteinlens.embedders.esm import ESM
+        from proteinlens.sae.inference import load_sae
+        import torch
+
+        esm = ESM(model_name=config.esm_model_name, device=device)
+        sae = load_sae(config.sae_dir, device=device)
+
+        seq = list(TEST_SEQUENCES.values())[0]
+        embeddings = esm.embed_single_sequence(seq, config.esm_layer)
+        embeddings_tensor = torch.tensor(embeddings, device=device)
+
+        with torch.no_grad():
+            # The canonical path: forward() normalises then encodes
+            _, feats_forward = sae(embeddings_tensor, output_features=True)
+
+            # The pipeline path: manual normalise + encode
+            normed, _ = sae._normalize_input_and_get_norms(embeddings_tensor)
+            feats_pipeline = sae.encode(normed)
+
+        np.testing.assert_allclose(
+            feats_pipeline.cpu().numpy(),
+            feats_forward.cpu().numpy(),
+            rtol=1e-5,
+            err_msg="Pipeline encode path diverges from forward() path",
+        )
+
     def test_survey_resumability(self, survey_config):
         """A second run should skip already-processed proteins."""
         config = survey_config

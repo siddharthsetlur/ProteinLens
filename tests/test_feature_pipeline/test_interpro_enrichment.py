@@ -139,7 +139,12 @@ def enrichment_setup(tmp_path):
     with open(config.interpro_selection_path, "w") as f:
         json.dump(selection, f)
 
-    # Create InterPro cache files
+    # Create InterPro cache files.
+    # IMPORTANT: PROT0000-PROT0004 are written TWICE below.  The first
+    # loop writes [IPR000001] for all 10 annotated proteins (0-9).  The
+    # second loop (below) OVERWRITES PROT0000-PROT0004 to add IPR000002
+    # alongside IPR000001.  This intentional overwrite lets us test
+    # Feature 1's uniform-activation scenario with a second annotation.
     cache_dir = config.interpro_cache_dir
     for i in range(10):
         acc = f"PROT{i:04d}"
@@ -151,7 +156,8 @@ def enrichment_setup(tmp_path):
         _save_cached(cache_dir / f"{acc}.json", acc, [])
 
     # For feature 1: give first 5 proteins an annotation (IPR000002)
-    # but since all activations are uniform, F1 should be poor
+    # but since all activations are uniform, F1 should be poor.
+    # This OVERWRITES the cache for PROT0000-PROT0004 (see note above).
     for i in range(5):
         acc = f"PROT{i:04d}"
         domains = [
@@ -566,6 +572,26 @@ class TestRunInterProEnrichment:
 
         assert "n_features_analyzed" in summary
         assert "features" in summary
+
+    def test_summary_always_includes_residue_keys(self, enrichment_setup):
+        """Every summary entry must include top_residue_annotation and
+        top_residue_f1 keys, even when no residue-level results exist.
+        The plan schema shows these as always-present.  Setting them to
+        null when absent prevents visualizer key-errors."""
+        config, _, _ = enrichment_setup
+        run_interpro_enrichment(config)
+
+        summary_path = config.interpro_enrichment_dir / "summary.json"
+        with open(summary_path, "r") as f:
+            summary = json.load(f)
+
+        for feat_key, entry in summary["features"].items():
+            assert "top_residue_annotation" in entry, (
+                f"Feature {feat_key} summary missing 'top_residue_annotation' key"
+            )
+            assert "top_residue_f1" in entry, (
+                f"Feature {feat_key} summary missing 'top_residue_f1' key"
+            )
 
     def test_all_required_fields_present(self, enrichment_setup):
         """Each protein-level result should have all required fields per the schema."""

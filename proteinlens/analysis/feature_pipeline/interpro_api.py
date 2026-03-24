@@ -85,10 +85,12 @@ class InterProDomain:
 
 
 class RateLimiter:
-    """Token-bucket rate limiter for API calls.
+    """Simple interval-based rate limiter for API calls.
 
     Ensures that at most ``rate`` calls per second are made.  Each call
-    to :meth:`wait` blocks until a token is available.
+    to :meth:`wait` blocks until the minimum interval since the last
+    call has elapsed.  This is a fixed-interval limiter (no burst
+    capacity), which is appropriate for sequential API access.
 
     Args:
         rate: Maximum number of requests per second.
@@ -164,7 +166,23 @@ def fetch_interpro_annotations(
                 return []
 
             if resp.status_code == 200:
-                domains = _parse_interpro_response(accession, resp.json())
+                response_json = resp.json()
+                domains = _parse_interpro_response(accession, response_json)
+
+                # Handle pagination: the InterPro API may split results
+                # across multiple pages.  Each page has a "next" URL.
+                next_url = response_json.get("next")
+                while next_url:
+                    rate_limiter.wait()
+                    page_resp = session.get(next_url, timeout=30)
+                    if page_resp.status_code != 200:
+                        break
+                    page_json = page_resp.json()
+                    domains.extend(
+                        _parse_interpro_response(accession, page_json)
+                    )
+                    next_url = page_json.get("next")
+
                 _save_cached(cache_path, accession, domains)
                 return domains
 
@@ -375,11 +393,12 @@ def _extract_fragments(entry: dict) -> List[tuple]:
                     fragments.append((int(start), int(end)))
 
     if not fragments:
-        # PM FLAG: If we reach here, the API returned an entry with no
-        # parseable fragment positions.  This is unexpected but not fatal.
-        # We return a dummy (1,1) so the entry isn't silently dropped.
-        # This may need revisiting if it causes spurious domain overlaps.
-        return [(1, 1)]
+        # No parseable fragment positions.  Return empty so this entry
+        # contributes no residue-level domain labels.  The InterPro entry
+        # is still counted at the protein level (annotation presence is
+        # determined by whether _parse_interpro_response yields any
+        # InterProDomain objects at all, not by fragment count).
+        return []
 
     return fragments
 

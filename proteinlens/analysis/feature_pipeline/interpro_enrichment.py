@@ -146,11 +146,19 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
             config=config,
         )
 
-        # ── Collect unique annotations tested ──
-        all_annotation_codes: Set[str] = set()
+        # ── Count only annotations that met the min_proteins threshold ──
+        # (i.e. those that actually went through the F1 threshold sweep)
+        annotation_protein_counts: Dict[str, Set[str]] = {}
         for acc, _ in accessions_with_activations:
             for domain in protein_annotations.get(acc, []):
-                all_annotation_codes.add(domain.interpro_accession)
+                code = domain.interpro_accession
+                if code not in annotation_protein_counts:
+                    annotation_protein_counts[code] = set()
+                annotation_protein_counts[code].add(acc)
+        n_annotations_tested = sum(
+            1 for code, prots in annotation_protein_counts.items()
+            if len(prots) >= config.interpro_min_proteins
+        )
 
         # ── Write per-feature JSON (checklist 4.4) ──
         enrichment_data = {
@@ -158,7 +166,7 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
             "feature_max_activation": feat_max,
             "n_proteins_evaluated": len(accessions_with_activations),
             "n_proteins_with_annotations": n_with_annotations,
-            "n_unique_annotations_tested": len(all_annotation_codes),
+            "n_unique_annotations_tested": n_annotations_tested,
             "protein_level": protein_level_results,
             "residue_level": residue_level_results,
         }
@@ -176,6 +184,8 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
                 "top_protein_annotation": top_prot["annotation_code"],
                 "top_protein_annotation_name": top_prot["annotation_name"],
                 "top_protein_f1": top_prot["best_f1"],
+                "top_residue_annotation": None,
+                "top_residue_f1": None,
             }
             if residue_level_results:
                 top_res = residue_level_results[0]

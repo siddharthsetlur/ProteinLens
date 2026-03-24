@@ -119,15 +119,13 @@ def run_interpro_selection(config: PipelineConfig) -> Dict:
                 high_abs = high_frac * feat_max
                 bin_label = f"{low_frac}-{high_frac}"
 
-                # Lowest non-zero bin [0.0-0.1]: exclude activation == 0
-                # to avoid overlap with the "0.0" bin
+                # All bins use (low_abs, high_abs] — half-open on the left,
+                # closed on the right.  The lowest non-zero bin uses col > 0
+                # instead of col > low_abs to exclude truly inactive proteins
+                # (which belong in the "0.0" bin).
                 if low_frac == 0.0:
                     mask = (col > 0) & (col <= high_abs)
-                elif high_frac == 1.0:
-                    # Highest bin: inclusive upper bound to capture the max
-                    mask = (col > low_abs) & (col <= high_abs)
                 else:
-                    # Middle bins: (low_abs, high_abs]
                     mask = (col > low_abs) & (col <= high_abs)
 
                 candidate_indices = np.where(mask)[0]

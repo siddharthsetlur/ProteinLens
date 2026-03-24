@@ -138,6 +138,89 @@ class TestParseInterProResponse:
         domains = _parse_interpro_response("NONE", {"results": []})
         assert domains == []
 
+    def test_entry_with_no_fragments_produces_no_domains(self):
+        """An entry with no parseable fragment positions should produce zero
+        InterProDomain objects — not a phantom domain at (1, 1).
+
+        This is critical for scientific correctness: a phantom domain would
+        corrupt residue-level F1 scores by falsely labeling residue 0 as
+        in-domain for every affected protein.
+        """
+        response = {
+            "results": [
+                {
+                    "metadata": {
+                        "accession": "IPR999999",
+                        "name": "No Fragments Entry",
+                        "type": "Domain",
+                        "member_databases": {"pfam": {"PF99999": {}}},
+                    },
+                    # proteins key present but with no entry_protein_locations
+                    "proteins": [{"entry_protein_locations": []}],
+                }
+            ]
+        }
+        domains = _parse_interpro_response("TEST", response)
+        assert len(domains) == 0, (
+            f"Expected 0 domains for entry with no fragments, got {len(domains)}. "
+            "This would inject phantom domains corrupting residue-level F1."
+        )
+
+
+class TestPagination:
+    """Tests for InterPro API pagination handling."""
+
+    def test_parse_multiple_pages(self):
+        """_parse_interpro_response should handle a response with a 'next' key.
+
+        In fetch_interpro_annotations, when the API returns paginated results,
+        each page is parsed separately and domains are accumulated.  Here we
+        verify that the parsing function correctly processes each page."""
+        # Page 1
+        page1 = {
+            "results": [
+                {
+                    "metadata": {
+                        "accession": "IPR000001",
+                        "name": "Domain A",
+                        "type": "Domain",
+                        "member_databases": {},
+                    },
+                    "proteins": [{
+                        "entry_protein_locations": [{
+                            "fragments": [{"start": 1, "end": 50}]
+                        }]
+                    }],
+                }
+            ],
+            "next": "http://example.com/page2",
+        }
+        # Page 2
+        page2 = {
+            "results": [
+                {
+                    "metadata": {
+                        "accession": "IPR000002",
+                        "name": "Domain B",
+                        "type": "Family",
+                        "member_databases": {},
+                    },
+                    "proteins": [{
+                        "entry_protein_locations": [{
+                            "fragments": [{"start": 60, "end": 100}]
+                        }]
+                    }],
+                }
+            ],
+        }
+        domains_p1 = _parse_interpro_response("TEST", page1)
+        domains_p2 = _parse_interpro_response("TEST", page2)
+        all_domains = domains_p1 + domains_p2
+
+        assert len(all_domains) == 2
+        codes = {d.interpro_accession for d in all_domains}
+        assert codes == {"IPR000001", "IPR000002"}
+
 
 class TestCaching:
     """Tests for cache save/load round-trip."""

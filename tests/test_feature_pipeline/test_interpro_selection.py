@@ -231,3 +231,29 @@ class TestInterProBinAssignment:
                 expected.update(bin_accs)
 
         assert set(result["all_selected_accessions"]) == expected
+
+
+class TestReproducibility:
+    """Plan item 5.2: verify that Stage 5a is deterministic."""
+
+    def test_identical_output_on_repeated_runs(self, interpro_selection_setup):
+        """Running run_interpro_selection twice on the same input must
+        produce byte-identical JSON output.  This is essential for
+        scientific reproducibility — if the selection changes between
+        runs, downstream F1 scores become non-reproducible."""
+        config, _, _ = interpro_selection_setup
+
+        # First run
+        run_interpro_selection(config)
+        with open(config.interpro_selection_path, "r") as f:
+            json_1 = f.read()
+
+        # Second run (overwrites the same file)
+        run_interpro_selection(config)
+        with open(config.interpro_selection_path, "r") as f:
+            json_2 = f.read()
+
+        assert json_1 == json_2, (
+            "interpro_selection.json differs between two runs on identical input. "
+            "This breaks scientific reproducibility."
+        )

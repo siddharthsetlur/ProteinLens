@@ -119,6 +119,51 @@ def _run_stage_assembly(config: PipelineConfig, state: PipelineState) -> None:
     state.mark_stage_complete("assembly")
 
 
+def _run_stage_interpro_selection(
+    config: PipelineConfig, state: PipelineState
+) -> None:
+    """Stage 5a: InterPro stratified selection + per-residue collection."""
+    if state.is_stage_complete("interpro_selection"):
+        print("[pipeline] Stage 5a (interpro_selection) already complete — skipping.")
+        return
+    from proteinlens.analysis.feature_pipeline.interpro_selection import (
+        run_interpro_selection,
+    )
+
+    run_interpro_selection(config)
+    state.mark_stage_complete("interpro_selection")
+
+
+def _run_stage_interpro_fetch(
+    config: PipelineConfig, state: PipelineState
+) -> None:
+    """Stage 5b: Fetch InterPro annotations for selected proteins."""
+    if state.is_stage_complete("interpro_fetch"):
+        print("[pipeline] Stage 5b (interpro_fetch) already complete — skipping.")
+        return
+    from proteinlens.analysis.feature_pipeline.interpro_api import (
+        run_interpro_fetch,
+    )
+
+    run_interpro_fetch(config)
+    state.mark_stage_complete("interpro_fetch")
+
+
+def _run_stage_interpro_enrichment(
+    config: PipelineConfig, state: PipelineState
+) -> None:
+    """Stage 5c: Compute InterPro F1 enrichment scores per feature."""
+    if state.is_stage_complete("interpro_enrichment"):
+        print("[pipeline] Stage 5c (interpro_enrichment) already complete — skipping.")
+        return
+    from proteinlens.analysis.feature_pipeline.interpro_enrichment import (
+        run_interpro_enrichment,
+    )
+
+    run_interpro_enrichment(config)
+    state.mark_stage_complete("interpro_enrichment")
+
+
 # Map of stage name -> runner function, in execution order
 STAGES = [
     ("download", _run_stage_download),
@@ -127,6 +172,9 @@ STAGES = [
     ("selection", _run_stage_selection),
     ("collection", _run_stage_collection),
     ("assembly", _run_stage_assembly),
+    ("interpro_selection", _run_stage_interpro_selection),
+    ("interpro_fetch", _run_stage_interpro_fetch),
+    ("interpro_enrichment", _run_stage_interpro_enrichment),
 ]
 STAGE_NAMES = [name for name, _ in STAGES]
 

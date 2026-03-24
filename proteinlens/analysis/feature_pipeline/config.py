@@ -74,6 +74,25 @@ class PipelineConfig:
     device: Optional[str] = None
     mmseqs_min_seq_id: float = 0.3
 
+    # --- InterPro enrichment (Stages 5a-5c) ---
+    interpro_n_bins: int = 11
+    """Number of activation bins for InterPro stratified sampling.
+
+    Bin layout: one "0.0" bin for truly inactive proteins (activation == 0),
+    then 10 normalised bins [0.0-0.1, 0.1-0.2, ..., 0.9-1.0] as fractions
+    of the feature's global max.
+    """
+    interpro_n_per_bin: int = 50
+    """Max proteins to sample per activation bin per feature."""
+    interpro_api_rate_limit: float = 5.0
+    """Maximum InterPro API requests per second."""
+    interpro_f1_threshold_steps: int = 50
+    """Number of evenly-spaced thresholds to sweep when computing F1."""
+    interpro_top_annotations: int = 5
+    """Number of top annotations to keep per feature (by protein-level F1)."""
+    interpro_min_proteins: int = 3
+    """Minimum proteins with an annotation for it to be tested."""
+
     def __post_init__(self) -> None:
         """Coerce path-like strings and create output directory."""
         self.sae_dir = Path(self.sae_dir)
@@ -154,3 +173,37 @@ class PipelineConfig:
     def selection_path(self) -> Path:
         """Path to the selection results JSON (which proteins to collect)."""
         return self.output_dir / "selection.json"
+
+    # -----------------------------------------------------------------
+    # InterPro enrichment paths (Stages 5a-5c)
+    # -----------------------------------------------------------------
+
+    @property
+    def interpro_selection_path(self) -> Path:
+        """Path to the InterPro stratified selection JSON."""
+        return self.output_dir / "interpro_selection.json"
+
+    @property
+    def interpro_cache_dir(self) -> Path:
+        """Directory for cached InterPro API response JSONs."""
+        d = self.output_dir / "interpro_cache"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @property
+    def interpro_residue_activations_dir(self) -> Path:
+        """Directory for per-residue .npz files of InterPro-selected proteins.
+
+        Proteins selected for InterPro enrichment that were NOT already
+        collected in Stage 3 get their .npz files stored here.
+        """
+        d = self.output_dir / "interpro_residue_activations"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @property
+    def interpro_enrichment_dir(self) -> Path:
+        """Directory for per-feature InterPro enrichment JSON files."""
+        d = self.output_dir / "interpro_enrichment"
+        d.mkdir(parents=True, exist_ok=True)
+        return d

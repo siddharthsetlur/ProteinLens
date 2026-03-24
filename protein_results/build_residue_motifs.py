@@ -150,6 +150,13 @@ LOCAL_GEOM_NAMES = [
     # ── Local contact density ──
     "contact_density_8A",   # Cα atoms within 8 Å outside the window
     "contact_density_12A",  # Cα atoms within 12 Å outside the window
+    # ── Long-range spatial contact features ──
+    "long_range_contacts_8A",    # contacts with sequence separation > 12 residues, within 8 Å
+    "long_range_contacts_12A",   # contacts with sequence separation > 12 residues, within 12 Å
+    "max_seq_sep_contact_8A",    # max sequence separation among 8 Å contacts
+    "mean_seq_sep_contact_8A",   # mean sequence separation among 8 Å contacts
+    "contact_order_local",       # fraction of 8 Å contacts that are long-range (>12 seq sep)
+    "min_spatial_dist_long",     # closest spatial distance to a residue >24 seq positions away
     # ── Amino acid composition (window) ──
     "frac_hydrophobic",     # A, V, I, L, M, F, W, P
     "frac_charged",         # D, E, K, R
@@ -167,6 +174,91 @@ CATEGORY_NAMES = [
     "beta_hairpin_like",
     "loop",
 ]
+
+# ── Feature-group membership (index ranges into LOCAL_GEOM_NAMES) ──────────
+FEATURE_GROUPS: dict[str, list[str]] = {
+    "geometry": [
+        # Original whole-window (10) + sub-window thirds (9) + multi-scale (12)
+        "curvature_mean", "curvature_max", "curvature_std",
+        "torsion_mean", "torsion_std", "torsion_frac_pos",
+        "planarity_mean", "planarity_std",
+        "tangent_alignment", "end_to_end_ratio",
+        "curv_N_third", "curv_centre_third", "curv_C_third",
+        "tors_N_third", "tors_centre_third", "tors_C_third",
+        "plan_N_third", "plan_centre_third", "plan_C_third",
+        "narrow_curvature_mean", "narrow_curvature_max",
+        "narrow_torsion_mean", "narrow_torsion_std",
+        "narrow_tangent_alignment", "narrow_end_to_end_ratio",
+        "wide_curvature_mean", "wide_curvature_max",
+        "wide_torsion_mean", "wide_torsion_std",
+        "wide_tangent_alignment", "wide_end_to_end_ratio",
+    ],
+    "contact": [
+        "contact_density_8A", "contact_density_12A",
+        "long_range_contacts_8A", "long_range_contacts_12A",
+        "max_seq_sep_contact_8A", "mean_seq_sep_contact_8A",
+        "contact_order_local", "min_spatial_dist_long",
+    ],
+    "composition": [
+        "frac_hydrophobic", "frac_charged", "frac_polar",
+        "frac_gly_pro", "frac_aromatic",
+    ],
+}
+
+FEATURE_SET_CHOICES = list(FEATURE_GROUPS.keys()) + ["all"]
+
+# Active feature mask — set at runtime by set_active_feature_set().
+# Default: use all features.
+ACTIVE_FEATURE_MASK: np.ndarray = np.arange(len(LOCAL_GEOM_NAMES))
+ACTIVE_GEOM_NAMES: list[str] = list(LOCAL_GEOM_NAMES)
+
+
+def set_active_feature_set(choice: str | list[str]) -> None:
+    """Configure which feature columns the classifiers see.
+
+    Parameters
+    ----------
+    choice : str or list[str]
+        ``"all"`` to use every feature, a single group name
+        (``"contact"``, ``"geometry"``, ``"composition"``), or a list
+        of group names to combine (e.g. ``["contact", "composition"]``).
+    """
+    global ACTIVE_FEATURE_MASK, ACTIVE_GEOM_NAMES  # noqa: PLW0603
+
+    if isinstance(choice, str):
+        groups = [choice] if choice != "all" else list(FEATURE_GROUPS.keys())
+    else:
+        groups = list(choice)
+
+    selected: list[str] = []
+    for g in groups:
+        if g == "all":
+            selected = list(LOCAL_GEOM_NAMES)
+            break
+        if g not in FEATURE_GROUPS:
+            raise ValueError(
+                f"Unknown feature group '{g}'. "
+                f"Choose from {FEATURE_SET_CHOICES}"
+            )
+        selected.extend(FEATURE_GROUPS[g])
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for name in selected:
+        if name not in seen:
+            seen.add(name)
+            ordered.append(name)
+
+    indices = [LOCAL_GEOM_NAMES.index(n) for n in ordered]
+    ACTIVE_FEATURE_MASK = np.array(indices, dtype=int)
+    ACTIVE_GEOM_NAMES = ordered
+    print(f"  Feature set: {groups}  ({len(ordered)} / {len(LOCAL_GEOM_NAMES)} features)")
+
+
+def select_features(feat_vec: np.ndarray) -> np.ndarray:
+    """Slice a full feature vector to only the active columns."""
+    return feat_vec[ACTIVE_FEATURE_MASK]
 
 
 # ====================== PER-RESIDUE GEOMETRY ================================
@@ -256,6 +348,9 @@ def extract_local_feature_vector(
         torsion, and planarity — captures spatial pattern within the window
       • Multi-scale: same statistics at half and double the window size
       • Local contact density (Cα atoms within 8 Å and 12 Å outside window)
+      • Long-range spatial contact features: counts, sequence separations,
+        and contact order for contacts between sequence-distant residues
+        that are spatially close (tertiary contact detection)
       • Amino acid composition fractions (if sequence is provided)
 
     Returns a 1-D numpy array of shape (len(LOCAL_GEOM_NAMES),) or None
@@ -358,21 +453,66 @@ def extract_local_feature_vector(
     feats_wide = _scale_feats(hw_wide)
 
     # ═══════════════════════════════════════════════════════════════════
-    # 4. Local contact density (2 features)
+    # 4. Local contact density (2) + long-range contact features (6) = 8
     # ═══════════════════════════════════════════════════════════════════
     centre = ca[pos]
     # Exclude residues inside the primary window
     outside_mask = np.ones(n, dtype=bool)
     outside_mask[s:e] = False
-    if np.any(outside_mask):
-        dists = np.linalg.norm(ca[outside_mask] - centre, axis=1)
+    outside_indices = np.where(outside_mask)[0]
+
+    if len(outside_indices) > 0:
+        dists = np.linalg.norm(ca[outside_indices] - centre, axis=1)
         contact_8 = float(np.sum(dists < 8.0))
         contact_12 = float(np.sum(dists < 12.0))
+
+        # Sequence separations for residues outside the window
+        seq_seps = np.abs(outside_indices - pos)
+
+        # Long-range contacts: sequence separation > 12 residues AND spatially close
+        long_range_mask = seq_seps > 12
+        lr_dists = dists[long_range_mask]
+
+        lr_contacts_8 = float(np.sum(lr_dists < 8.0)) if len(lr_dists) > 0 else 0.0
+        lr_contacts_12 = float(np.sum(lr_dists < 12.0)) if len(lr_dists) > 0 else 0.0
+
+        # Among 8 Å contacts, what are their sequence separations?
+        contact_8_mask = dists < 8.0
+        contact_8_seps = seq_seps[contact_8_mask]
+
+        if len(contact_8_seps) > 0:
+            max_seq_sep_8 = float(np.max(contact_8_seps))
+            mean_seq_sep_8 = float(np.mean(contact_8_seps))
+            # Fraction of 8 Å contacts that are long-range
+            contact_order = float(np.sum(contact_8_seps > 12)) / len(contact_8_seps)
+        else:
+            max_seq_sep_8 = 0.0
+            mean_seq_sep_8 = 0.0
+            contact_order = 0.0
+
+        # Minimum spatial distance to a very distant residue (>24 seq positions)
+        very_long_mask = seq_seps > 24
+        if np.any(very_long_mask):
+            min_spatial_dist_long = float(np.min(dists[very_long_mask]))
+        else:
+            min_spatial_dist_long = 50.0  # sentinel: no distant residues close by
     else:
         contact_8 = 0.0
         contact_12 = 0.0
+        lr_contacts_8 = 0.0
+        lr_contacts_12 = 0.0
+        max_seq_sep_8 = 0.0
+        mean_seq_sep_8 = 0.0
+        contact_order = 0.0
+        min_spatial_dist_long = 50.0
 
-    feats_contact = [contact_8, contact_12]
+    feats_contact = [
+        contact_8, contact_12,
+        lr_contacts_8, lr_contacts_12,
+        max_seq_sep_8, mean_seq_sep_8,
+        contact_order,
+        min_spatial_dist_long,
+    ]
 
     # ═══════════════════════════════════════════════════════════════════
     # 5. Amino acid composition (5 features)
@@ -692,8 +832,8 @@ def train_motif_classifier(
             "optimal_threshold": 0.5,
         }
 
-    X_pos = np.array([a["features"] for a in activated])
-    X_neg = np.array([b["features"] for b in background])
+    X_pos = np.array([select_features(a["features"]) for a in activated])
+    X_neg = np.array([select_features(b["features"]) for b in background])
     X = np.vstack([X_pos, X_neg])
     y = np.concatenate([np.ones(len(X_pos)), np.zeros(len(X_neg))])
 
@@ -719,7 +859,7 @@ def train_motif_classifier(
         class_weight="balanced",
     )
     tree.fit(X, y)
-    rules = export_text(tree, feature_names=LOCAL_GEOM_NAMES, decimals=4)
+    rules = export_text(tree, feature_names=ACTIVE_GEOM_NAMES, decimals=4)
 
     # ── 2. Gradient-boosted ensemble for precise probability ──
     # Scale pos_weight to handle class imbalance
@@ -846,8 +986,8 @@ def train_motif_classifier(
 
     # Feature importances from GBM (more reliable than single DT)
     importances = {
-        LOCAL_GEOM_NAMES[i]: float(gbm.feature_importances_[i])
-        for i in range(len(LOCAL_GEOM_NAMES))
+        ACTIVE_GEOM_NAMES[i]: float(gbm.feature_importances_[i])
+        for i in range(len(ACTIVE_GEOM_NAMES))
         if gbm.feature_importances_[i] > 0.005
     }
     importances = dict(sorted(importances.items(), key=lambda x: -x[1]))
@@ -1150,7 +1290,8 @@ def plot_full_backbone_with_motif(
         for pos in range(half_w, n - half_w):
             feat_vec = extract_local_feature_vector(profiles, ca, pos, half_w, sequence=sequence)
             if feat_vec is not None and np.all(np.isfinite(feat_vec)):
-                prob = tree.predict_proba(feat_vec.reshape(1, -1))[0]
+                fv = select_features(feat_vec)
+                prob = tree.predict_proba(fv.reshape(1, -1))[0]
                 geom_prob[pos] = prob[1] if len(prob) > 1 else prob[0]
 
     geom_active = geom_prob > geom_threshold  # geometry predicts "active"
@@ -1498,12 +1639,13 @@ def plot_geometry_overlay(
 
     # ── Compute per-residue geometry-predicted probability ──
     geom_prob = np.zeros(n)
-    geom_features_at_pos = {}  # pos -> feature vector
+    geom_features_at_pos = {}  # pos -> feature vector (full-length for traces)
     for pos in range(half_w, n - half_w):
         feat_vec = extract_local_feature_vector(profiles, ca, pos, half_w, sequence=sequence)
         if feat_vec is not None and np.all(np.isfinite(feat_vec)):
-            geom_features_at_pos[pos] = feat_vec
-            prob = tree.predict_proba(feat_vec.reshape(1, -1))[0]
+            geom_features_at_pos[pos] = feat_vec  # keep full vec for traces
+            fv = select_features(feat_vec)
+            prob = tree.predict_proba(fv.reshape(1, -1))[0]
             # prob is [P(bg), P(activated)] — take the activated class
             geom_prob[pos] = prob[1] if len(prob) > 1 else prob[0]
 
@@ -1515,6 +1657,7 @@ def plot_geometry_overlay(
     ]
 
     # Build full-length traces for the top features
+    # (use full feature vector from geom_features_at_pos, indexed into LOCAL_GEOM_NAMES)
     feat_traces = {}
     for fi in top_feat_indices:
         trace = np.full(n, np.nan)
@@ -1612,11 +1755,20 @@ def plot_geometry_overlay(
     ax_geom.add_artist(leg2)
 
     ax_geom.set_ylabel("P(active | geometry)")
-    ax_geom.set_xlabel("Residue Position")
     ax_geom.set_xlim(-1, n)
     ax_geom.set_ylim(0, 1.05)
     ax_geom.spines["top"].set_visible(False)
     ax_geom.spines["right"].set_visible(False)
+
+    # ── Sequence on x-axis ──
+    if sequence is not None and len(sequence) >= n:
+        seq_labels = [sequence[i] for i in range(n)]
+        ax_geom.set_xticks(xs)
+        ax_geom.set_xticklabels(seq_labels, fontsize=max(3, min(6, 300 / n)),
+                                fontfamily="monospace", rotation=0)
+        ax_geom.set_xlabel("Residue (sequence)")
+    else:
+        ax_geom.set_xlabel("Residue Position")
 
     plt.tight_layout()
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1760,7 +1912,8 @@ def compute_concordance_metrics(
             )
 
             if feat_vec is not None and np.all(np.isfinite(feat_vec)):
-                prob = tree.predict_proba(feat_vec.reshape(1, -1))[0]
+                fv = select_features(feat_vec)
+                prob = tree.predict_proba(fv.reshape(1, -1))[0]
                 geom_prob = float(prob[1] if len(prob) > 1 else prob[0])
             else:
                 geom_prob = 0.0
@@ -1883,11 +2036,23 @@ def main():
                         help="Min GBM leave-proteins-out AUC for a node to be 'good'.")
     parser.add_argument("--min-motif-spearman", type=float, default=0.15,
                         help="Min Spearman rho (concordance) for a node to be 'good'.")
+    parser.add_argument("--feature-set", type=str, nargs="+", default=["all"],
+                        choices=FEATURE_SET_CHOICES,
+                        help="Feature groups for classifiers. Use one or more of: "
+                             f"{FEATURE_SET_CHOICES}. "
+                             'E.g. --feature-set contact  or  '
+                             '--feature-set contact composition')
     args = parser.parse_args()
 
     if (args.organism is None and args.fasta is None
             and args.accession_list is None and not args.mixed_organisms):
         args.organism = 9606
+
+    # ── Configure active feature set before any processing ──
+    if len(args.feature_set) == 1 and args.feature_set[0] == "all":
+        set_active_feature_set("all")
+    else:
+        set_active_feature_set(args.feature_set)
 
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)

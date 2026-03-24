@@ -119,42 +119,6 @@ class TestRunSurvey:
         expected_max = np.max(memmap, axis=0)
         np.testing.assert_allclose(global_max, expected_max, rtol=1e-5)
 
-    def test_survey_activations_match_forward_pass(self, survey_config):
-        """Regression: survey encode must match sae.forward() activations.
-
-        This verifies that the normalization fix (calling
-        _normalize_input_and_get_norms before encode) produces the same
-        result as the canonical forward() path.
-        """
-        config = survey_config
-        device = config.device or "cpu"
-
-        from proteinlens.embedders.esm import ESM
-        from proteinlens.sae.inference import load_sae
-        import torch
-
-        esm = ESM(model_name=config.esm_model_name, device=device)
-        sae = load_sae(config.sae_dir, device=device)
-
-        seq = list(TEST_SEQUENCES.values())[0]
-        embeddings = esm.embed_single_sequence(seq, config.esm_layer)
-        embeddings_tensor = torch.tensor(embeddings, device=device)
-
-        with torch.no_grad():
-            # The canonical path: forward() normalises then encodes
-            _, feats_forward = sae(embeddings_tensor, output_features=True)
-
-            # The pipeline path: manual normalise + encode
-            normed, _ = sae._normalize_input_and_get_norms(embeddings_tensor)
-            feats_pipeline = sae.encode(normed)
-
-        np.testing.assert_allclose(
-            feats_pipeline.cpu().numpy(),
-            feats_forward.cpu().numpy(),
-            rtol=1e-5,
-            err_msg="Pipeline encode path diverges from forward() path",
-        )
-
     def test_survey_resumability(self, survey_config):
         """A second run should skip already-processed proteins."""
         config = survey_config
@@ -255,3 +219,63 @@ class TestComputeSurveyOutputs:
         # Feature 1: only B activates above 0.5
         assert coverage["1"]["n_proteins_activated"] == 1
         assert coverage["1"]["n_clusters_activated"] == 1  # B is in REP1
+
+
+class TestNormalizationCorrectness:
+    """Regression test for the normalize-before-encode fix.
+
+    Uses a synthetic ReLUSAE with normalize_to_sqrt_d=True so that
+    the normalization path is NOT a no-op.  Verifies that the pipeline's
+    manual normalize+encode produces the same output as forward().
+    """
+
+    def test_normalized_sae_pipeline_matches_forward(self):
+        """Pipeline encode path must match forward() for normalized SAEs.
+
+        Creates a small ReLUSAE with normalize_to_sqrt_d=True and random
+        weights, then checks that:
+          normalize_input + encode(normed) == forward(x, output_features=True)[1]
+
+        If someone removes the _normalize_input_and_get_norms call from
+        the pipeline, this test will fail because encode(raw_x) != encode(normed_x)
+        when normalization is enabled.
+        """
+        import torch
+        from proteinlens.sae.dictionary import ReLUSAE
+
+        activation_dim = 16
+        dict_size = 32
+        seq_len = 5
+
+        # Create a normalized SAE with random weights
+        sae = ReLUSAE(activation_dim, dict_size, normalize_to_sqrt_d=True)
+        sae.eval()
+
+        # Random input (simulating ESM embeddings)
+        torch.manual_seed(42)
+        x = torch.randn(seq_len, activation_dim)
+
+        with torch.no_grad():
+            # Canonical path: forward() normalises internally then encodes
+            _, feats_forward = sae(x, output_features=True)
+
+            # Pipeline path: manual normalise + encode (what survey.py does)
+            normed, _ = sae._normalize_input_and_get_norms(x)
+            feats_pipeline = sae.encode(normed)
+
+            # Wrong path: encode without normalising (the old bug)
+            feats_wrong = sae.encode(x)
+
+        # Pipeline path must match forward path
+        np.testing.assert_allclose(
+            feats_pipeline.numpy(),
+            feats_forward.numpy(),
+            rtol=1e-5,
+            err_msg="Pipeline normalize+encode diverges from forward()",
+        )
+
+        # The un-normalized path must be DIFFERENT (proving the test is not tautological)
+        assert not np.allclose(feats_wrong.numpy(), feats_forward.numpy(), rtol=1e-3), (
+            "encode(raw_x) should differ from forward(x) for a normalized SAE, "
+            "but they are the same — this test is tautological"
+        )

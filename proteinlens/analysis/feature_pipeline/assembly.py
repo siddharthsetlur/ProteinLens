@@ -12,11 +12,14 @@ per-residue colouring, activation range samples, and coverage stats.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 from proteinlens.analysis.feature_pipeline.collection import _has_pdb
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
@@ -303,13 +306,13 @@ def _lookup_survey_max(
         return float(protein_maxes[row, feat_idx])
     # Both lookup sources failed — this should never happen in a normal
     # pipeline run because every selected protein passes through the
-    # survey (populating the memmap).  Warn loudly so it doesn't go
-    # unnoticed in a scientific analysis.
-    import warnings
-    warnings.warn(
-        f"[assembly] No survey max found for {accession} / feature {feat_idx}. "
-        f"Falling back to 0.0 — this may indicate a corrupted pipeline state.",
-        stacklevel=2,
+    # survey (populating the memmap).  Log every occurrence (unlike
+    # warnings.warn which is filtered after the first) so that all
+    # affected proteins are visible in the output.
+    logger.warning(
+        "No survey max found for %s / feature %d. "
+        "Falling back to 0.0 — this may indicate a corrupted pipeline state.",
+        accession, feat_idx,
     )
     return 0.0
 

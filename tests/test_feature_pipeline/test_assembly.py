@@ -300,15 +300,14 @@ class TestRunAssembly:
                     # per_residue_activations should be None (npz is missing)
                     assert entry["per_residue_activations"] is None
                     return  # found and verified
+        pytest.fail("PROT_C was not found in any activation bin")
 
-    def test_missing_lookup_sources_warns(self):
-        """Regression: _lookup_survey_max warns when both sources are unavailable."""
+    def test_missing_lookup_sources_logs_warning(self, caplog):
+        """Regression: _lookup_survey_max logs a warning when both sources are unavailable."""
         from proteinlens.analysis.feature_pipeline.assembly import _lookup_survey_max
-        import warnings
+        import logging
 
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        with caplog.at_level(logging.WARNING, logger="proteinlens.analysis.feature_pipeline.assembly"):
             result = _lookup_survey_max("UNKNOWN", 0, {}, None, None)
-            assert result == 0.0
-            assert len(w) == 1
-            assert "No survey max found" in str(w[0].message)
+        assert result == 0.0
+        assert any("No survey max found" in msg for msg in caplog.messages)

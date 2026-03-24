@@ -93,6 +93,26 @@ class PipelineConfig:
     interpro_min_proteins: int = 3
     """Minimum proteins with an annotation for it to be tested."""
 
+    # --- Geometric descriptor enrichment (Stages 6a-6c) ---
+    geometry_min_active_proteins: int = 300
+    """Min activated proteins for protein-level Lasso (Stage 6b)."""
+    geometry_min_activated_positions: int = 200
+    """Min activated residue positions for residue-level GBM (Stage 6c)."""
+    geometry_fragment_half_w: int = 10
+    """Half-window for Ca fragment extraction (total window = 21)."""
+    geometry_act_quantile: float = 0.80
+    """Activation quantile threshold for separating activated vs background."""
+    geometry_frag_top_k: int = 100
+    """Max fragments for Kabsch superposition."""
+    geometry_bg_ratio: int = 3
+    """Background-to-activated fragment ratio."""
+    geometry_lasso_cv_folds: int = 5
+    """Cross-validation folds for protein-level LassoCV."""
+    geometry_classifier_cv_folds: int = 5
+    """Cross-validation folds for residue-level GBM classifier."""
+    geometry_top_proteins_for_plots: int = 5
+    """Per node, precompute plot data for this many top-activating proteins."""
+
     def __post_init__(self) -> None:
         """Coerce path-like strings and create output directory."""
         self.sae_dir = Path(self.sae_dir)
@@ -205,5 +225,28 @@ class PipelineConfig:
     def interpro_enrichment_dir(self) -> Path:
         """Directory for per-feature InterPro enrichment JSON files."""
         d = self.output_dir / "interpro_enrichment"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    # -----------------------------------------------------------------
+    # Geometry enrichment paths (Stages 6a-6c)
+    # -----------------------------------------------------------------
+
+    @property
+    def geometry_protein_features_path(self) -> Path:
+        """Path to the (N, 55) protein-level geometry features NPZ."""
+        return self.output_dir / "geometry_protein_features.npz"
+
+    @property
+    def geometry_residue_profiles_dir(self) -> Path:
+        """Directory for per-protein residue geometry profile ``.npz`` files."""
+        d = self.output_dir / "geometry_residue_profiles"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @property
+    def geometry_enrichment_dir(self) -> Path:
+        """Directory for per-feature geometry enrichment JSON files."""
+        d = self.output_dir / "geometry_enrichment"
         d.mkdir(parents=True, exist_ok=True)
         return d

@@ -48,6 +48,14 @@ class TestFetchSwissprotAccessions:
         )
         assert len(accessions) > 0
 
+    def test_all_organisms_accessions(self):
+        """organism_taxid=None should fetch from all of SwissProt."""
+        accessions = fetch_swissprot_accessions(
+            organism_taxid=None, max_proteins=5
+        )
+        assert len(accessions) > 0
+        assert len(accessions) <= 5
+
 
 class TestFetchSequence:
     """Tests for fetching individual protein sequences."""
@@ -145,3 +153,22 @@ class TestParseFasta:
         accessions, sequences = _parse_fasta(Path("/nonexistent/file.fasta"))
         assert accessions == []
         assert sequences == {}
+
+
+class TestFastaPathNaming:
+    """Tests for PipelineConfig.fasta_path naming convention."""
+
+    def test_fasta_path_human(self, tmp_path):
+        """Default organism_taxid=9606 should produce swissprot_9606.fasta."""
+        config = PipelineConfig(output_dir=tmp_path, organism_taxid=9606)
+        assert config.fasta_path.name == "swissprot_9606.fasta"
+
+    def test_fasta_path_all_organisms(self, tmp_path):
+        """organism_taxid=None should produce swissprot_all.fasta."""
+        config = PipelineConfig(output_dir=tmp_path, organism_taxid=None)
+        assert config.fasta_path.name == "swissprot_all.fasta"
+
+    def test_fasta_path_ecoli(self, tmp_path):
+        """organism_taxid=83333 should produce swissprot_83333.fasta."""
+        config = PipelineConfig(output_dir=tmp_path, organism_taxid=83333)
+        assert config.fasta_path.name == "swissprot_83333.fasta"

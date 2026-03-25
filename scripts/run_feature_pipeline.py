@@ -319,7 +319,8 @@ def main() -> None:
     print("=" * 60)
     print(f"  SAE dir:       {config.sae_dir}")
     print(f"  Output dir:    {config.output_dir}")
-    print(f"  Organism:      taxid {config.organism_taxid}")
+    org_label = f"taxid {config.organism_taxid}" if config.organism_taxid is not None else "all organisms"
+    print(f"  Organism:      {org_label}")
     print(f"  Max proteins:  {config.max_proteins or 'all'}")
     print(f"  ESM model:     {config.esm_model_name}")
     print(f"  ESM layer:     {config.esm_layer}")

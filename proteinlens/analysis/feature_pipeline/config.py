@@ -21,7 +21,8 @@ class PipelineConfig:
         output_dir: Root directory where all pipeline outputs are written.
             Created automatically if it does not exist.
         organism_taxid: NCBI taxonomy ID for the organism whose proteome
-            we process.  Default 9606 = *Homo sapiens*.
+            we process.  Default 9606 = *Homo sapiens*.  ``None`` means
+            all organisms (full SwissProt, ~570 000 proteins).
         max_proteins: Optional cap on the number of proteins to process.
             Useful for local testing (e.g. ``max_proteins=50``).  ``None``
             means process the full proteome.

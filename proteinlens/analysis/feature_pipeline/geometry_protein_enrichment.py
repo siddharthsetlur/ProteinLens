@@ -64,7 +64,7 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
         return
 
     state = json.loads(config.pipeline_state_path.read_text())
-    acc_to_idx: dict[str, int] = state.get("accession_to_index", {})
+    acc_to_idx: dict[str, int] = state.get("accession_index", {})
 
     # -- Load per-protein max activations memmap --
     if not config.protein_feature_maxes_path.exists():

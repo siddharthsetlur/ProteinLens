@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Feature Detail — SAE Visualizer</title>
+
+    <!-- Pico CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+
+    <!-- Plotly.js for geometry charts -->
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+
+    <!-- 3Dmol.js for protein structure viewers (jsdelivr CDN, more reliable than 3Dmol.org) -->
+    <script src="https://cdn.jsdelivr.net/npm/3dmol@2.4.2/build/3Dmol-min.js"></script>
+
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <main class="container-fluid">
+        <header>
+            <nav>
+                <ul><li><a href="/">&larr; Back to features</a></li></ul>
+                <ul><li><strong id="page-title">Feature —</strong></li></ul>
+            </nav>
+        </header>
+
+        <!-- Section 1: Summary Stats -->
+        <section id="summary-section">
+            <h2>Summary</h2>
+            <div id="summary-cards" class="stats-grid">
+                <div class="loading-spinner"></div> Loading...
+            </div>
+        </section>
+
+        <!-- Section 1b: Top 3 Sequence Alignment -->
+        <section id="alignment-section">
+            <h2>Top Activating Sequences</h2>
+            <div id="alignment-container">
+                <div class="loading-spinner"></div> Loading...
+            </div>
+        </section>
+
+        <!-- Section 2: Top 5 Most Activating Proteins -->
+        <section id="top-proteins-section">
+            <h2>Top Activating Proteins</h2>
+            <div id="top-proteins-container">
+                <div class="loading-spinner"></div> Loading...
+            </div>
+        </section>
+
+        <!-- Section 3: Activation Bins (collapsible) -->
+        <section id="bins-section" class="bin-section">
+            <h2>Activation Bins</h2>
+            <div id="bins-container">
+                <div class="loading-spinner"></div> Loading...
+            </div>
+        </section>
+
+        <!-- Section 4: Geometry Plots (hidden if no data) -->
+        <section id="geometry-section" style="display:none;">
+            <h2>Geometry Enrichment</h2>
+            <div id="geometry-container"></div>
+        </section>
+    </main>
+
+    <!-- App scripts -->
+    <script src="/static/js/sequence_strip.js"></script>
+    <script src="/static/js/mol_viewer.js"></script>
+    <script src="/static/js/profile_plots.js"></script>
+    <script src="/static/js/feature_detail.js"></script>
+</body>
+</html>

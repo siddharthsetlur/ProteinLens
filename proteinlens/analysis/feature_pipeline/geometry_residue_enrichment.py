@@ -356,7 +356,7 @@ def run_geometry_residue_enrichment(config: PipelineConfig) -> None:
         logger.warning("pipeline_state.json not found. Run survey stage first.")
         return
     state = json.loads(config.pipeline_state_path.read_text())
-    acc_to_idx: dict[str, int] = state.get("accession_to_index", {})
+    acc_to_idx: dict[str, int] = state.get("accession_index", {})
 
     # -- Load feature max activations --
     if not config.feature_max_path.exists():

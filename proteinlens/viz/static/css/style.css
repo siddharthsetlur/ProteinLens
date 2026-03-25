@@ -1,0 +1,353 @@
+/* ===================================================================
+   SAE Feature Visualizer — custom styles
+   Supplements Pico CSS with layout and color-coding for the dashboard.
+   =================================================================== */
+
+/* --- Card row layout (homepage header) --- */
+.cards-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.info-card {
+    padding: 0.75rem 1rem;
+    margin: 0;
+}
+
+.info-card header {
+    padding: 0 0 0.5rem 0;
+    margin: 0;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.info-card dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.2rem 0.75rem;
+    margin: 0.5rem 0 0 0;
+    font-size: 0.85rem;
+}
+
+.info-card dt {
+    font-weight: 600;
+    color: var(--pico-muted-color);
+}
+
+.info-card dd {
+    margin: 0;
+}
+
+/* --- Pipeline status badges --- */
+.badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin: 0.15rem 0.2rem;
+}
+
+.badge-done {
+    background: #d4edda;
+    color: #155724;
+}
+
+.badge-pending {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.badge-count {
+    background: #e2e3e5;
+    color: #383d41;
+}
+
+/* --- AG Grid cell color coding ---
+   Green intensity proportional to F1/R2 values (0 = white, 1 = full green).
+   Applied via JS cellStyle callbacks. These are fallback overrides. */
+.ag-theme-alpine {
+    --ag-row-hover-color: #f0f7ff;
+    --ag-selected-row-background-color: #e3f0ff;
+    font-size: 0.85rem;
+}
+
+.ag-theme-alpine .ag-row {
+    cursor: pointer;
+}
+
+/* Null values displayed as em-dash */
+.null-cell {
+    color: #aaa;
+    font-style: italic;
+}
+
+/* --- Feature detail page --- */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.stat-card {
+    padding: 0.75rem 1rem;
+    margin: 0;
+}
+
+.stat-card header {
+    padding: 0 0 0.5rem 0;
+    margin: 0;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.stat-card .value {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--pico-primary);
+}
+
+.stat-card .detail {
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+    margin-top: 0.25rem;
+}
+
+/* --- Text sequence display (AA letters with activation-colored backgrounds) --- */
+.seq-alignment {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 8px;
+    padding: 0.75rem;
+    overflow-x: auto;
+    background: #fafafa;
+}
+
+.seq-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 2px;
+    white-space: nowrap;
+}
+
+.seq-row-label {
+    flex-shrink: 0;
+    width: 160px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--pico-muted-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.seq-row-label .copy-btn {
+    cursor: pointer;
+    opacity: 0.4;
+    font-size: 0.7rem;
+    padding: 1px 3px;
+    border: none;
+    background: none;
+}
+
+.seq-row-label .copy-btn:hover {
+    opacity: 1;
+}
+
+.seq-letters {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    letter-spacing: 0;
+    display: inline-flex;
+}
+
+.seq-letters .aa {
+    display: inline-block;
+    width: 0.62em;
+    text-align: center;
+    padding: 1px 0;
+}
+
+.seq-letters .aa-gap {
+    color: #ccc;
+    background: none;
+}
+
+/* Alignment mode toggle controls */
+.align-controls {
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.align-controls label {
+    cursor: pointer;
+}
+
+.align-controls-label {
+    font-weight: 600;
+    color: var(--pico-muted-color);
+}
+
+/* Inline text sequence (above 3D viewer in protein entries) */
+.seq-text-inline {
+    overflow-x: auto;
+    margin-bottom: 0.5rem;
+    padding: 4px 0;
+}
+
+.seq-text-inline .seq-letters {
+    font-size: 0.68rem;
+}
+
+/* --- Sequence strip --- */
+.protein-entry {
+    margin-bottom: 1.5rem;
+    padding: 0.75rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 8px;
+}
+
+.protein-entry .protein-label {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.sequence-strip-container {
+    position: relative;
+    margin-bottom: 0.5rem;
+}
+
+.sequence-strip-container canvas {
+    display: block;
+    width: 100%;
+    border-radius: 4px;
+}
+
+.strip-tooltip {
+    position: absolute;
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    pointer-events: none;
+    white-space: nowrap;
+    z-index: 100;
+    display: none;
+}
+
+/* --- 3D viewer container --- */
+.viewer-container {
+    width: 400px;
+    height: 300px;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 4px;
+    position: relative;
+    background: #f8f8f8;
+}
+
+.viewer-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    color: var(--pico-muted-color);
+    font-size: 0.85rem;
+}
+
+/* --- Activation bins (collapsible) --- */
+.bin-section details {
+    margin-bottom: 0.75rem;
+}
+
+.bin-section summary {
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0.5rem 0;
+}
+
+/* --- Geometry plots --- */
+.plot-container {
+    margin-bottom: 1rem;
+}
+
+/* --- Concordance strip color legend --- */
+.concordance-legend {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.8rem;
+    margin-bottom: 0.5rem;
+}
+
+.concordance-legend span::before {
+    content: "";
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+.legend-agree::before  { background: #28a745; }
+.legend-fp::before     { background: #fd7e14; }
+.legend-fn::before     { background: #6f42c1; }
+.legend-tn::before     { background: #ccc; }
+
+/* --- Loading spinner --- */
+.loading-spinner {
+    display: inline-block;
+    width: 1.2rem;
+    height: 1.2rem;
+    border: 2px solid var(--pico-muted-border-color);
+    border-top-color: var(--pico-primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 0.5rem;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* --- Pending/error state badges on detail page --- */
+.status-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.status-pending {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.status-error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+/* --- Responsive adjustments --- */
+@media (max-width: 768px) {
+    .cards-row {
+        grid-template-columns: 1fr;
+    }
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+    .viewer-container {
+        width: 100%;
+    }
+}

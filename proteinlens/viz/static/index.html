@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAE Feature Visualizer</title>
+
+    <!-- Pico CSS (classless minimal styling) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+
+    <!-- AG Grid Community (row-virtualized data table) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@32.0.2/styles/ag-grid.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@32.0.2/styles/ag-theme-alpine.css">
+
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <main class="container-fluid">
+        <header>
+            <h1>SAE Feature Visualizer</h1>
+            <p id="subtitle" class="secondary">Loading...</p>
+        </header>
+
+        <!-- Model + Dataset + Pipeline cards -->
+        <section id="cards-row" class="cards-row">
+            <article id="sae-card" class="info-card">
+                <header><strong>SAE Model</strong></header>
+                <div id="sae-card-body">Loading...</div>
+            </article>
+            <article id="dataset-card" class="info-card">
+                <header><strong>Dataset</strong></header>
+                <div id="dataset-card-body">Loading...</div>
+            </article>
+            <article id="pipeline-card" class="info-card">
+                <header><strong>Pipeline Status</strong></header>
+                <div id="pipeline-card-body">Loading...</div>
+            </article>
+        </section>
+
+        <!-- Feature table -->
+        <section id="table-section">
+            <h2>Features</h2>
+            <div id="feature-grid" class="ag-theme-alpine" style="width:100%; height:700px;"></div>
+        </section>
+    </main>
+
+    <!-- AG Grid JS -->
+    <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@32.0.2/dist/ag-grid-community.min.js"></script>
+
+    <script src="/static/js/homepage.js"></script>
+</body>
+</html>

@@ -53,7 +53,7 @@ class PipelineConfig:
     output_dir: Path = Path("feature_data")
 
     # --- Dataset scope ---
-    organism_taxid: int = 9606
+    organism_taxid: Optional[int] = 9606
     max_proteins: Optional[int] = None
 
     # --- Model settings (must match how the SAE was trained) ---
@@ -126,7 +126,9 @@ class PipelineConfig:
     @property
     def fasta_path(self) -> Path:
         """Path to the downloaded SwissProt FASTA file."""
-        return self.output_dir / "swissprot_human.fasta"
+        if self.organism_taxid is not None:
+            return self.output_dir / f"swissprot_{self.organism_taxid}.fasta"
+        return self.output_dir / "swissprot_all.fasta"
 
     @property
     def cluster_map_path(self) -> Path:

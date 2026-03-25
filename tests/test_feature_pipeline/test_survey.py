@@ -37,7 +37,7 @@ SAE_DIR = Path("trained_models/fiery-sweep")
 def survey_config(tmp_path):
     """Create a PipelineConfig pointing at a temp directory with a test FASTA."""
     # Write test FASTA
-    fasta_path = tmp_path / "swissprot_human.fasta"
+    fasta_path = tmp_path / "swissprot_9606.fasta"
     with open(fasta_path, "w") as f:
         for acc, seq in TEST_SEQUENCES.items():
             f.write(f">{acc}\n{seq}\n")

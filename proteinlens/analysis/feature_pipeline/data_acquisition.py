@@ -30,10 +30,10 @@ UNIPROT_FASTA_URL = "https://rest.uniprot.org/uniprotkb/{acc}.fasta"
 
 
 def fetch_swissprot_accessions(
-    organism_taxid: int = 9606,
+    organism_taxid: Optional[int] = 9606,
     max_proteins: Optional[int] = None,
 ) -> List[str]:
-    """Query UniProt for reviewed (SwissProt) accessions of one organism.
+    """Query UniProt for reviewed (SwissProt) accessions.
 
     Paginates through the UniProt streaming endpoint using the ``Link``
     header until all accessions are retrieved (or *max_proteins* is
@@ -41,7 +41,8 @@ def fetch_swissprot_accessions(
 
     Args:
         organism_taxid: NCBI taxonomy ID.  Default 9606 = *Homo sapiens*
-            (~20 400 proteins).
+            (~20 400 proteins).  ``None`` means all organisms (full
+            SwissProt, ~570 000 proteins).
         max_proteins: If not ``None``, stop after collecting this many
             accessions.
 
@@ -51,11 +52,15 @@ def fetch_swissprot_accessions(
     Raises:
         requests.HTTPError: If the UniProt API returns a non-200 status.
     """
-    print(
-        f"[data_acquisition] Querying UniProt for reviewed proteins "
-        f"(taxon {organism_taxid}) ..."
-    )
-    query = f"(reviewed:true) AND (organism_id:{organism_taxid})"
+    if organism_taxid is not None:
+        print(
+            f"[data_acquisition] Querying UniProt for reviewed proteins "
+            f"(taxon {organism_taxid}) ..."
+        )
+        query = f"(reviewed:true) AND (organism_id:{organism_taxid})"
+    else:
+        print("[data_acquisition] Querying UniProt for ALL reviewed proteins ...")
+        query = "(reviewed:true)"
     params = {
         "query": query,
         "format": "list",  # plain text, one accession per line

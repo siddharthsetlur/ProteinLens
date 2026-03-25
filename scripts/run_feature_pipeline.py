@@ -260,7 +260,7 @@ def parse_args() -> argparse.Namespace:
         "--organism-taxid",
         type=int,
         default=9606,
-        help="NCBI taxonomy ID (default: 9606 for Homo sapiens)",
+        help="NCBI taxonomy ID (default: 9606 for Homo sapiens). Use 0 for all organisms (full SwissProt).",
     )
     parser.add_argument(
         "--max-proteins",
@@ -300,10 +300,12 @@ def main() -> None:
     """CLI entry point: parse args, build config, run stages."""
     args = parse_args()
 
+    taxid = args.organism_taxid if args.organism_taxid != 0 else None
+
     config = PipelineConfig(
         sae_dir=args.sae_dir,
         output_dir=args.output_dir,
-        organism_taxid=args.organism_taxid,
+        organism_taxid=taxid,
         max_proteins=args.max_proteins,
         esm_model_name=args.esm_model,
         esm_layer=args.esm_layer,

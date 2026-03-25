@@ -228,20 +228,20 @@ def _scan_interpro_files(interpro_dir: Path) -> dict[str, dict]:
         fid_str = str(data.get("feature_id", fpath.stem.lstrip("0") or "0"))
         entry = {}
 
-        # Best protein-level annotation by F1
+        # Best protein-level annotation by F1 — pipeline field is "best_f1"
         protein_level = data.get("protein_level", [])
         if protein_level:
-            best = max(protein_level, key=lambda x: x.get("f1", 0))
-            if best.get("f1", 0) > 0:
-                entry["protein_best_f1"] = best["f1"]
+            best = max(protein_level, key=lambda x: x.get("best_f1", 0))
+            if best.get("best_f1", 0) > 0:
+                entry["protein_best_f1"] = best["best_f1"]
                 entry["protein_best_name"] = best.get("annotation_name", "")
 
-        # Best residue-level annotation by F1
+        # Best residue-level annotation by F1 — pipeline field is "best_f1"
         residue_level = data.get("residue_level", [])
         if residue_level:
-            best_res = max(residue_level, key=lambda x: x.get("f1", 0))
-            if best_res.get("f1", 0) > 0:
-                entry["residue_best_f1"] = best_res["f1"]
+            best_res = max(residue_level, key=lambda x: x.get("best_f1", 0))
+            if best_res.get("best_f1", 0) > 0:
+                entry["residue_best_f1"] = best_res["best_f1"]
 
         if entry:
             result[fid_str] = entry

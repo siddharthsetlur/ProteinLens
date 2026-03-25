@@ -67,24 +67,25 @@ async function createMolViewer(container, accession, activations, maxActivation)
         const model = viewer.getModel();
         const atoms = model.selectedAtoms({});
 
-        // Build a color map: residue number (1-based in PDB) -> hex color
+        // Build a color map: residue number (1-based in PDB) -> hex integer
+        // 3Dmol.js colorfunc expects numeric hex colors (e.g. 0xFF2626), not CSS strings
         const colorMap = {};
         for (let i = 0; i < activations.length; i++) {
             const act = activations[i] || 0;
             const norm = maxActivation > 0 ? Math.min(act / maxActivation, 1) : 0;
-            // White (0xFFFFFF) -> Red (0xDC2626)
+            // White (0xFFFFFF) -> Red (0xFF2626)
             const r = 255;
             const g = Math.round(255 - norm * (255 - 38));
             const b = Math.round(255 - norm * (255 - 38));
             // PDB residue numbering is 1-based
-            colorMap[i + 1] = `rgb(${r},${g},${b})`;
+            colorMap[i + 1] = (r << 16) | (g << 8) | b;
         }
 
         // Apply cartoon style with per-residue coloring
         viewer.setStyle({}, {
             cartoon: {
                 colorfunc: function (atom) {
-                    return colorMap[atom.resi] || "white";
+                    return colorMap[atom.resi] ?? 0xFFFFFF;
                 },
             },
         });
@@ -163,22 +164,23 @@ function createMotifViewer(container, pdbString, flexibility) {
     viewer.addModel(pdbString, "pdb");
 
     // Color by flexibility: blue (rigid) -> red (flexible)
+    // 3Dmol.js colorfunc expects numeric hex colors, not CSS strings
     const maxFlex = Math.max(...flexibility.filter((v) => typeof v === "number"), 1);
     const colorMap = {};
     for (let i = 0; i < flexibility.length; i++) {
         const val = typeof flexibility[i] === "number" ? flexibility[i] : 0;
         const norm = maxFlex > 0 ? Math.min(val / maxFlex, 1) : 0;
-        // Blue (0,0,255) -> Red (255,0,0)
+        // Blue (0x0000FF) -> Red (0xFF0000)
         const r = Math.round(norm * 255);
         const g = 0;
         const b = Math.round((1 - norm) * 255);
-        colorMap[i + 1] = `rgb(${r},${g},${b})`;
+        colorMap[i + 1] = (r << 16) | (g << 8) | b;
     }
 
     viewer.setStyle({}, {
         cartoon: {
             colorfunc: function (atom) {
-                return colorMap[atom.resi] || "gray";
+                return colorMap[atom.resi] ?? 0x808080;
             },
         },
     });

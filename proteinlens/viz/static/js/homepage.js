@@ -171,14 +171,21 @@ function nullFormatter(decimals = 3) {
  * Custom comparator that sorts null values to the bottom regardless
  * of sort direction.
  *
+ * AG Grid v32 passes (valueA, valueB, nodeA, nodeB, isDescending) to
+ * custom comparators. We flip the null-handling when descending so that
+ * nulls always stay at the bottom of the table.
+ *
  * @param {*} a - First value.
  * @param {*} b - Second value.
+ * @param {*} _nodeA - AG Grid row node (unused).
+ * @param {*} _nodeB - AG Grid row node (unused).
+ * @param {boolean} isDescending - Whether the column is sorted descending.
  * @returns {number} Comparison result.
  */
-function nullBottomComparator(a, b) {
+function nullBottomComparator(a, b, _nodeA, _nodeB, isDescending) {
     if (a === null && b === null) return 0;
-    if (a === null) return 1;
-    if (b === null) return -1;
+    if (a === null) return isDescending ? -1 : 1;
+    if (b === null) return isDescending ? 1 : -1;
     return a - b;
 }
 

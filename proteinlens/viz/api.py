@@ -17,6 +17,7 @@ Endpoints:
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +106,15 @@ def get_feature_geometry(feature_id: int) -> dict[str, Any]:
         return json.load(f)
 
 
+_ACCESSION_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _validate_accession(accession: str) -> None:
+    """Validate that an accession string contains only safe characters (alphanumeric, underscore, hyphen)."""
+    if not _ACCESSION_RE.match(accession):
+        raise HTTPException(status_code=400, detail=f"Invalid accession format: {accession}")
+
+
 @router.get("/pdb/{accession}")
 def get_pdb(accession: str) -> Response:
     """
@@ -115,6 +125,7 @@ def get_pdb(accession: str) -> Response:
 
     Returns text/plain with a 24-hour cache header (PDBs are immutable).
     """
+    _validate_accession(accession)
     pdb_dir = _data_dir / "pdb_cache"
     matches = list(pdb_dir.glob(f"AF-{accession}-F1-model_v*.pdb"))
     if not matches:
@@ -137,6 +148,7 @@ def get_interpro_cache(accession: str) -> dict[str, Any]:
     Return cached InterPro domain annotations for a protein accession.
     Used by the frontend to draw domain boundary overlays on sequence strips.
     """
+    _validate_accession(accession)
     fpath = _data_dir / "interpro_cache" / f"{accession}.json"
     if not fpath.exists():
         raise HTTPException(status_code=404, detail=f"InterPro data for {accession} not found")

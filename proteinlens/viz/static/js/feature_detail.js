@@ -130,20 +130,20 @@ function renderInterproProteinCard(data) {
             '<div class="detail">No annotations tested</div>');
     }
 
-    // Best by F1
-    const best = entries.reduce((a, b) => (b.f1 > a.f1 ? b : a), entries[0]);
+    // Best by F1 — field is "best_f1" in pipeline output
+    const best = entries.reduce((a, b) => ((b.best_f1 || 0) > (a.best_f1 || 0) ? b : a), entries[0]);
 
     return createStatCard("InterPro Protein-Level", `
-        <div class="value">F1 = ${fmtVal(best.f1)}</div>
+        <div class="value">F1 = ${fmtVal(best.best_f1)}</div>
         <div class="detail"><strong>${best.annotation_name || "—"}</strong></div>
         <div class="detail">
-            Threshold: ${fmtVal(best.threshold_normalized, 2)} (norm) / ${fmtVal(best.threshold_absolute, 2)} (abs)
+            Threshold: ${fmtVal(best.best_threshold_normalized, 2)} (norm) / ${fmtVal(best.best_threshold, 2)} (abs)
         </div>
         <div class="detail">
-            Precision: ${fmtVal(best.precision)} · Recall: ${fmtVal(best.recall)}
+            Precision: ${fmtVal(best.precision_at_best)} · Recall: ${fmtVal(best.recall_at_best)}
         </div>
         <div class="detail">
-            TP: ${best.tp ?? "—"} · FP: ${best.fp ?? "—"} · FN: ${best.fn ?? "—"}
+            TP: ${best.n_true_positives ?? "—"} · FP: ${best.n_false_positives ?? "—"} · FN: ${best.n_false_negatives ?? "—"}
         </div>
         ${best.interpretation ? `<div class="detail" style="margin-top:0.3rem;font-style:italic">${best.interpretation}</div>` : ""}
     `);
@@ -164,14 +164,18 @@ function renderInterproResidueCard(data) {
             '<div class="detail">No annotations tested</div>');
     }
 
-    const best = entries.reduce((a, b) => (b.f1 > a.f1 ? b : a), entries[0]);
+    // Best by F1 — field is "best_f1" in pipeline output
+    const best = entries.reduce((a, b) => ((b.best_f1 || 0) > (a.best_f1 || 0) ? b : a), entries[0]);
 
     return createStatCard("InterPro Residue-Level", `
-        <div class="value">F1 = ${fmtVal(best.f1)}</div>
+        <div class="value">F1 = ${fmtVal(best.best_f1)}</div>
         <div class="detail"><strong>${best.annotation_name || "—"}</strong></div>
-        <div class="detail">Threshold: ${fmtVal(best.threshold, 2)}</div>
+        <div class="detail">Threshold: ${fmtVal(best.best_threshold, 2)} (abs) / ${fmtVal(best.best_threshold_normalized, 2)} (norm)</div>
         <div class="detail">
-            Residues: ${best.n_activated_residues ?? "—"} activated / ${best.n_background_residues ?? "—"} background
+            Residues: ${best.n_residues_in_domain ?? "—"} in domain / ${best.n_total_residues ?? "—"} total
+        </div>
+        <div class="detail">
+            Precision: ${fmtVal(best.precision_at_best)} · Recall: ${fmtVal(best.recall_at_best)}
         </div>
     `);
 }
@@ -315,7 +319,7 @@ function getBestAnnotationName(interproData) {
     if (!interproData) return null;
     const entries = interproData.protein_level || [];
     if (entries.length === 0) return null;
-    const best = entries.reduce((a, b) => (b.f1 > a.f1 ? b : a), entries[0]);
+    const best = entries.reduce((a, b) => ((b.best_f1 || 0) > (a.best_f1 || 0) ? b : a), entries[0]);
     return best.annotation_name || null;
 }
 

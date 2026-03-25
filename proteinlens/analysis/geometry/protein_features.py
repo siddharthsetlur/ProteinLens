@@ -1,6 +1,6 @@
-"""Protein-level geometric feature extraction (56-dimensional).
+"""Protein-level geometric feature extraction (55-dimensional).
 
-Computes a single 56-element descriptor vector for an entire protein chain
+Computes a single 55-element descriptor vector for an entire protein chain
 from its Ca backbone coordinates. Features span global topology (writhe,
 gyration), helix statistics, contact-filtered helix pair descriptors,
 turn/hairpin/strand proxies, signed torsion statistics, and windowed
@@ -45,7 +45,7 @@ from proteinlens.analysis.geometry.residue_features import (
 )
 
 # ---------------------------------------------------------------------------
-# Feature name list (56 elements, one per dimension of the output vector).
+# Feature name list (55 elements, one per dimension of the output vector).
 # Order MUST match the values list built in compute_protein_geometry().
 # ---------------------------------------------------------------------------
 GEOM_FEATURE_NAMES: list[str] = [
@@ -112,9 +112,6 @@ GEOM_FEATURE_NAMES: list[str] = [
     "local_writhe_range",
 ]
 
-# PM FLAG: The plan says 56 features, but the original source
-# (build_activation_dataset.py) actually defines 55 feature names.
-# I'm matching the source of truth (the actual code) rather than the plan.
 assert len(GEOM_FEATURE_NAMES) == 55, (
     f"Expected 55 feature names, got {len(GEOM_FEATURE_NAMES)}"
 )
@@ -125,7 +122,7 @@ def compute_protein_geometry(pdb_text: str) -> dict[str, float] | None:
 
     This is the protein-level geometry extraction entry point. It parses the
     Ca backbone from *pdb_text*, detects alpha-helical segments from the Ca
-    trace, and then computes 56 scalar descriptors covering global topology,
+    trace, and then computes 55 scalar descriptors covering global topology,
     helix pair statistics, turn/strand proxies, and windowed profile
     summaries.
 
@@ -207,7 +204,7 @@ def compute_protein_geometry(pdb_text: str) -> dict[str, float] | None:
     except Exception:
         return None
 
-    # Assemble the 56-element value list. Order MUST match GEOM_FEATURE_NAMES.
+    # Assemble the 55-element value list. Order MUST match GEOM_FEATURE_NAMES.
     values = [
         wr, _v2, cur, tor, ki, ga,
         float(p_m), float(p_s), float(d_m), float(d_s),
@@ -235,4 +232,11 @@ def compute_protein_geometry(pdb_text: str) -> dict[str, float] | None:
     assert len(values) == len(GEOM_FEATURE_NAMES), (  # pragma: no cover
         f"Values/names mismatch: {len(values)} vs {len(GEOM_FEATURE_NAMES)}"
     )
+
+    # Replace NaN/inf with 0.0 so the output is always finite.
+    # Some features (e.g. helix_parallel_mean) return NaN when a protein
+    # has no helix pairs. Replacing here makes the function self-contained
+    # rather than requiring every consumer to filter NaNs downstream.
+    values = [0.0 if not np.isfinite(v) else v for v in values]
+
     return dict(zip(GEOM_FEATURE_NAMES, values))

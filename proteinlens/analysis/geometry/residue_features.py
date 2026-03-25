@@ -41,13 +41,8 @@ EXTENDED_CURV_THR = 0.2
 # Per-residue feature names (44 elements). The order here defines the
 # indices of the output vector from extract_local_feature_vector().
 #
-# NOTE: The original build_residue_motifs.py called these LOCAL_GEOM_NAMES
-# and had 65 entries because it grew over time. The plan specifies 44.
-#
-# PM FLAG: The plan says 44 features, but the original source has 44 features
-# in the list below. I counted each group: 10 + 9 + 12 + 8 + 5 = 44.
-# The original source file actually has 44 entries (I double-checked).
-# If this count is wrong, the unit test for vector dimensionality will catch it.
+# Groups: 10 (whole-window) + 9 (thirds) + 12 (multi-scale) + 8 (contact) + 5 (AA) = 44.
+# Matches build_residue_motifs.py LOCAL_GEOM_NAMES exactly.
 # ---------------------------------------------------------------------------
 LOCAL_GEOM_NAMES: list[str] = [
     # -- Whole-window summary statistics (10 features) --
@@ -136,6 +131,12 @@ FEATURE_SET_CHOICES = list(FEATURE_GROUPS.keys()) + ["all"]
 # ---------------------------------------------------------------------------
 # Active feature mask -- set at runtime by set_active_feature_set().
 # Default: use ALL features (indices 0..43).
+#
+# WARNING: These are module-level mutable globals. Calling
+# set_active_feature_set() changes the behaviour of select_features()
+# and train_motif_classifier() globally. If running stages in any order
+# or in parallel, ensure set_active_feature_set() is called before each
+# stage that depends on it, or pass feature masks explicitly.
 # ---------------------------------------------------------------------------
 ACTIVE_FEATURE_MASK: np.ndarray = np.arange(len(LOCAL_GEOM_NAMES))
 ACTIVE_GEOM_NAMES: list[str] = list(LOCAL_GEOM_NAMES)

@@ -68,10 +68,9 @@ def _setup_synthetic_data(
     # Generate geometry matrix (all finite)
     geom_matrix = rng.standard_normal((n_proteins, n_geom_features))
 
-    # Save geometry_protein_features.npz
-    # PM FLAG: We use a smaller feature set (10) instead of the real 55
-    # to keep tests fast. The pipeline code references GEOM_FEATURE_NAMES
-    # which has 55 entries. We override feature_names in the npz to match.
+    # Save geometry_protein_features.npz (uses 10 synthetic features
+    # instead of the real 55 to keep tests fast; Stage 6b reads
+    # feature_names from the NPZ so the smaller set is handled correctly).
     feature_names = [f"geom_{i}" for i in range(n_geom_features)]
     np.savez_compressed(
         config.geometry_protein_features_path,

@@ -145,7 +145,9 @@ def collect_node_fragments(
     act_quantile : float
         Quantile of nonzero activations used to set the activation threshold.
     max_fragments : int
-        Maximum number of activated fragments to keep (top by activation).
+        Maximum fragments for superposition. Up to ``5 * max_fragments``
+        activated fragments are retained for classifier training; only
+        ``max_fragments`` are used for Kabsch superposition.
     bg_ratio : int
         Target ratio of background to activated fragments.
 

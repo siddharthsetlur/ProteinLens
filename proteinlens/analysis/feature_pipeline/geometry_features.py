@@ -84,7 +84,7 @@ def run_geometry_features(config: PipelineConfig) -> None:
     n_total = len(pdb_files)
 
     if n_total == 0:
-        print(f"[Stage 6a] No PDB files found in {pdb_cache}")
+        logger.warning("No PDB files found in %s", pdb_cache)
         return
 
     # Check which accessions already have residue profiles (for resumability)
@@ -153,9 +153,9 @@ def run_geometry_features(config: PipelineConfig) -> None:
         n_computed += 1
 
         if (i + 1) % 500 == 0:
-            print(
-                f"[Stage 6a] Progress: {i + 1}/{n_total} PDBs "
-                f"(computed={n_computed}, skipped={n_skipped}, failed={n_failed})"
+            logger.info(
+                "Progress: %d/%d PDBs (computed=%d, skipped=%d, failed=%d)",
+                i + 1, n_total, n_computed, n_skipped, n_failed,
             )
 
     # -- Rebuild full protein-level geometry matrix from ALL profiles --
@@ -182,14 +182,14 @@ def run_geometry_features(config: PipelineConfig) -> None:
             geometry_matrix=geometry_matrix,
             feature_names=np.array(GEOM_FEATURE_NAMES),
         )
-        print(
-            f"[Stage 6a] Saved geometry_protein_features.npz: "
-            f"{geometry_matrix.shape[0]} proteins x {geometry_matrix.shape[1]} features"
+        logger.info(
+            "Saved geometry_protein_features.npz: %d proteins x %d features",
+            geometry_matrix.shape[0], geometry_matrix.shape[1],
         )
     else:
-        print("[Stage 6a] WARNING: No valid geometry profiles found.")
+        logger.warning("No valid geometry profiles found.")
 
-    print(
-        f"[Stage 6a] Computed geometry for {n_computed} proteins "
-        f"({n_skipped} skipped/resumed, {n_failed} failed, {n_total} total PDBs)"
+    logger.info(
+        "Computed geometry for %d proteins (%d skipped/resumed, %d failed, %d total PDBs)",
+        n_computed, n_skipped, n_failed, n_total,
     )

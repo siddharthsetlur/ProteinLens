@@ -21,7 +21,7 @@ import numpy as np
 
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
 from proteinlens.analysis.geometry.classifiers import fit_lasso_single_node
-from proteinlens.analysis.geometry.protein_features import GEOM_FEATURE_NAMES
+from proteinlens.analysis.geometry.protein_features import GEOM_FEATURE_NAMES  # fallback only
 
 logger = logging.getLogger(__name__)
 
@@ -46,18 +46,21 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
 
     # -- Load geometry features from Stage 6a --
     if not config.geometry_protein_features_path.exists():
-        print("[Stage 6b] geometry_protein_features.npz not found. Run Stage 6a first.")
+        logger.warning("geometry_protein_features.npz not found. Run Stage 6a first.")
         return
 
     geom_data = np.load(config.geometry_protein_features_path, allow_pickle=True)
     geom_accessions = list(geom_data["accessions"])
     geom_matrix = geom_data["geometry_matrix"]  # (N_geom, 55)
+    # Use feature names stored in the NPZ rather than hard-coded constant,
+    # so changes to the geometry feature set are picked up automatically.
+    geom_names = list(geom_data["feature_names"])
     n_geom = len(geom_accessions)
-    print(f"[Stage 6b] Loaded geometry for {n_geom} proteins")
+    logger.info("Loaded geometry for %d proteins (%d features)", n_geom, len(geom_names))
 
     # -- Load pipeline state for accession-to-index mapping --
     if not config.pipeline_state_path.exists():
-        print("[Stage 6b] pipeline_state.json not found. Run survey stage first.")
+        logger.warning("pipeline_state.json not found. Run survey stage first.")
         return
 
     state = json.loads(config.pipeline_state_path.read_text())
@@ -65,7 +68,7 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
 
     # -- Load per-protein max activations memmap --
     if not config.protein_feature_maxes_path.exists():
-        print("[Stage 6b] protein_feature_maxes.npy not found. Run survey stage first.")
+        logger.warning("protein_feature_maxes.npy not found. Run survey stage first.")
         return
 
     # Load feature max activations to know how many features exist
@@ -91,7 +94,7 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
             valid_geom_indices.append(gi)
 
     if not valid_geom_indices:
-        print("[Stage 6b] No overlap between geometry proteins and surveyed proteins.")
+        logger.warning("No overlap between geometry proteins and surveyed proteins.")
         return
 
     valid_geom_indices = np.array(valid_geom_indices)
@@ -102,9 +105,9 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
     # Filter out rows with any NaN/inf in geometry
     geom_valid = np.all(np.isfinite(X_geom), axis=1)
 
-    print(
-        f"[Stage 6b] {len(valid_geom_indices)} proteins with both geometry and activations "
-        f"({int(geom_valid.sum())} with finite geometry)"
+    logger.info(
+        "%d proteins with both geometry and activations (%d with finite geometry)",
+        len(valid_geom_indices), int(geom_valid.sum()),
     )
 
     # -- Fit LassoCV per node --
@@ -116,10 +119,9 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
 
     for ni in range(n_features):
         if ni % 500 == 0:
-            print(
-                f"[Stage 6b] Node {ni}/{n_features} "
-                f"(fitted={n_fitted}, skipped_inactive={n_skipped_inactive}, "
-                f"skipped_few={n_skipped_few})"
+            logger.info(
+                "Node %d/%d (fitted=%d, skipped_inactive=%d, skipped_few=%d)",
+                ni, n_features, n_fitted, n_skipped_inactive, n_skipped_few,
             )
 
         # Skip dead features
@@ -142,7 +144,7 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
         y = y_all[active_mask]
 
         result = fit_lasso_single_node(
-            X, y, list(GEOM_FEATURE_NAMES),
+            X, y, geom_names,
             cv_folds=config.geometry_lasso_cv_folds,
         )
 
@@ -194,8 +196,7 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
     summary_path = enrichment_dir / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2))
 
-    print(
-        f"[Stage 6b] Done. Fitted Lasso for {n_fitted} nodes "
-        f"(skipped: {n_skipped_inactive} inactive, {n_skipped_few} too few, "
-        f"{n_skipped_no_signal} no signal)"
+    logger.info(
+        "Done. Fitted Lasso for %d nodes (skipped: %d inactive, %d too few, %d no signal)",
+        n_fitted, n_skipped_inactive, n_skipped_few, n_skipped_no_signal,
     )

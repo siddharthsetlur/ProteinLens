@@ -1,23 +1,18 @@
 /**
- * sequence_strip.js — Canvas-based residue activation strip with InterPro domain overlay.
+ * sequence_strip.js — Canvas-based residue activation strip with InterPro domain overlay,
+ * plus text-based sequence display and MSA-style alignment view.
  *
- * Renders a horizontal strip where each residue is a colored rectangle:
- *   - Color: white (0 activation) -> red (max activation)
- *   - Hover tooltip: residue letter, 1-based position, activation value
- *   - Optional: InterPro domain bar below the strip showing domain boundaries
+ * Provides three visualization components:
+ *   1. createSequenceStrip()  — Canvas heatmap strip with InterPro domain overlay
+ *   2. createTextSequence()   — Inline text AA letters with activation-colored backgrounds
+ *   3. createAlignmentView()  — Multi-sequence alignment with anchor-based horizontal shifting
  *
- * Usage:
- *   const container = document.getElementById("my-container");
- *   createSequenceStrip(container, {
- *     sequence: "MKTL...",
- *     activations: [0.0, 0.1, 3.2, ...],
- *     maxActivation: 8.5,            // global max for this feature (for normalization)
- *     accession: "P12345",           // for fetching InterPro domains
- *     bestAnnotationName: "Kinase",  // highlight matching domains (optional)
- *   });
- *
- * Output: Appends a canvas element + tooltip div to the container.
+ * Dependencies: None (standalone vanilla JS).
  */
+
+// ============================================================
+// Shared color utility
+// ============================================================
 
 /**
  * Interpolate between white and red based on normalized activation.
@@ -34,6 +29,95 @@ function activationToColor(normalizedValue) {
     const b = Math.round(255 - t * (255 - 38));
     return `rgb(${r},${g},${b})`;
 }
+
+
+// ============================================================
+// Shared DOM helpers for text sequence views
+// ============================================================
+
+/**
+ * Build a label element with accession name and clipboard copy button.
+ *
+ * @param {string} accession  - UniProt accession string.
+ * @param {number|null} maxAct - Per-protein max activation (for tooltip), or null.
+ * @returns {HTMLElement}      - A div.seq-row-label element.
+ */
+function _buildLabel(accession, maxAct) {
+    const label = document.createElement("div");
+    label.className = "seq-row-label";
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-btn";
+    copyBtn.textContent = "\u{1F4CB}";
+    copyBtn.title = "Copy accession";
+    copyBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(accession).catch(() => {});
+    });
+    label.appendChild(copyBtn);
+
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = accession;
+    nameSpan.title = maxAct !== null
+        ? `${accession} · max: ${maxAct.toFixed(3)}`
+        : accession;
+    label.appendChild(nameSpan);
+
+    return label;
+}
+
+/**
+ * Build a div of colored AA letter spans, optionally prepended with gap dashes.
+ *
+ * Each residue is a <span class="aa"> with:
+ *   - Background color: white->red by activation (normalized to maxActivation)
+ *   - White text for high activation (norm > 0.6)
+ *   - Tooltip: residue letter + 1-based position + activation value
+ *
+ * @param {string} sequence          - Amino acid sequence string.
+ * @param {Array<number>} activations - Per-residue activation values.
+ * @param {number} maxActivation     - Feature-level max activation for normalization.
+ * @param {number} [padLeft=0]       - Number of leading dash characters for alignment.
+ * @returns {HTMLElement}             - A div.seq-letters element.
+ */
+function _buildLettersDiv(sequence, activations, maxActivation, padLeft = 0) {
+    const lettersDiv = document.createElement("div");
+    lettersDiv.className = "seq-letters";
+
+    // Leading dashes (gap characters for alignment)
+    for (let i = 0; i < padLeft; i++) {
+        const dash = document.createElement("span");
+        dash.className = "aa aa-gap";
+        dash.textContent = "-";
+        lettersDiv.appendChild(dash);
+    }
+
+    // Actual residues with activation coloring
+    for (let i = 0; i < sequence.length; i++) {
+        const span = document.createElement("span");
+        span.className = "aa";
+        span.textContent = sequence[i];
+
+        const act = activations[i] || 0;
+        const norm = maxActivation > 0 ? act / maxActivation : 0;
+        span.style.backgroundColor = activationToColor(norm);
+
+        if (norm > 0.6) {
+            span.style.color = "#fff";
+        }
+
+        // Tooltip: residue letter, 1-based position, raw activation value
+        span.title = `${sequence[i]}${i + 1}: ${act.toFixed(3)}`;
+        lettersDiv.appendChild(span);
+    }
+
+    return lettersDiv;
+}
+
+
+// ============================================================
+// 1. Canvas-based activation strip with InterPro domain overlay
+// ============================================================
 
 /**
  * Create a sequence activation strip with hover tooltip.
@@ -62,7 +146,6 @@ function createSequenceStrip(container, opts) {
     const canvas = document.createElement("canvas");
     const stripHeight = 30;
     const domainBarHeight = 14;
-    // We'll set actual pixel dimensions based on container width after mount
     canvas.style.width = "100%";
     canvas.style.height = (stripHeight + domainBarHeight + 2) + "px";
     wrapper.appendChild(canvas);
@@ -89,23 +172,19 @@ function createSequenceStrip(container, opts) {
         const ctx = canvas.getContext("2d");
         ctx.scale(dpr, dpr);
 
-        // Width of each residue column in CSS pixels
         const colWidth = displayWidth / seqLen;
 
-        // Draw activation strip
         for (let i = 0; i < seqLen; i++) {
             const act = activations[i] || 0;
             const norm = maxActivation > 0 ? act / maxActivation : 0;
             ctx.fillStyle = activationToColor(norm);
-            ctx.fillRect(i * colWidth, 0, colWidth + 0.5, stripHeight); // +0.5 to avoid gaps
+            ctx.fillRect(i * colWidth, 0, colWidth + 0.5, stripHeight);
         }
 
-        // Store colWidth for tooltip calculation
         canvas._colWidth = colWidth;
         canvas._seqLen = seqLen;
     }
 
-    // Draw once mounted
     requestAnimationFrame(draw);
 
     // --- Hover tooltip ---
@@ -122,8 +201,6 @@ function createSequenceStrip(container, opts) {
         const act = activations[idx] || 0;
         tooltip.textContent = `${residue}${idx + 1}: ${act.toFixed(3)}`;
         tooltip.style.display = "block";
-
-        // Position tooltip near cursor, offset slightly
         tooltip.style.left = Math.min(x + 10, wrapper.clientWidth - 100) + "px";
         tooltip.style.top = "-24px";
     });
@@ -155,7 +232,7 @@ function createSequenceStrip(container, opts) {
 async function fetchAndDrawDomains(canvas, accession, seqLen, yOffset, bestAnnotationName) {
     try {
         const res = await fetch(`/api/interpro/${accession}`);
-        if (!res.ok) return; // No InterPro data available, silently skip
+        if (!res.ok) return;
 
         const data = await res.json();
         const domains = data.domains || [];
@@ -168,8 +245,6 @@ async function fetchAndDrawDomains(canvas, accession, seqLen, yOffset, bestAnnot
         const barHeight = 10;
         const barY = yOffset + 2;
 
-        // Assign colors: highlight best-matching annotation, gray for others
-        // Use a small palette for distinct domain types
         const palette = [
             "#6c757d", "#17a2b8", "#ffc107", "#28a745", "#fd7e14",
             "#6f42c1", "#e83e8c", "#20c997",
@@ -182,13 +257,12 @@ async function fetchAndDrawDomains(canvas, accession, seqLen, yOffset, bestAnnot
 
         for (const domain of domains) {
             const name = domain.interpro_name || domain.member_accession || "Unknown";
-            const start = (domain.start - 1); // convert 1-based to 0-based
+            const start = (domain.start - 1);
             const end = domain.end;
 
-            // Assign color per annotation name
             if (!(name in nameToColor)) {
                 if (bestAnnotationName && name === bestAnnotationName) {
-                    nameToColor[name] = "#0d6efd"; // Highlight color (blue)
+                    nameToColor[name] = "#0d6efd";
                 } else {
                     nameToColor[name] = palette[colorIdx % palette.length];
                     colorIdx++;
@@ -202,22 +276,18 @@ async function fetchAndDrawDomains(canvas, accession, seqLen, yOffset, bestAnnot
 
         ctx.restore();
     } catch (err) {
-        // Non-critical: domain overlay is optional
         console.warn(`Failed to fetch InterPro domains for ${accession}:`, err);
     }
 }
 
 
 // ============================================================
-// Text-based sequence display (AA letters with colored backgrounds)
+// 2. Inline text sequence (used in per-protein detail entries)
 // ============================================================
 
 /**
  * Create a text-based sequence display where each amino acid letter is shown
  * in a monospace font with a background color proportional to its activation.
- *
- * This produces the "alignment view" seen in MSA tools: a row of characters
- * where color encodes a per-residue value (here, SAE activation).
  *
  * @param {HTMLElement} container       - DOM element to append the sequence row to.
  * @param {Object} opts                 - Configuration object.
@@ -243,62 +313,25 @@ function createTextSequence(container, opts) {
     const row = document.createElement("div");
     row.className = "seq-row";
 
-    // Label column (accession + copy button)
     if (showLabel) {
-        const label = document.createElement("div");
-        label.className = "seq-row-label";
-
-        const copyBtn = document.createElement("button");
-        copyBtn.className = "copy-btn";
-        copyBtn.textContent = "\u{1F4CB}";  // clipboard emoji
-        copyBtn.title = "Copy accession";
-        copyBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            navigator.clipboard.writeText(accession);
-        });
-        label.appendChild(copyBtn);
-
-        const nameSpan = document.createElement("span");
-        nameSpan.textContent = accession;
-        nameSpan.title = maxAct !== null
-            ? `${accession} · max: ${maxAct.toFixed(3)}`
-            : accession;
-        label.appendChild(nameSpan);
-
-        row.appendChild(label);
+        row.appendChild(_buildLabel(accession, maxAct));
     }
 
-    // Sequence letters — each AA is a <span> with a colored background
-    const lettersDiv = document.createElement("div");
-    lettersDiv.className = "seq-letters";
-
-    for (let i = 0; i < sequence.length; i++) {
-        const span = document.createElement("span");
-        span.className = "aa";
-        span.textContent = sequence[i];
-
-        const act = activations[i] || 0;
-        const norm = maxActivation > 0 ? act / maxActivation : 0;
-        span.style.backgroundColor = activationToColor(norm);
-
-        // Dark text for light backgrounds, white text for dark (high activation)
-        if (norm > 0.6) {
-            span.style.color = "#fff";
-        }
-
-        // Tooltip on hover: residue letter, 1-based position, activation value
-        span.title = `${sequence[i]}${i + 1}: ${act.toFixed(3)}`;
-
-        lettersDiv.appendChild(span);
-    }
-
-    row.appendChild(lettersDiv);
+    row.appendChild(_buildLettersDiv(sequence, activations, maxActivation));
 
     const wrapper = document.createElement("div");
     wrapper.className = cssClass ? `seq-text-inline ${cssClass}` : "seq-text-inline";
     wrapper.appendChild(row);
     container.appendChild(wrapper);
 }
+
+
+// ============================================================
+// 3. MSA-style alignment view with anchor-based shifting
+// ============================================================
+
+// Counter for generating unique radio button group names
+let _alignViewCounter = 0;
 
 /**
  * Find the anchor position for a protein's activation profile.
@@ -313,8 +346,6 @@ function createTextSequence(container, opts) {
  * @returns {number} 0-based index of the anchor residue, or 0 if none found.
  */
 function _findAnchor(activations, maxActivation, mode) {
-    const threshold = maxActivation * 0.05;
-
     if (mode === "max") {
         let bestIdx = 0;
         let bestVal = -1;
@@ -327,84 +358,12 @@ function _findAnchor(activations, maxActivation, mode) {
         return bestIdx;
     }
 
-    // mode === "first": first residue above threshold
+    // mode === "first": first residue above 5% of feature max
+    const threshold = maxActivation * 0.05;
     for (let i = 0; i < activations.length; i++) {
         if ((activations[i] || 0) > threshold) return i;
     }
     return 0;
-}
-
-/**
- * Render a single aligned sequence row with left-padding dashes.
- *
- * The sequence is shifted right by `padLeft` dash characters so that the
- * anchor position aligns vertically with other sequences in the block.
- * Dashes are rendered as dim gray characters with no activation color.
- *
- * @param {HTMLElement} container       - Parent element to append the row to.
- * @param {Object} protein              - Protein data with sequence + activations.
- * @param {number} maxActivation        - Feature-level max activation for color normalization.
- * @param {number} padLeft              - Number of dash characters to prepend.
- */
-function _renderAlignedRow(container, protein, maxActivation, padLeft) {
-    const seq = protein.sequence || "";
-    const acts = protein.per_residue_activations || [];
-
-    const row = document.createElement("div");
-    row.className = "seq-row";
-
-    // Label with copy button
-    const label = document.createElement("div");
-    label.className = "seq-row-label";
-
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "copy-btn";
-    copyBtn.textContent = "\u{1F4CB}";
-    copyBtn.title = "Copy accession";
-    copyBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        navigator.clipboard.writeText(protein.accession || "");
-    });
-    label.appendChild(copyBtn);
-
-    const nameSpan = document.createElement("span");
-    nameSpan.textContent = protein.accession || "";
-    nameSpan.title = `${protein.accession} · max: ${(protein.max_activation || 0).toFixed(3)}`;
-    label.appendChild(nameSpan);
-    row.appendChild(label);
-
-    // Sequence letters with leading dashes for alignment
-    const lettersDiv = document.createElement("div");
-    lettersDiv.className = "seq-letters";
-
-    // Leading dashes (gap characters)
-    for (let i = 0; i < padLeft; i++) {
-        const dash = document.createElement("span");
-        dash.className = "aa aa-gap";
-        dash.textContent = "-";
-        lettersDiv.appendChild(dash);
-    }
-
-    // Actual residues with activation coloring
-    for (let i = 0; i < seq.length; i++) {
-        const span = document.createElement("span");
-        span.className = "aa";
-        span.textContent = seq[i];
-
-        const act = acts[i] || 0;
-        const norm = maxActivation > 0 ? act / maxActivation : 0;
-        span.style.backgroundColor = activationToColor(norm);
-
-        if (norm > 0.6) {
-            span.style.color = "#fff";
-        }
-
-        span.title = `${seq[i]}${i + 1}: ${act.toFixed(3)}`;
-        lettersDiv.appendChild(span);
-    }
-
-    row.appendChild(lettersDiv);
-    container.appendChild(row);
 }
 
 /**
@@ -426,13 +385,16 @@ function createAlignmentView(container, proteins, maxActivation, topN = 8) {
     const toShow = proteins.slice(0, topN);
     if (toShow.length === 0) return;
 
+    // Unique name for radio group so multiple alignment views don't conflict
+    const radioName = `align-mode-${_alignViewCounter++}`;
+
     // --- Mode toggle control ---
     const controls = document.createElement("div");
-    controls.style.cssText = "margin-bottom:0.5rem; font-size:0.85rem; display:flex; align-items:center; gap:0.75rem;";
+    controls.className = "align-controls";
     controls.innerHTML = `
-        <span style="font-weight:600; color:var(--pico-muted-color);">Align by:</span>
-        <label style="cursor:pointer"><input type="radio" name="align-mode" value="first" checked> First activation</label>
-        <label style="cursor:pointer"><input type="radio" name="align-mode" value="max"> Max activation</label>
+        <span class="align-controls-label">Align by:</span>
+        <label><input type="radio" name="${radioName}" value="first" checked> First activation</label>
+        <label><input type="radio" name="${radioName}" value="max"> Max activation</label>
     `;
     container.appendChild(controls);
 
@@ -455,7 +417,18 @@ function createAlignmentView(container, proteins, maxActivation, topN = 8) {
 
         for (let i = 0; i < toShow.length; i++) {
             const padLeft = maxAnchor - anchors[i];
-            _renderAlignedRow(block, toShow[i], maxActivation, padLeft);
+            const protein = toShow[i];
+
+            const row = document.createElement("div");
+            row.className = "seq-row";
+            row.appendChild(_buildLabel(protein.accession || "", protein.max_activation ?? null));
+            row.appendChild(_buildLettersDiv(
+                protein.sequence || "",
+                protein.per_residue_activations || [],
+                maxActivation,
+                padLeft
+            ));
+            block.appendChild(row);
         }
     }
 
@@ -464,7 +437,7 @@ function createAlignmentView(container, proteins, maxActivation, topN = 8) {
 
     // Toggle handler
     controls.addEventListener("change", (e) => {
-        if (e.target.name === "align-mode") {
+        if (e.target.name === radioName) {
             render(e.target.value);
         }
     });

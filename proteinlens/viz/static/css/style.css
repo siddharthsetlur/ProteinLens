@@ -177,6 +177,24 @@
     background: none;
 }
 
+/* Alignment mode toggle controls */
+.align-controls {
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.align-controls label {
+    cursor: pointer;
+}
+
+.align-controls-label {
+    font-weight: 600;
+    color: var(--pico-muted-color);
+}
+
 /* Inline text sequence (above 3D viewer in protein entries) */
 .seq-text-inline {
     overflow-x: auto;

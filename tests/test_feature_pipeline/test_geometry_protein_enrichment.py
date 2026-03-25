@@ -116,9 +116,10 @@ def _setup_synthetic_data(
     feature_maxes = act_matrix.max(axis=0)
     np.save(config.feature_max_path, feature_maxes)
 
-    # Save pipeline_state.json with accession_to_index mapping
+    # Save pipeline_state.json with accession_index mapping
+    # (matches the key used by the survey stage / checkpoint.py)
     state = {
-        "accession_to_index": {acc: i for i, acc in enumerate(accessions)},
+        "accession_index": {acc: i for i, acc in enumerate(accessions)},
     }
     config.pipeline_state_path.write_text(json.dumps(state))
 

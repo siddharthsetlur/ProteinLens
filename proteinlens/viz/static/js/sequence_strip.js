@@ -206,3 +206,266 @@ async function fetchAndDrawDomains(canvas, accession, seqLen, yOffset, bestAnnot
         console.warn(`Failed to fetch InterPro domains for ${accession}:`, err);
     }
 }
+
+
+// ============================================================
+// Text-based sequence display (AA letters with colored backgrounds)
+// ============================================================
+
+/**
+ * Create a text-based sequence display where each amino acid letter is shown
+ * in a monospace font with a background color proportional to its activation.
+ *
+ * This produces the "alignment view" seen in MSA tools: a row of characters
+ * where color encodes a per-residue value (here, SAE activation).
+ *
+ * @param {HTMLElement} container       - DOM element to append the sequence row to.
+ * @param {Object} opts                 - Configuration object.
+ * @param {string} opts.sequence        - Amino acid sequence string.
+ * @param {Array<number>} opts.activations - Per-residue activation values.
+ * @param {number} opts.maxActivation   - Global max activation for normalization.
+ * @param {string} [opts.accession]     - UniProt accession (shown in label).
+ * @param {number} [opts.maxAct]        - Per-protein max activation (shown in label).
+ * @param {boolean} [opts.showLabel=true] - Whether to show the accession label.
+ * @param {string} [opts.cssClass]      - Optional extra CSS class for the wrapper.
+ */
+function createTextSequence(container, opts) {
+    const {
+        sequence,
+        activations,
+        maxActivation,
+        accession = "",
+        maxAct = null,
+        showLabel = true,
+        cssClass = "",
+    } = opts;
+
+    const row = document.createElement("div");
+    row.className = "seq-row";
+
+    // Label column (accession + copy button)
+    if (showLabel) {
+        const label = document.createElement("div");
+        label.className = "seq-row-label";
+
+        const copyBtn = document.createElement("button");
+        copyBtn.className = "copy-btn";
+        copyBtn.textContent = "\u{1F4CB}";  // clipboard emoji
+        copyBtn.title = "Copy accession";
+        copyBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            navigator.clipboard.writeText(accession);
+        });
+        label.appendChild(copyBtn);
+
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = accession;
+        nameSpan.title = maxAct !== null
+            ? `${accession} · max: ${maxAct.toFixed(3)}`
+            : accession;
+        label.appendChild(nameSpan);
+
+        row.appendChild(label);
+    }
+
+    // Sequence letters — each AA is a <span> with a colored background
+    const lettersDiv = document.createElement("div");
+    lettersDiv.className = "seq-letters";
+
+    for (let i = 0; i < sequence.length; i++) {
+        const span = document.createElement("span");
+        span.className = "aa";
+        span.textContent = sequence[i];
+
+        const act = activations[i] || 0;
+        const norm = maxActivation > 0 ? act / maxActivation : 0;
+        span.style.backgroundColor = activationToColor(norm);
+
+        // Dark text for light backgrounds, white text for dark (high activation)
+        if (norm > 0.6) {
+            span.style.color = "#fff";
+        }
+
+        // Tooltip on hover: residue letter, 1-based position, activation value
+        span.title = `${sequence[i]}${i + 1}: ${act.toFixed(3)}`;
+
+        lettersDiv.appendChild(span);
+    }
+
+    row.appendChild(lettersDiv);
+
+    const wrapper = document.createElement("div");
+    wrapper.className = cssClass ? `seq-text-inline ${cssClass}` : "seq-text-inline";
+    wrapper.appendChild(row);
+    container.appendChild(wrapper);
+}
+
+/**
+ * Find the anchor position for a protein's activation profile.
+ *
+ * "first" mode: index of the first residue with activation above 5% of the
+ *               feature max (i.e. the first meaningfully activated residue).
+ * "max" mode:   index of the residue with the highest activation value.
+ *
+ * @param {Array<number>} activations  - Per-residue activation values.
+ * @param {number} maxActivation       - Feature-level max activation.
+ * @param {string} mode                - "first" or "max".
+ * @returns {number} 0-based index of the anchor residue, or 0 if none found.
+ */
+function _findAnchor(activations, maxActivation, mode) {
+    const threshold = maxActivation * 0.05;
+
+    if (mode === "max") {
+        let bestIdx = 0;
+        let bestVal = -1;
+        for (let i = 0; i < activations.length; i++) {
+            if ((activations[i] || 0) > bestVal) {
+                bestVal = activations[i] || 0;
+                bestIdx = i;
+            }
+        }
+        return bestIdx;
+    }
+
+    // mode === "first": first residue above threshold
+    for (let i = 0; i < activations.length; i++) {
+        if ((activations[i] || 0) > threshold) return i;
+    }
+    return 0;
+}
+
+/**
+ * Render a single aligned sequence row with left-padding dashes.
+ *
+ * The sequence is shifted right by `padLeft` dash characters so that the
+ * anchor position aligns vertically with other sequences in the block.
+ * Dashes are rendered as dim gray characters with no activation color.
+ *
+ * @param {HTMLElement} container       - Parent element to append the row to.
+ * @param {Object} protein              - Protein data with sequence + activations.
+ * @param {number} maxActivation        - Feature-level max activation for color normalization.
+ * @param {number} padLeft              - Number of dash characters to prepend.
+ */
+function _renderAlignedRow(container, protein, maxActivation, padLeft) {
+    const seq = protein.sequence || "";
+    const acts = protein.per_residue_activations || [];
+
+    const row = document.createElement("div");
+    row.className = "seq-row";
+
+    // Label with copy button
+    const label = document.createElement("div");
+    label.className = "seq-row-label";
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-btn";
+    copyBtn.textContent = "\u{1F4CB}";
+    copyBtn.title = "Copy accession";
+    copyBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(protein.accession || "");
+    });
+    label.appendChild(copyBtn);
+
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = protein.accession || "";
+    nameSpan.title = `${protein.accession} · max: ${(protein.max_activation || 0).toFixed(3)}`;
+    label.appendChild(nameSpan);
+    row.appendChild(label);
+
+    // Sequence letters with leading dashes for alignment
+    const lettersDiv = document.createElement("div");
+    lettersDiv.className = "seq-letters";
+
+    // Leading dashes (gap characters)
+    for (let i = 0; i < padLeft; i++) {
+        const dash = document.createElement("span");
+        dash.className = "aa aa-gap";
+        dash.textContent = "-";
+        lettersDiv.appendChild(dash);
+    }
+
+    // Actual residues with activation coloring
+    for (let i = 0; i < seq.length; i++) {
+        const span = document.createElement("span");
+        span.className = "aa";
+        span.textContent = seq[i];
+
+        const act = acts[i] || 0;
+        const norm = maxActivation > 0 ? act / maxActivation : 0;
+        span.style.backgroundColor = activationToColor(norm);
+
+        if (norm > 0.6) {
+            span.style.color = "#fff";
+        }
+
+        span.title = `${seq[i]}${i + 1}: ${act.toFixed(3)}`;
+        lettersDiv.appendChild(span);
+    }
+
+    row.appendChild(lettersDiv);
+    container.appendChild(row);
+}
+
+/**
+ * Create a multi-sequence alignment view with anchor-based alignment.
+ *
+ * Sequences are horizontally shifted so that a chosen anchor position
+ * (first activation or max activation) lines up vertically across all rows.
+ * Leading positions before the sequence start are shown as dashes.
+ *
+ * A toggle control lets the user switch between "first activation" and
+ * "max activation" alignment modes. Default is "first activation".
+ *
+ * @param {HTMLElement} container       - DOM element to append the alignment block to.
+ * @param {Array<Object>} proteins      - Array of protein objects from top_sequences.
+ * @param {number} maxActivation        - Feature-level max activation for normalization.
+ * @param {number} [topN=8]             - Number of proteins to show.
+ */
+function createAlignmentView(container, proteins, maxActivation, topN = 8) {
+    const toShow = proteins.slice(0, topN);
+    if (toShow.length === 0) return;
+
+    // --- Mode toggle control ---
+    const controls = document.createElement("div");
+    controls.style.cssText = "margin-bottom:0.5rem; font-size:0.85rem; display:flex; align-items:center; gap:0.75rem;";
+    controls.innerHTML = `
+        <span style="font-weight:600; color:var(--pico-muted-color);">Align by:</span>
+        <label style="cursor:pointer"><input type="radio" name="align-mode" value="first" checked> First activation</label>
+        <label style="cursor:pointer"><input type="radio" name="align-mode" value="max"> Max activation</label>
+    `;
+    container.appendChild(controls);
+
+    // --- Alignment block (re-rendered on mode change) ---
+    const block = document.createElement("div");
+    block.className = "seq-alignment";
+    container.appendChild(block);
+
+    function render(mode) {
+        block.innerHTML = "";
+
+        // Compute anchor position for each protein
+        const anchors = toShow.map((p) =>
+            _findAnchor(p.per_residue_activations || [], maxActivation, mode)
+        );
+
+        // The maximum anchor offset determines how much left-padding each row needs.
+        // We shift every sequence right so that the largest anchor lines up.
+        const maxAnchor = Math.max(...anchors);
+
+        for (let i = 0; i < toShow.length; i++) {
+            const padLeft = maxAnchor - anchors[i];
+            _renderAlignedRow(block, toShow[i], maxActivation, padLeft);
+        }
+    }
+
+    // Initial render with default mode
+    render("first");
+
+    // Toggle handler
+    controls.addEventListener("change", (e) => {
+        if (e.target.name === "align-mode") {
+            render(e.target.value);
+        }
+    });
+}

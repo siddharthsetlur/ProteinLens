@@ -299,14 +299,35 @@ function renderTopProteins(container, featureData, interproData) {
     }
 
     const featureMaxAct = featureData.max_activation || 1;
-
-    // Determine best interpro annotation name for domain overlay highlighting
     const bestAnnotationName = getBestAnnotationName(interproData);
 
     for (const protein of topSeqs) {
         const entry = createProteinEntry(protein, featureMaxAct, bestAnnotationName);
         container.appendChild(entry);
     }
+}
+
+/**
+ * Render the top 3 sequence alignment view.
+ *
+ * Shows a compact MSA-style block where each row is one protein's sequence
+ * with per-residue activation coloring. Placed between summary cards and
+ * the detailed per-protein entries.
+ *
+ * @param {HTMLElement} container - The #alignment-container div.
+ * @param {Object} featureData   - Feature JSON from /api/feature/{id}.
+ */
+function renderAlignment(container, featureData) {
+    container.innerHTML = "";
+
+    const topSeqs = featureData.top_sequences || [];
+    if (topSeqs.length === 0) {
+        container.innerHTML = '<p class="secondary">No activating sequences.</p>';
+        return;
+    }
+
+    const featureMaxAct = featureData.max_activation || 1;
+    createAlignmentView(container, topSeqs, featureMaxAct, 3);
 }
 
 /**
@@ -341,7 +362,17 @@ function createProteinEntry(protein, featureMaxAct, bestAnnotationName) {
     label.textContent = `${protein.accession} · max: ${fmtVal(protein.max_activation, 4)} · ${protein.sequence_length || protein.sequence?.length || "?"} residues`;
     entry.appendChild(label);
 
-    // Sequence strip (canvas with activation coloring + domain overlay)
+    // Text sequence (AA letters with activation-colored backgrounds)
+    createTextSequence(entry, {
+        sequence: protein.sequence || "",
+        activations: protein.per_residue_activations || [],
+        maxActivation: featureMaxAct,
+        accession: protein.accession,
+        maxAct: protein.max_activation,
+        showLabel: false,  // label is already in protein-label div above
+    });
+
+    // Canvas strip (compact heatmap with InterPro domain overlay)
     const stripDiv = document.createElement("div");
     entry.appendChild(stripDiv);
     createSequenceStrip(stripDiv, {
@@ -466,6 +497,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         renderSummaryCards(
             document.getElementById("summary-cards"),
             featureData, interproData, geometryData
+        );
+
+        // Section 1b: Top 3 sequence alignment
+        renderAlignment(
+            document.getElementById("alignment-container"),
+            featureData
         );
 
         // Section 2: Top 5 proteins

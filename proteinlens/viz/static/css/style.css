@@ -114,6 +114,80 @@
     margin-top: 0.25rem;
 }
 
+/* --- Text sequence display (AA letters with activation-colored backgrounds) --- */
+.seq-alignment {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 8px;
+    padding: 0.75rem;
+    overflow-x: auto;
+    background: #fafafa;
+}
+
+.seq-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 2px;
+    white-space: nowrap;
+}
+
+.seq-row-label {
+    flex-shrink: 0;
+    width: 160px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--pico-muted-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.seq-row-label .copy-btn {
+    cursor: pointer;
+    opacity: 0.4;
+    font-size: 0.7rem;
+    padding: 1px 3px;
+    border: none;
+    background: none;
+}
+
+.seq-row-label .copy-btn:hover {
+    opacity: 1;
+}
+
+.seq-letters {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    letter-spacing: 0;
+    display: inline-flex;
+}
+
+.seq-letters .aa {
+    display: inline-block;
+    width: 0.62em;
+    text-align: center;
+    padding: 1px 0;
+}
+
+.seq-letters .aa-gap {
+    color: #ccc;
+    background: none;
+}
+
+/* Inline text sequence (above 3D viewer in protein entries) */
+.seq-text-inline {
+    overflow-x: auto;
+    margin-bottom: 0.5rem;
+    padding: 4px 0;
+}
+
+.seq-text-inline .seq-letters {
+    font-size: 0.68rem;
+}
+
 /* --- Sequence strip --- */
 .protein-entry {
     margin-bottom: 1.5rem;

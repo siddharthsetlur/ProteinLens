@@ -11,8 +11,8 @@
     <!-- Plotly.js for geometry charts -->
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 
-    <!-- 3Dmol.js for protein structure viewers -->
-    <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+    <!-- 3Dmol.js for protein structure viewers (jsdelivr CDN, more reliable than 3Dmol.org) -->
+    <script src="https://cdn.jsdelivr.net/npm/3dmol@2.4.2/build/3Dmol-min.js"></script>
 
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
@@ -29,6 +29,14 @@
         <section id="summary-section">
             <h2>Summary</h2>
             <div id="summary-cards" class="stats-grid">
+                <div class="loading-spinner"></div> Loading...
+            </div>
+        </section>
+
+        <!-- Section 1b: Top 3 Sequence Alignment -->
+        <section id="alignment-section">
+            <h2>Top Activating Sequences</h2>
+            <div id="alignment-container">
                 <div class="loading-spinner"></div> Loading...
             </div>
         </section>

@@ -68,7 +68,7 @@ async function createMolViewer(container, accession, activations, maxActivation)
         const atoms = model.selectedAtoms({});
 
         // Build a color map: residue number (1-based in PDB) -> hex integer
-        // 3Dmol.js colorfunc expects numeric hex colors (e.g. 0xFF2626), not CSS strings
+        // 3Dmol.js colorfunc expects numeric hex colors (e.g. 0xFF2626)
         const colorMap = {};
         for (let i = 0; i < activations.length; i++) {
             const act = activations[i] || 0;
@@ -164,7 +164,6 @@ function createMotifViewer(container, pdbString, flexibility) {
     viewer.addModel(pdbString, "pdb");
 
     // Color by flexibility: blue (rigid) -> red (flexible)
-    // 3Dmol.js colorfunc expects numeric hex colors, not CSS strings
     const maxFlex = Math.max(...flexibility.filter((v) => typeof v === "number"), 1);
     const colorMap = {};
     for (let i = 0; i < flexibility.length; i++) {

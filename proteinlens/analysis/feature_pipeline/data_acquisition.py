@@ -183,8 +183,6 @@ def download_swissprot_fasta(
     # Stage 0b). Capping the download here would defeat the purpose
     # of diversity sampling.
     params = {"query": query, "format": "fasta"}
-    if _max_download is not None:
-        params["size"] = _max_download
 
     resp = requests.get(
         UNIPROT_SEARCH_URL, params=params, stream=True, timeout=(30, 300)
@@ -226,6 +224,10 @@ def download_swissprot_fasta(
             if line.startswith(">"):
                 # Flush previous entry
                 _flush_current()
+
+                # Early exit for testing: stop after _max_download total entries
+                if _max_download is not None and len(already_done) >= _max_download:
+                    break
 
                 # Parse the new header
                 header = line[1:].split()[0]

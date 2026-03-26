@@ -100,13 +100,14 @@ class TestClusterUtilities:
         assert set(clusters["C"]) == {"C", "D"}
 
     def test_sample_representative_accessions_no_cap(self):
-        """With max_proteins=None, all members should be returned."""
+        """With max_proteins=None, all representatives should be returned."""
         member_to_rep = {"A": "A", "B": "A", "C": "C", "D": "C", "E": "E"}
         sampled = sample_representative_accessions(member_to_rep, None)
-        assert sampled == {"A", "B", "C", "D", "E"}
+        # Returns only representatives, not all members
+        assert sampled == {"A", "C", "E"}
 
     def test_sample_representative_accessions_with_cap(self):
-        """With max_proteins < num_clusters, should sample a subset."""
+        """With max_proteins < num_clusters, should sample exactly that many."""
         # 10 clusters, each with 2 members = 20 total
         member_to_rep = {}
         for i in range(10):
@@ -114,13 +115,11 @@ class TestClusterUtilities:
             member_to_rep[rep] = rep
             member_to_rep[f"M{i}"] = rep
         sampled = sample_representative_accessions(member_to_rep, 3)
-        # Should have members from exactly 3 clusters
-        reps_in_sample = {member_to_rep[m] for m in sampled}
-        assert len(reps_in_sample) == 3
-        # Each selected cluster should have both its members
-        for rep in reps_in_sample:
-            members = {m for m, r in member_to_rep.items() if r == rep}
-            assert members.issubset(sampled)
+        # Should have exactly 3 representative proteins
+        assert len(sampled) == 3
+        # All returned accessions should be cluster representatives
+        all_reps = set(member_to_rep.values())
+        assert sampled.issubset(all_reps)
 
     def test_sample_representative_accessions_deterministic(self):
         """Sampling should be deterministic (seed=42)."""

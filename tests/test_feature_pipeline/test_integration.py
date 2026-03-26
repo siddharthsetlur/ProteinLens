@@ -51,7 +51,7 @@ class TestFullPipelineIntegration:
         state = PipelineState(config.pipeline_state_path)
 
         # ── Stage 0a: Download ──
-        accessions, sequences = download_swissprot_fasta(config)
+        accessions, sequences = download_swissprot_fasta(config, _max_download=5)
         state.mark_stage_complete("download")
         assert len(accessions) > 0
         assert config.fasta_path.exists()

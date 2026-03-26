@@ -154,38 +154,31 @@ def sample_representative_accessions(
     member_to_rep: Dict[str, str],
     max_proteins: int | None,
 ) -> Set[str]:
-    """Sample cluster representatives, then return all their members.
+    """Sample cluster representatives for a diverse protein subset.
 
     If the number of unique cluster representatives exceeds *max_proteins*,
     randomly sample *max_proteins* representatives (deterministic seed).
-    Then return the full set of member accessions belonging to those
-    selected clusters.
+    Returns only the representative accessions — one per cluster — so the
+    total count equals *max_proteins*.
 
     Args:
         member_to_rep: Dict mapping member -> representative.
-        max_proteins: Maximum number of cluster representatives to keep.
-            ``None`` means keep all.
+        max_proteins: Maximum number of proteins to keep (one per cluster).
+            ``None`` means keep all representatives.
 
     Returns:
-        Set of accession strings (all members of the selected clusters).
+        Set of representative accession strings, size <= *max_proteins*.
     """
     import random
 
     representatives = sorted(set(member_to_rep.values()))
     if max_proteins is not None and len(representatives) > max_proteins:
         rng = random.Random(42)
-        representatives = rng.sample(representatives, max_proteins)
-        representatives_set = set(representatives)
+        representatives = set(rng.sample(representatives, max_proteins))
     else:
-        representatives_set = set(representatives)
+        representatives = set(representatives)
 
-    # Return all members belonging to selected clusters
-    selected = {
-        member
-        for member, rep in member_to_rep.items()
-        if rep in representatives_set
-    }
-    return selected
+    return representatives
 
 
 def get_clusters(member_to_rep: Dict[str, str]) -> Dict[str, List[str]]:

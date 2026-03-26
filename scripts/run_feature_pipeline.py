@@ -87,18 +87,19 @@ def _run_stage_survey(config: PipelineConfig, state: PipelineState) -> None:
 
     member_to_rep = load_cluster_map(config)
 
-    # If max_proteins is set, sample cluster representatives for diversity
+    # If max_proteins is set, sample cluster representatives for diversity.
+    # One representative per cluster -> exactly max_proteins proteins.
     if config.max_proteins is not None:
         sampled = sample_representative_accessions(
             member_to_rep, config.max_proteins
         )
+        n_clusters = len(set(member_to_rep.values()))
         print(
-            f"[pipeline] Sampled {len(sampled)} proteins from "
-            f"{len(set(member_to_rep.values()))} clusters "
-            f"(max_proteins={config.max_proteins})."
+            f"[pipeline] Sampled {len(sampled)} cluster representatives from "
+            f"{n_clusters} clusters (max_proteins={config.max_proteins})."
         )
-        # Filter cluster map to only sampled members
-        member_to_rep = {m: r for m, r in member_to_rep.items() if m in sampled}
+        # Filter cluster map to only sampled representatives
+        member_to_rep = {m: m for m in sampled}
 
     run_survey(config, state, member_to_rep)
 

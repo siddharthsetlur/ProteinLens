@@ -86,9 +86,10 @@ class TestDownloadSwissprotFasta:
             config = PipelineConfig(
                 output_dir=Path(tmp),
                 organism_taxid=9606,
-                max_proteins=5,
             )
-            accessions, sequences = download_swissprot_fasta(config)
+            accessions, sequences = download_swissprot_fasta(
+                config, _max_download=5
+            )
 
             # Should have downloaded some proteins (not all may succeed)
             assert len(accessions) > 0
@@ -108,14 +109,13 @@ class TestDownloadSwissprotFasta:
             config = PipelineConfig(
                 output_dir=Path(tmp),
                 organism_taxid=9606,
-                max_proteins=3,
             )
             # First run
-            acc1, seq1 = download_swissprot_fasta(config)
+            acc1, seq1 = download_swissprot_fasta(config, _max_download=3)
             size1 = config.fasta_path.stat().st_size
 
             # Second run — should not append duplicates
-            acc2, seq2 = download_swissprot_fasta(config)
+            acc2, seq2 = download_swissprot_fasta(config, _max_download=3)
             size2 = config.fasta_path.stat().st_size
 
             assert size2 == size1

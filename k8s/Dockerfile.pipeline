@@ -45,4 +45,4 @@ RUN /opt/conda/envs/interplm/bin/pip install -e .
 SHELL ["/bin/bash", "-c"]
 
 # Default command: run the feature pipeline
-CMD ["conda", "run", "-n", "interplm", "/bin/bash", "-c", "python scripts/run_feature_pipeline.py --sae-dir /data/trained_models/fiery-sweep --output-dir /data/feature_data --device cuda --organism-taxid 0"]
+CMD ["conda", "run", "-n", "interplm", "/bin/bash", "-c", "python scripts/run_feature_pipeline.py --sae-dir /data/trained_models/fiery-sweep --output-dir /data/feature_data --device cuda --organism-taxid 0 --max-proteins 50000"]

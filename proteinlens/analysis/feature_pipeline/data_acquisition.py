@@ -122,17 +122,27 @@ def fetch_sequence(
         return None
 
 
-def download_swissprot_fasta(config: PipelineConfig) -> Tuple[List[str], Dict[str, str]]:
+def download_swissprot_fasta(
+    config: PipelineConfig,
+    *,
+    _max_download: Optional[int] = None,
+) -> Tuple[List[str], Dict[str, str]]:
     """Download SwissProt sequences via bulk streaming and write to FASTA.
 
     Uses UniProt's streaming FASTA endpoint to download all sequences in
-    one request (streamed in chunks), filtering out sequences longer than
-    ``config.max_seq_len``.  Resumable: sequences already in the output
-    FASTA are skipped.
+    one request (streamed in chunks), with server-side length filtering.
+    Resumable: sequences already in the output FASTA are skipped.
+
+    The ``config.max_proteins`` field is intentionally NOT used here — it
+    controls cluster-based diversity sampling in Stage 1 (survey), not
+    the download volume.
 
     Args:
         config: Pipeline configuration (uses ``organism_taxid``,
-            ``max_proteins``, ``fasta_path``, ``max_seq_len``).
+            ``fasta_path``, ``max_seq_len``).
+        _max_download: **Testing only.** If set, caps the UniProt stream
+            to this many entries (via the ``size`` query parameter).
+            Production code should never set this.
 
     Returns:
         A tuple ``(accessions, sequences)`` where:
@@ -167,48 +177,46 @@ def download_swissprot_fasta(config: PipelineConfig) -> Tuple[List[str], Dict[st
         )
 
     # Step 3 — stream the FASTA from UniProt
+    # NOTE: We always download ALL matching proteins regardless of
+    # max_proteins. The max_proteins cap is applied later via
+    # cluster-based diversity sampling (after MMseqs2 clustering in
+    # Stage 0b). Capping the download here would defeat the purpose
+    # of diversity sampling.
     params = {"query": query, "format": "fasta"}
-    if config.max_proteins is not None:
-        params["size"] = config.max_proteins
+    if _max_download is not None:
+        params["size"] = _max_download
 
     resp = requests.get(
-        UNIPROT_SEARCH_URL, params=params, stream=True, timeout=60
+        UNIPROT_SEARCH_URL, params=params, stream=True, timeout=(30, 300)
     )
     resp.raise_for_status()
 
-    # Step 4 — parse the streamed FASTA, filtering and writing incrementally
+    # Step 4 — parse the streamed FASTA, writing new entries incrementally.
+    # We download everything; max_proteins is enforced later via
+    # cluster-based sampling, not here.
     n_new = 0
     n_skipped_existing = 0
     n_streamed = 0
     current_acc: Optional[str] = None
     current_seq_parts: List[str] = []
     existing_acc_set = set(existing_accessions)
-    max_total = config.max_proteins  # None means no cap
 
-    def _flush_current() -> bool:
-        """Flush the current entry. Returns True if we should stop."""
+    def _flush_current() -> None:
+        """Flush the current entry to the FASTA file."""
         nonlocal n_new, n_skipped_existing, n_streamed
         if current_acc is None:
-            return False
+            return
         n_streamed += 1
         if current_acc in existing_acc_set:
             n_skipped_existing += 1
-        else:
-            _flush_entry(
-                current_acc, current_seq_parts, already_done,
-                existing_sequences, fasta_fh,
-            )
+        elif _flush_entry(
+            current_acc, current_seq_parts, already_done,
+            existing_sequences, fasta_fh,
+        ):
             n_new += 1
-        # Stop early if we've reached max_proteins in the FASTA
-        if max_total is not None and len(already_done) >= max_total:
-            return True
-        return False
 
     with open(config.fasta_path, "a") as fasta_fh:
-        done = False
         for line in resp.iter_lines(decode_unicode=True):
-            if done:
-                break
             if line is None:
                 continue
             line = line.strip()
@@ -217,9 +225,7 @@ def download_swissprot_fasta(config: PipelineConfig) -> Tuple[List[str], Dict[st
 
             if line.startswith(">"):
                 # Flush previous entry
-                done = _flush_current()
-                if done:
-                    break
+                _flush_current()
 
                 # Parse the new header
                 header = line[1:].split()[0]
@@ -242,8 +248,7 @@ def download_swissprot_fasta(config: PipelineConfig) -> Tuple[List[str], Dict[st
                 current_seq_parts.append(line)
 
         # Flush last entry
-        if not done:
-            _flush_current()
+        _flush_current()
 
     resp.close()
 
@@ -273,17 +278,22 @@ def _flush_entry(
     already_done: set,
     existing_sequences: Dict[str, str],
     fasta_fh,
-) -> None:
-    """Write a single FASTA entry if it's not already present."""
+) -> bool:
+    """Write a single FASTA entry if it's not already present.
+
+    Returns:
+        True if a new entry was written, False otherwise.
+    """
     if acc in already_done:
-        return
+        return False
     seq = "".join(seq_parts)
     if not seq:
-        return
+        return False
     fasta_fh.write(f">{acc}\n{seq}\n")
     fasta_fh.flush()
     already_done.add(acc)
     existing_sequences[acc] = seq
+    return True
 
 
 def _parse_fasta(fasta_path: Path) -> Tuple[List[str], Dict[str, str]]:

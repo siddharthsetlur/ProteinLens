@@ -1,0 +1,48 @@
+# Use CUDA base image for PyTorch GPU support
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
+
+# Set working directory
+WORKDIR /workspace
+
+# Install system dependencies
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Miniconda
+ENV CONDA_DIR=/opt/conda
+RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh && \
+    /bin/bash ~/miniconda.sh -b -p ${CONDA_DIR} && \
+    rm ~/miniconda.sh
+
+ENV PATH=$CONDA_DIR/bin:$PATH
+
+# Copy environment file
+COPY environment.yml /workspace/environment.yml
+
+# Accept conda Terms of Service
+RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+
+# Create conda environment from environment.yml
+RUN conda env create -f environment.yml && \
+    conda clean --tarballs --index-cache -y && \
+    /opt/conda/envs/interplm/bin/mmseqs version
+
+# Activate environment by default
+ENV CONDA_DEFAULT_ENV=interplm
+ENV PATH=$CONDA_DIR/envs/interplm/bin:$PATH
+
+# Copy the entire project
+COPY . /workspace
+
+# Install proteinlens package in editable mode
+RUN /opt/conda/envs/interplm/bin/pip install -e .
+
+# Set default shell to bash with conda activated
+SHELL ["/bin/bash", "-c"]
+
+# Default command: run the feature pipeline
+CMD ["conda", "run", "-n", "interplm", "/bin/bash", "-c", "python scripts/run_feature_pipeline.py --sae-dir /data/trained_models/fiery-sweep --output-dir /data/feature_data --device cuda --organism-taxid 0"]

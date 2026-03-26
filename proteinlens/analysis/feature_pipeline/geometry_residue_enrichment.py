@@ -404,6 +404,13 @@ def run_geometry_residue_enrichment(config: PipelineConfig) -> None:
                 "Node %d/%d (fitted=%d, skipped=%d)",
                 ni, n_features, n_fitted, n_skipped_inactive + n_skipped_few,
             )
+            from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+            wlog({
+                "geom_residue_enrich/node": ni,
+                "geom_residue_enrich/total": n_features,
+                "geom_residue_enrich/fitted": n_fitted,
+            })
 
         # Skip dead features
         if feature_maxes[ni] == 0:

@@ -106,11 +106,15 @@ def run_mmseqs_clustering(config: PipelineConfig) -> Dict[str, str]:
 
     # ── Persist to the pipeline output directory ──
     _write_cluster_map(member_to_rep, config.cluster_map_path)
+    n_members = len(member_to_rep)
+    n_clusters = len(set(member_to_rep.values()))
     print(
         f"[clustering] Wrote {config.cluster_map_path} "
-        f"({len(member_to_rep)} members, "
-        f"{len(set(member_to_rep.values()))} clusters)."
+        f"({n_members} members, {n_clusters} clusters)."
     )
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+    wlog({"cluster/members": n_members, "cluster/clusters": n_clusters})
     return member_to_rep
 
 
@@ -144,6 +148,44 @@ def get_cluster_representatives(member_to_rep: Dict[str, str]) -> Set[str]:
         Set of representative accession strings.
     """
     return set(member_to_rep.values())
+
+
+def sample_representative_accessions(
+    member_to_rep: Dict[str, str],
+    max_proteins: int | None,
+) -> Set[str]:
+    """Sample cluster representatives, then return all their members.
+
+    If the number of unique cluster representatives exceeds *max_proteins*,
+    randomly sample *max_proteins* representatives (deterministic seed).
+    Then return the full set of member accessions belonging to those
+    selected clusters.
+
+    Args:
+        member_to_rep: Dict mapping member -> representative.
+        max_proteins: Maximum number of cluster representatives to keep.
+            ``None`` means keep all.
+
+    Returns:
+        Set of accession strings (all members of the selected clusters).
+    """
+    import random
+
+    representatives = sorted(set(member_to_rep.values()))
+    if max_proteins is not None and len(representatives) > max_proteins:
+        rng = random.Random(42)
+        representatives = rng.sample(representatives, max_proteins)
+        representatives_set = set(representatives)
+    else:
+        representatives_set = set(representatives)
+
+    # Return all members belonging to selected clusters
+    selected = {
+        member
+        for member, rep in member_to_rep.items()
+        if rep in representatives_set
+    }
+    return selected
 
 
 def get_clusters(member_to_rep: Dict[str, str]) -> Dict[str, List[str]]:

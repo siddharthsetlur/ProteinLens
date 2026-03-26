@@ -208,6 +208,12 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
         f"skipped {n_skipped}. "
         f"Wrote results to {config.interpro_enrichment_dir}/"
     )
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+    wlog({
+        "interpro_enrichment/analyzed": n_analyzed,
+        "interpro_enrichment/skipped": n_skipped,
+    })
 
 
 # ===================================================================

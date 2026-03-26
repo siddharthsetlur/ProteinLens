@@ -1,5 +1,6 @@
 name: interplm
 channels:
+  - bioconda
   - pytorch
   - nvidia
   - conda-forge
@@ -11,6 +12,7 @@ dependencies:
   - pytorch::pytorch=2.5.1
   - pytorch::torchvision=0.20.1
   - pytorch::pytorch-cuda=12.1
+  - bioconda::mmseqs2
   - pip:
     - nnsight==0.2.21
     - transformers==4.44.0

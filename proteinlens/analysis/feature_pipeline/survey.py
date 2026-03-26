@@ -72,10 +72,16 @@ def run_survey(
     Side effects:
         Updates *state* in-place and on disk.
     """
-    # ── Load the FASTA ──
-    accessions, sequences = _parse_fasta(config.fasta_path)
+    # ── Load the FASTA, filtered to proteins in the cluster map ──
+    all_accessions, all_sequences = _parse_fasta(config.fasta_path)
+    cluster_members = set(member_to_rep.keys())
+    accessions = [a for a in all_accessions if a in cluster_members]
+    sequences = {a: all_sequences[a] for a in accessions}
     n_proteins = len(accessions)
-    print(f"[survey] {n_proteins} proteins in FASTA.")
+    print(
+        f"[survey] {len(all_accessions)} proteins in FASTA, "
+        f"{n_proteins} after filtering to cluster map."
+    )
 
     # ── Build accession -> row index mapping ──
     # This mapping is fixed for the lifetime of the memmap.
@@ -163,6 +169,15 @@ def run_survey(
             state.add_survey_processed(batch_accessions)
             state.save()
             batch_accessions = []
+
+            from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+            n_done = len(already_done) + i + 1
+            wlog({
+                "survey/proteins_processed": n_done,
+                "survey/proteins_total": len(todo),
+                "survey/progress_pct": 100.0 * n_done / len(todo),
+            })
 
     # ── Final flush ──
     if batch_accessions:

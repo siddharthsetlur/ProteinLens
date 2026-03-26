@@ -79,10 +79,27 @@ def _run_stage_survey(config: PipelineConfig, state: PipelineState) -> None:
     if state.is_stage_complete("survey"):
         print("[pipeline] Stage 1 (survey) already complete — skipping.")
         return
-    from proteinlens.analysis.feature_pipeline.clustering import load_cluster_map
+    from proteinlens.analysis.feature_pipeline.clustering import (
+        load_cluster_map,
+        sample_representative_accessions,
+    )
     from proteinlens.analysis.feature_pipeline.survey import run_survey
 
     member_to_rep = load_cluster_map(config)
+
+    # If max_proteins is set, sample cluster representatives for diversity
+    if config.max_proteins is not None:
+        sampled = sample_representative_accessions(
+            member_to_rep, config.max_proteins
+        )
+        print(
+            f"[pipeline] Sampled {len(sampled)} proteins from "
+            f"{len(set(member_to_rep.values()))} clusters "
+            f"(max_proteins={config.max_proteins})."
+        )
+        # Filter cluster map to only sampled members
+        member_to_rep = {m: r for m, r in member_to_rep.items() if m in sampled}
+
     run_survey(config, state, member_to_rep)
 
 
@@ -293,6 +310,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="PyTorch device (default: auto-detect)",
     )
+    parser.add_argument(
+        "--wandb",
+        action="store_true",
+        default=False,
+        help="Enable wandb logging for pipeline progress",
+    )
+    parser.add_argument(
+        "--wandb-project",
+        type=str,
+        default="proteinlens-pipeline",
+        help="wandb project name (default: proteinlens-pipeline)",
+    )
     return parser.parse_args()
 
 
@@ -327,6 +356,23 @@ def main() -> None:
     print(f"  Device:        {config.device or 'auto'}")
     print("=" * 60)
 
+    # ── Optional wandb init ──
+    if args.wandb:
+        import wandb
+
+        wandb.init(
+            project=args.wandb_project,
+            config={
+                "sae_dir": str(config.sae_dir),
+                "output_dir": str(config.output_dir),
+                "organism_taxid": config.organism_taxid,
+                "max_proteins": config.max_proteins,
+                "esm_model_name": config.esm_model_name,
+                "esm_layer": config.esm_layer,
+                "device": config.device,
+            },
+        )
+
     t0 = time.time()
 
     if args.stage is not None:
@@ -338,10 +384,21 @@ def main() -> None:
         # Run all stages in order
         for stage_name, stage_fn in STAGES:
             print(f"\n>>> Stage: {stage_name}")
+            from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+            wlog({"stage": stage_name})
             stage_fn(config, state)
 
     elapsed = time.time() - t0
     print(f"\nPipeline finished in {elapsed:.1f}s.")
+
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+    wlog({"pipeline_elapsed_s": elapsed})
+    if args.wandb:
+        import wandb
+
+        wandb.finish()
 
 
 if __name__ == "__main__":

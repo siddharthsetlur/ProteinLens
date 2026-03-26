@@ -190,4 +190,10 @@ def run_selection(config: PipelineConfig) -> Dict:
         f"[selection] Selected {len(all_selected)} unique proteins across "
         f"{num_features} features. Saved to {config.selection_path}."
     )
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+    wlog({
+        "selection/unique_proteins": len(all_selected),
+        "selection/num_features": num_features,
+    })
     return selection

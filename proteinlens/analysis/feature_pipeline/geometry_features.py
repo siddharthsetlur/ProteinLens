@@ -157,6 +157,14 @@ def run_geometry_features(config: PipelineConfig) -> None:
                 "Progress: %d/%d PDBs (computed=%d, skipped=%d, failed=%d)",
                 i + 1, n_total, n_computed, n_skipped, n_failed,
             )
+            from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+            wlog({
+                "geometry_features/processed": i + 1,
+                "geometry_features/total": n_total,
+                "geometry_features/computed": n_computed,
+                "geometry_features/failed": n_failed,
+            })
 
     # -- Rebuild full protein-level geometry matrix from ALL profiles --
     # (includes both newly computed and previously existing)

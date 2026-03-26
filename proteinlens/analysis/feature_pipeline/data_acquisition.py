@@ -1,9 +1,8 @@
 """Stage 0a — Download reviewed SwissProt sequences as a FASTA file.
 
-This module fetches accession lists from UniProt and then downloads the
-individual sequences, writing them incrementally to a FASTA file.  The
-download is **resumable**: accessions already present in the FASTA are
-skipped on restart so a killed job picks up where it left off.
+Downloads the full SwissProt FASTA via bulk streaming from UniProt,
+filtering by max sequence length. Resumable: existing entries in the
+FASTA are preserved and only missing sequences are appended.
 """
 
 from __future__ import annotations
@@ -124,15 +123,12 @@ def fetch_sequence(
 
 
 def download_swissprot_fasta(config: PipelineConfig) -> Tuple[List[str], Dict[str, str]]:
-    """Download SwissProt sequences and write them to a FASTA file.
+    """Download SwissProt sequences via bulk streaming and write to FASTA.
 
-    This is the main entry point for Stage 0a.  It:
-
-    1. Fetches the list of SwissProt accessions for the configured organism.
-    2. Reads any accessions already present in the output FASTA (for
-       resumability).
-    3. Downloads missing sequences one at a time (with connection pooling)
-       and appends them to the FASTA file.
+    Uses UniProt's streaming FASTA endpoint to download all sequences in
+    one request (streamed in chunks), filtering out sequences longer than
+    ``config.max_seq_len``.  Resumable: sequences already in the output
+    FASTA are skipped.
 
     Args:
         config: Pipeline configuration (uses ``organism_taxid``,
@@ -140,18 +136,12 @@ def download_swissprot_fasta(config: PipelineConfig) -> Tuple[List[str], Dict[st
 
     Returns:
         A tuple ``(accessions, sequences)`` where:
-        - *accessions* is the ordered list of accession strings that are
-          in the FASTA (i.e. those that were successfully downloaded and
-          whose length is <= ``config.max_seq_len``).
+        - *accessions* is the ordered list of accession strings in the FASTA.
         - *sequences* is a dict mapping accession -> sequence string.
     """
-    # Step 1 — get the target accession list from UniProt
-    all_accessions = fetch_swissprot_accessions(
-        organism_taxid=config.organism_taxid,
-        max_proteins=config.max_proteins,
-    )
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
 
-    # Step 2 — read accessions that are already in the FASTA (resume support)
+    # Step 1 — read accessions already in the FASTA (resume support)
     existing_accessions, existing_sequences = _parse_fasta(config.fasta_path)
     already_done = set(existing_accessions)
     print(
@@ -159,54 +149,115 @@ def download_swissprot_fasta(config: PipelineConfig) -> Tuple[List[str], Dict[st
         f"{config.fasta_path.name}, will skip those."
     )
 
-    # Step 3 — download missing sequences and append to FASTA
-    session = requests.Session()
-    n_downloaded = 0
-    n_skipped_long = 0
-    n_failed = 0
+    # Step 2 — build the UniProt query
+    if config.organism_taxid is not None:
+        query = (
+            f"(reviewed:true) AND (organism_id:{config.organism_taxid})"
+            f" AND (length:[1 TO {config.max_seq_len}])"
+        )
+        print(
+            f"[data_acquisition] Bulk downloading reviewed proteins "
+            f"(taxon {config.organism_taxid}, length <= {config.max_seq_len}) ..."
+        )
+    else:
+        query = f"(reviewed:true) AND (length:[1 TO {config.max_seq_len}])"
+        print(
+            f"[data_acquisition] Bulk downloading ALL reviewed proteins "
+            f"(length <= {config.max_seq_len}) ..."
+        )
+
+    # Step 3 — stream the FASTA from UniProt
+    params = {"query": query, "format": "fasta"}
+    if config.max_proteins is not None:
+        params["size"] = config.max_proteins
+
+    resp = requests.get(
+        UNIPROT_SEARCH_URL, params=params, stream=True, timeout=60
+    )
+    resp.raise_for_status()
+
+    # Step 4 — parse the streamed FASTA, filtering and writing incrementally
+    n_new = 0
+    n_skipped_existing = 0
+    n_streamed = 0
+    current_acc: Optional[str] = None
+    current_seq_parts: List[str] = []
+    existing_acc_set = set(existing_accessions)
+    max_total = config.max_proteins  # None means no cap
+
+    def _flush_current() -> bool:
+        """Flush the current entry. Returns True if we should stop."""
+        nonlocal n_new, n_skipped_existing, n_streamed
+        if current_acc is None:
+            return False
+        n_streamed += 1
+        if current_acc in existing_acc_set:
+            n_skipped_existing += 1
+        else:
+            _flush_entry(
+                current_acc, current_seq_parts, already_done,
+                existing_sequences, fasta_fh,
+            )
+            n_new += 1
+        # Stop early if we've reached max_proteins in the FASTA
+        if max_total is not None and len(already_done) >= max_total:
+            return True
+        return False
 
     with open(config.fasta_path, "a") as fasta_fh:
-        for i, acc in enumerate(all_accessions):
-            if acc in already_done:
+        done = False
+        for line in resp.iter_lines(decode_unicode=True):
+            if done:
+                break
+            if line is None:
+                continue
+            line = line.strip()
+            if not line:
                 continue
 
-            seq = fetch_sequence(acc, session)
-            if seq is None:
-                n_failed += 1
-                continue
+            if line.startswith(">"):
+                # Flush previous entry
+                done = _flush_current()
+                if done:
+                    break
 
-            # Skip proteins that exceed the ESM context window
-            if len(seq) > config.max_seq_len:
-                n_skipped_long += 1
-                continue
+                # Parse the new header
+                header = line[1:].split()[0]
+                parts = header.split("|")
+                current_acc = parts[1] if len(parts) >= 2 else parts[0]
+                current_seq_parts = []
 
-            # Write FASTA entry: >accession\nsequence\n
-            fasta_fh.write(f">{acc}\n{seq}\n")
-            fasta_fh.flush()
+                # Progress logging
+                if n_streamed > 0 and n_streamed % 10000 == 0:
+                    print(
+                        f"[data_acquisition]   streamed {n_streamed} entries "
+                        f"({n_new} new, {n_skipped_existing} already had) ..."
+                    )
+                    wlog({
+                        "download/streamed_total": n_streamed,
+                        "download/new": n_new,
+                        "download/skipped_existing": n_skipped_existing,
+                    })
+            else:
+                current_seq_parts.append(line)
 
-            existing_sequences[acc] = seq
-            already_done.add(acc)
-            n_downloaded += 1
+        # Flush last entry
+        if not done:
+            _flush_current()
 
-            # Progress logging every 500 proteins
-            if n_downloaded % 500 == 0:
-                print(
-                    f"[data_acquisition]   downloaded {n_downloaded} "
-                    f"(total in file: {len(already_done)}) ..."
-                )
-
-            # Polite rate-limiting: small delay to avoid hammering UniProt
-            if n_downloaded % 100 == 0:
-                time.sleep(0.5)
+    resp.close()
 
     print(
-        f"[data_acquisition] Done. {n_downloaded} new, "
-        f"{n_skipped_long} skipped (too long), {n_failed} failed. "
+        f"[data_acquisition] Done. {n_new} new sequences written, "
+        f"{n_skipped_existing} already existed. "
         f"Total in FASTA: {len(already_done)}."
     )
+    wlog({
+        "download/final_new": n_new,
+        "download/final_total": len(already_done),
+    })
 
     # Build the final ordered accession list from the FASTA on disk
-    # (so the order matches what is actually persisted)
     final_accessions, final_sequences = _parse_fasta(config.fasta_path)
     return final_accessions, final_sequences
 
@@ -214,6 +265,25 @@ def download_swissprot_fasta(config: PipelineConfig) -> Tuple[List[str], Dict[st
 # ===================================================================
 # Internal helpers
 # ===================================================================
+
+
+def _flush_entry(
+    acc: str,
+    seq_parts: List[str],
+    already_done: set,
+    existing_sequences: Dict[str, str],
+    fasta_fh,
+) -> None:
+    """Write a single FASTA entry if it's not already present."""
+    if acc in already_done:
+        return
+    seq = "".join(seq_parts)
+    if not seq:
+        return
+    fasta_fh.write(f">{acc}\n{seq}\n")
+    fasta_fh.flush()
+    already_done.add(acc)
+    existing_sequences[acc] = seq
 
 
 def _parse_fasta(fasta_path: Path) -> Tuple[List[str], Dict[str, str]]:

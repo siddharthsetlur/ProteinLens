@@ -17,6 +17,7 @@ from proteinlens.analysis.feature_pipeline.clustering import (
     get_clusters,
     load_cluster_map,
     run_mmseqs_clustering,
+    sample_representative_accessions,
 )
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
 
@@ -97,6 +98,36 @@ class TestClusterUtilities:
         clusters = get_clusters(member_to_rep)
         assert set(clusters["A"]) == {"A", "B"}
         assert set(clusters["C"]) == {"C", "D"}
+
+    def test_sample_representative_accessions_no_cap(self):
+        """With max_proteins=None, all members should be returned."""
+        member_to_rep = {"A": "A", "B": "A", "C": "C", "D": "C", "E": "E"}
+        sampled = sample_representative_accessions(member_to_rep, None)
+        assert sampled == {"A", "B", "C", "D", "E"}
+
+    def test_sample_representative_accessions_with_cap(self):
+        """With max_proteins < num_clusters, should sample a subset."""
+        # 10 clusters, each with 2 members = 20 total
+        member_to_rep = {}
+        for i in range(10):
+            rep = f"R{i}"
+            member_to_rep[rep] = rep
+            member_to_rep[f"M{i}"] = rep
+        sampled = sample_representative_accessions(member_to_rep, 3)
+        # Should have members from exactly 3 clusters
+        reps_in_sample = {member_to_rep[m] for m in sampled}
+        assert len(reps_in_sample) == 3
+        # Each selected cluster should have both its members
+        for rep in reps_in_sample:
+            members = {m for m, r in member_to_rep.items() if r == rep}
+            assert members.issubset(sampled)
+
+    def test_sample_representative_accessions_deterministic(self):
+        """Sampling should be deterministic (seed=42)."""
+        member_to_rep = {f"P{i}": f"R{i % 20}" for i in range(100)}
+        s1 = sample_representative_accessions(member_to_rep, 5)
+        s2 = sample_representative_accessions(member_to_rep, 5)
+        assert s1 == s2
 
     def test_parse_mmseqs_tsv(self):
         """Should parse a two-column TSV correctly."""

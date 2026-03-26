@@ -171,6 +171,12 @@ def run_interpro_selection(config: PipelineConfig) -> Dict:
         f"across {num_features} features. "
         f"Saved to {config.interpro_selection_path}."
     )
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+    wlog({
+        "interpro_selection/unique_proteins": len(all_selected),
+        "interpro_selection/num_features": num_features,
+    })
 
     # ── 2.2: Per-residue activation collection for new proteins ──
     _collect_missing_residue_activations(config, all_selected)
@@ -257,3 +263,9 @@ def _collect_missing_residue_activations(
         f"[interpro_selection] Saved {n_saved} new .npz files, "
         f"skipped {n_skipped}."
     )
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+    wlog({
+        "interpro_selection/npz_saved": n_saved,
+        "interpro_selection/npz_skipped": n_skipped,
+    })

@@ -282,6 +282,13 @@ def run_interpro_fetch(config: PipelineConfig) -> None:
         f"[interpro_fetch] Fetched annotations for {len(todo)} proteins "
         f"({n_with_annotations} with annotations, {n_empty} not in InterPro)"
     )
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+    wlog({
+        "interpro_fetch/total_fetched": len(todo),
+        "interpro_fetch/with_annotations": n_with_annotations,
+        "interpro_fetch/empty": n_empty,
+    })
 
 
 # ===================================================================

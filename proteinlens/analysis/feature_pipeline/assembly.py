@@ -163,6 +163,12 @@ def run_assembly(config: PipelineConfig) -> None:
         json.dump(stats, f, indent=2)
     print(f"[assembly] Wrote {config.dataset_stats_path}")
 
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+    wlog({
+        "assembly/unique_proteins": len(referenced_sequences),
+        "assembly/num_features": num_features,
+    })
     print("[assembly] Stage 4 complete.")
 
 

@@ -144,6 +144,13 @@ def run_collection(config: PipelineConfig) -> None:
         f"[collection] Done. {n_npz_saved} new .npz files, "
         f"{n_pdb_saved} new PDBs, {n_pdb_failed} PDB fetch failures."
     )
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+    wlog({
+        "collection/npz_saved": n_npz_saved,
+        "collection/pdb_saved": n_pdb_saved,
+        "collection/pdb_failed": n_pdb_failed,
+    })
 
 
 # ===================================================================

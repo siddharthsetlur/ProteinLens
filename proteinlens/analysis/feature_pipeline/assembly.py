@@ -131,6 +131,15 @@ def run_assembly(config: PipelineConfig) -> None:
         with open(out_path, "w") as f:
             json.dump(feat_data, f, indent=2)
 
+    # Report corrupt files encountered during assembly
+    corrupt_count = sum(1 for v in _npz_cache.values() if v is None)
+    if corrupt_count:
+        logger.warning(
+            "%d corrupt .npz file(s) encountered during assembly — "
+            "proteins included with survey-max fallback (no per-residue data).",
+            corrupt_count,
+        )
+
     print(f"[assembly] Wrote {num_features} feature JSON files to {config.features_dir}/")
 
     # ── Write sequences.json ──
@@ -371,15 +380,33 @@ def _build_protein_entry(
                 # Evict the oldest entry (simple FIFO — good enough here)
                 oldest_key = next(iter(npz_cache))
                 del npz_cache[oldest_key]
-            npz_cache[accession] = np.load(npz_path)["activations"]
+            try:
+                npz_cache[accession] = np.load(npz_path)["activations"]
+            except (EOFError, Exception) as exc:
+                # Corrupted .npz (e.g. from OOM crash during collection).
+                # Rename aside so collection can regenerate on next run,
+                # but keep the protein entry with survey-max fallback.
+                corrupt_path = npz_path.with_suffix(".npz.corrupt")
+                logger.warning(
+                    "Corrupt activation file %s (%s) — "
+                    "renamed to %s; using survey max for this protein.",
+                    npz_path.name, exc, corrupt_path.name,
+                )
+                try:
+                    npz_path.rename(corrupt_path)
+                except OSError:
+                    npz_path.unlink(missing_ok=True)
+                # Mark accession so we don't retry on later features
+                npz_cache[accession] = None
 
-        all_activations = npz_cache[accession]  # shape (seq_len, num_features)
+        all_activations = npz_cache.get(accession)  # shape (seq_len, num_features) or None
 
-        # Extract the column for this feature
-        feat_activations = all_activations[:, feat_idx]  # shape (seq_len,)
-        per_residue = feat_activations.tolist()
-        max_activation = float(feat_activations.max())
-        mean_activation = float(feat_activations.mean())
+        if all_activations is not None:
+            # Extract the column for this feature
+            feat_activations = all_activations[:, feat_idx]  # shape (seq_len,)
+            per_residue = feat_activations.tolist()
+            max_activation = float(feat_activations.max())
+            mean_activation = float(feat_activations.mean())
 
     entry: Dict[str, Any] = {
         "accession": accession,
@@ -394,10 +421,11 @@ def _build_protein_entry(
         # Round to 4 decimal places to keep JSON size manageable
         entry["per_residue_activations"] = [round(v, 4) for v in per_residue]
     else:
-        # PM NOTE: If we reach here, it means the .npz was not written
-        # for this protein (perhaps collection was interrupted).  We
-        # still include the entry but flag the missing data so the
-        # front-end can handle it gracefully.
+        # The .npz was either missing (interrupted collection) or corrupt
+        # (OOM crash).  We still include the entry with the survey max
+        # but flag the missing data so the front-end can handle it.
         entry["per_residue_activations"] = None
+        if npz_path.exists() or npz_path.with_suffix(".npz.corrupt").exists():
+            entry["skipped_reason"] = "corrupt_activation_file"
 
     return entry

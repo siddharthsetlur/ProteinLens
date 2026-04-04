@@ -101,10 +101,9 @@ def _precompute_plot_data(
         batch_fvs: list[np.ndarray] = []
         batch_positions: list[int] = []
         for pos in range(half_w, n - half_w):
+            feat_vec = None
             if feat_cache is not None:
                 feat_vec = feat_cache.get((acc, pos))
-            else:
-                feat_vec = extract_local_feature_vector(profiles, ca, pos, half_w, sequence=seq)
             if feat_vec is None:
                 feat_vec = extract_local_feature_vector(profiles, ca, pos, half_w, sequence=seq)
             if feat_vec is not None and np.all(np.isfinite(feat_vec)):

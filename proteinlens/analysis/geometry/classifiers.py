@@ -673,9 +673,10 @@ def compute_concordance_metrics(
 
         acc = pdata["accession"]
         for i, pos in enumerate(positions):
+            feat_vec = None
             if feat_cache is not None:
                 feat_vec = feat_cache.get((acc, pos))
-            else:
+            if feat_vec is None:
                 feat_vec = extract_local_feature_vector(
                     profiles, ca, pos, half_w, sequence=seq,
                 )

@@ -116,30 +116,47 @@ def _validate_accession(accession: str) -> None:
 
 
 @router.get("/pdb/{accession}")
-def get_pdb(accession: str) -> Response:
+async def get_pdb(accession: str) -> Response:
     """
-    Serve an AlphaFold PDB file from the pdb_cache directory.
+    Serve an AlphaFold PDB file.
 
-    PDB filenames follow the pattern: AF-{accession}-F1-model_v*.pdb
-    We glob for the accession since the version number can vary.
+    Checks the local pdb_cache directory first. If not found, fetches from
+    the AlphaFold API (https://alphafold.ebi.ac.uk/files/AF-{acc}-F1-model_v4.pdb).
 
     Returns text/plain with a 24-hour cache header (PDBs are immutable).
     """
     _validate_accession(accession)
+
+    # Try local cache first
     pdb_dir = _data_dir / "pdb_cache"
-    matches = list(pdb_dir.glob(f"AF-{accession}-F1-model_v*.pdb"))
-    if not matches:
-        raise HTTPException(status_code=404, detail=f"PDB for {accession} not found")
+    if pdb_dir.exists():
+        matches = list(pdb_dir.glob(f"AF-{accession}-F1-model_v*.pdb"))
+        if matches:
+            content = matches[0].read_text()
+            return Response(
+                content=content,
+                media_type="text/plain",
+                headers={"Cache-Control": "max-age=86400"},
+            )
 
-    # Use the first match (there should only be one version per accession)
-    pdb_path = matches[0]
-    content = pdb_path.read_text()
+    # Fetch from AlphaFold API (lookup prediction to get correct PDB URL)
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            pred = await client.get(f"https://alphafold.ebi.ac.uk/api/prediction/{accession}")
+            if pred.status_code == 200:
+                pdb_url = pred.json()[0]["pdbUrl"]
+                resp = await client.get(pdb_url)
+                if resp.status_code == 200:
+                    return Response(
+                        content=resp.text,
+                        media_type="text/plain",
+                        headers={"Cache-Control": "max-age=86400"},
+                    )
+    except (httpx.HTTPError, KeyError, IndexError):
+        pass
 
-    return Response(
-        content=content,
-        media_type="text/plain",
-        headers={"Cache-Control": "max-age=86400"},
-    )
+    raise HTTPException(status_code=404, detail=f"PDB for {accession} not found locally or on AlphaFold")
 
 
 @router.get("/interpro/{accession}")

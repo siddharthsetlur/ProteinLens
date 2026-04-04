@@ -178,6 +178,7 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
         cov = coverage_data.get(fid_str, {})
 
         # InterPro best scores
+        # summary.json uses "top_*" keys; fallback scanner uses "protein_best_*" keys
         ipro = interpro_features.get(fid_str, {})
 
         # Geometry scores
@@ -188,9 +189,9 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
             "max_activation": round(float(max_activations[fid]), 6),
             "pct_proteins_activated": cov.get("pct_proteins_activated"),
             "pct_clusters_activated": cov.get("pct_clusters_activated"),
-            "interpro_protein_best_f1": ipro.get("protein_best_f1"),
-            "interpro_protein_best_name": ipro.get("protein_best_name"),
-            "interpro_residue_best_f1": ipro.get("residue_best_f1"),
+            "interpro_protein_best_f1": ipro.get("top_protein_f1") or ipro.get("protein_best_f1"),
+            "interpro_protein_best_name": ipro.get("top_protein_annotation_name") or ipro.get("protein_best_name"),
+            "interpro_residue_best_f1": ipro.get("top_residue_f1") or ipro.get("residue_best_f1"),
             "geometry_protein_r2_cv": geom.get("protein_r2_cv"),
             "geometry_residue_gbm_auc_cv": geom.get("residue_gbm_auc_cv"),
         }

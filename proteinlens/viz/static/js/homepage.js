@@ -104,6 +104,7 @@ function renderPipelineCard(pipeline, numFeatures) {
         { label: "Features", count: pipeline.feature_count },
         { label: "InterPro", count: pipeline.interpro_count },
         { label: "Geometry", count: pipeline.geometry_count },
+        { label: "Motif", count: pipeline.motif_count },
     ];
 
     const badgeHtml = counts
@@ -255,6 +256,21 @@ function buildColumnDefs() {
             filter: "agNumberColumnFilter",
         },
         {
+            field: "motif_best_f1",
+            headerName: "Motif F1",
+            width: 110,
+            valueFormatter: nullFormatter(3),
+            cellStyle: greenScale(1.0),
+            comparator: nullBottomComparator,
+            filter: "agNumberColumnFilter",
+        },
+        {
+            field: "motif_best_name",
+            headerName: "Best Motif",
+            width: 110,
+            filter: "agTextColumnFilter",
+        },
+        {
             field: "geometry_protein_r2_cv",
             headerName: "Geom. R2 CV",
             width: 130,
@@ -307,6 +323,87 @@ function initGrid(rowData) {
 }
 
 // ============================================================
+// Scatter plots: Geom GBM AUC vs InterPro F1
+// ============================================================
+
+/**
+ * Render two scatter plots from the feature index data:
+ *   1. Geom GBM AUC vs InterPro Protein F1
+ *   2. Geom GBM AUC vs InterPro Residue F1
+ *
+ * Only features with both values non-null are plotted.
+ * Points are clickable and navigate to the feature detail page.
+ *
+ * @param {Array} index - Feature index rows from /api/index.
+ */
+function renderScatterPlots(index) {
+    const layout = {
+        margin: { t: 40, r: 20, b: 50, l: 60 },
+        hovermode: "closest",
+        paper_bgcolor: "rgba(0,0,0,0)",
+        plot_bgcolor: "rgba(0,0,0,0)",
+    };
+
+    const config = { responsive: true, displayModeBar: false };
+
+    // --- Plot 1: AUC vs Protein F1 ---
+    const protRows = index.filter(
+        (r) => r.geometry_residue_gbm_auc_cv != null && r.interpro_protein_best_f1 != null
+    );
+    Plotly.newPlot(
+        "scatter-protein",
+        [{
+            x: protRows.map((r) => r.geometry_residue_gbm_auc_cv),
+            y: protRows.map((r) => r.interpro_protein_best_f1),
+            text: protRows.map((r) => `Feature ${r.feature_id}`),
+            customdata: protRows.map((r) => r.feature_id),
+            mode: "markers",
+            type: "scatter",
+            marker: { size: 5, color: "#4361ee", opacity: 0.6 },
+        }],
+        {
+            ...layout,
+            title: "Geom GBM AUC vs InterPro Protein F1",
+            xaxis: { title: "Geometry GBM AUC (CV)" },
+            yaxis: { title: "InterPro Protein F1" },
+        },
+        config
+    );
+
+    // --- Plot 2: AUC vs Residue F1 ---
+    const resRows = index.filter(
+        (r) => r.geometry_residue_gbm_auc_cv != null && r.interpro_residue_best_f1 != null
+    );
+    Plotly.newPlot(
+        "scatter-residue",
+        [{
+            x: resRows.map((r) => r.geometry_residue_gbm_auc_cv),
+            y: resRows.map((r) => r.interpro_residue_best_f1),
+            text: resRows.map((r) => `Feature ${r.feature_id}`),
+            customdata: resRows.map((r) => r.feature_id),
+            mode: "markers",
+            type: "scatter",
+            marker: { size: 5, color: "#e63946", opacity: 0.6 },
+        }],
+        {
+            ...layout,
+            title: "Geom GBM AUC vs InterPro Residue F1",
+            xaxis: { title: "Geometry GBM AUC (CV)" },
+            yaxis: { title: "InterPro Residue F1" },
+        },
+        config
+    );
+
+    // Click on point -> navigate to feature page
+    for (const divId of ["scatter-protein", "scatter-residue"]) {
+        document.getElementById(divId).on("plotly_click", (data) => {
+            const fid = data.points[0].customdata;
+            window.location.href = `/feature/${fid}`;
+        });
+    }
+}
+
+// ============================================================
 // Main: fetch data and render
 // ============================================================
 
@@ -336,6 +433,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         // Initialize feature table
         initGrid(index);
+
+        // Render scatter plots
+        renderScatterPlots(index);
     } catch (err) {
         console.error("Failed to load homepage data:", err);
         document.getElementById("subtitle").textContent = `Error: ${err.message}`;

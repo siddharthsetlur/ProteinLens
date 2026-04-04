@@ -94,6 +94,29 @@ class PipelineConfig:
     interpro_min_proteins: int = 3
     """Minimum proteins with an annotation for it to be tested."""
 
+    # --- Sequence motif enrichment (Stage 7) ---
+    motif_kmer_k: int = 3
+    """Length of amino-acid k-mers (tripeptides) to scan.
+
+    With 20 standard amino acids, k=3 yields 8000 possible motifs.
+    Higher k (e.g. 5) produces 3.2M possibilities and is statistically
+    under-powered at typical per-feature sample sizes (~20K residues).
+    """
+    motif_min_count: int = 5
+    """Minimum number of occurrences for a k-mer to be tested.
+
+    K-mers appearing fewer than this many times produce unreliable F1
+    scores.  The count is reported alongside F1 for user judgement.
+    """
+    motif_f1_threshold_steps: int = 50
+    """Number of evenly-spaced activation thresholds to sweep.
+
+    Thresholds are sampled from 0 to the feature's global max.
+    Consistent with the InterPro enrichment sweep strategy.
+    """
+    motif_top_n: int = 10
+    """Number of top motifs to keep per feature (ranked by best F1)."""
+
     # --- Geometric descriptor enrichment (Stages 6a-6c) ---
     geometry_min_active_proteins: int = 300
     """Min activated proteins for protein-level Lasso (Stage 6b)."""
@@ -234,6 +257,17 @@ class PipelineConfig:
     # -----------------------------------------------------------------
     # Geometry enrichment paths (Stages 6a-6c)
     # -----------------------------------------------------------------
+
+    # -----------------------------------------------------------------
+    # Motif enrichment paths (Stage 7)
+    # -----------------------------------------------------------------
+
+    @property
+    def motif_enrichment_dir(self) -> Path:
+        """Directory for per-feature sequence motif enrichment JSON files."""
+        d = self.output_dir / "motif_enrichment"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
     @property
     def geometry_protein_features_path(self) -> Path:

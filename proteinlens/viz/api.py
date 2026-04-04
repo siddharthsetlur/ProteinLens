@@ -10,6 +10,7 @@ Endpoints:
   GET /api/index          -> feature table data (built at startup)
   GET /api/feature/{id}   -> per-feature JSON (top sequences, bins, coverage)
   GET /api/feature/{id}/interpro  -> interpro enrichment JSON (404 if missing)
+  GET /api/feature/{id}/motif     -> motif enrichment JSON (404 if missing)
   GET /api/feature/{id}/geometry  -> geometry enrichment JSON (404 if missing)
   GET /api/pdb/{accession}        -> PDB file as text/plain (404 if missing)
   GET /api/interpro/{accession}   -> interpro cache JSON (404 if missing)
@@ -89,6 +90,19 @@ def get_feature_interpro(feature_id: int) -> dict[str, Any]:
     fpath = _data_dir / "interpro_enrichment" / f"{feature_id:04d}.json"
     if not fpath.exists():
         raise HTTPException(status_code=404, detail=f"InterPro enrichment for feature {feature_id} not found")
+    with open(fpath) as f:
+        return json.load(f)
+
+
+@router.get("/feature/{feature_id}/motif")
+def get_feature_motif(feature_id: int) -> dict[str, Any]:
+    """
+    Return sequence motif enrichment results for a feature.
+    Returns 404 if enrichment hasn't been computed yet.
+    """
+    fpath = _data_dir / "motif_enrichment" / f"{feature_id:04d}.json"
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail=f"Motif enrichment for feature {feature_id} not found")
     with open(fpath) as f:
         return json.load(f)
 

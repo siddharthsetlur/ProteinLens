@@ -65,14 +65,11 @@ def _extract_kmers_with_activations(
 
     Returns:
         List of ``(kmer_string, activation_at_centre)`` tuples.  Empty if the
-        sequence is shorter than *k*.
-
-    Raises:
-        AssertionError: If ``len(sequence) != len(activations)``.
+        sequence is shorter than *k* or if ``len(sequence) != len(activations)``
+        (a rare data inconsistency that is silently skipped).
     """
-    assert len(sequence) == len(activations), (
-        f"Sequence length ({len(sequence)}) != activations length ({len(activations)})"
-    )
+    if len(sequence) != len(activations):
+        return []
     half = k // 2
     n = len(sequence)
     if n < k:

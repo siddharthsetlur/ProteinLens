@@ -115,6 +115,7 @@ def build_pipeline_status(data_dir: Path) -> dict[str, Any]:
         "interpro_count": count_jsons("interpro_enrichment"),
         "geometry_count": count_jsons("geometry_enrichment"),
         "motif_count": count_jsons("motif_enrichment"),
+        "position_count": count_jsons("position_enrichment"),
     }
 
 
@@ -132,7 +133,7 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
       - interpro_protein_best_name (str or null)
       - interpro_residue_best_f1 (float or null)
       - geometry_protein_r2_cv (float or null)
-      - geometry_residue_gbm_auc_cv (float or null)
+      - geometry_residue_pr_auc (float or null)
 
     Missing data is represented as None (serialized to JSON null).
     """
@@ -170,13 +171,31 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
     else:
         motif_features = _scan_motif_files(data_dir / "motif_enrichment")
 
+    # --- Load position enrichment summary ---
+    position_summary = load_json(data_dir / "position_enrichment" / "summary.json")
+    position_features = {}
+    if position_summary and position_summary.get("features"):
+        position_features = position_summary["features"]
+    else:
+        position_features = _scan_position_files(data_dir / "position_enrichment")
+
     # --- Load geometry enrichment summary ---
     geometry_summary = load_json(data_dir / "geometry_enrichment" / "summary.json")
     geometry_features = {}
     if geometry_summary and geometry_summary.get("features"):
-        geometry_features = geometry_summary["features"]
+        # Check if the summary has the expected keys; if not, fall back to scanning
+        sample = next(iter(geometry_summary["features"].values()), {})
+        if "residue_pr_auc" in sample or "protein_r2_cv" in sample:
+            geometry_features = geometry_summary["features"]
+        else:
+            # Summary exists but uses different keys — scan individual files
+            geometry_features = _scan_geometry_files(data_dir / "geometry_enrichment")
     else:
         geometry_features = _scan_geometry_files(data_dir / "geometry_enrichment")
+
+    # --- Load geometry-primary analysis ---
+    gp_data = load_json(data_dir / "geometry_primary_analysis.json")
+    gp_features = gp_data.get("features", {}) if gp_data else {}
 
     # --- Merge into index rows ---
     index = []
@@ -190,11 +209,17 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
         # summary.json uses "top_*" keys; fallback scanner uses "protein_best_*" keys
         ipro = interpro_features.get(fid_str, {})
 
+        # Position scores
+        posn = position_features.get(fid_str, {})
+
         # Motif scores
         motif = motif_features.get(fid_str, {})
 
         # Geometry scores
         geom = geometry_features.get(fid_str, {})
+
+        # Geometry-primary classification
+        gp = gp_features.get(fid_str, {})
 
         row = {
             "feature_id": fid,
@@ -206,17 +231,22 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
             "interpro_residue_best_f1": ipro.get("top_residue_f1") or ipro.get("residue_best_f1"),
             "motif_best_f1": motif.get("best_motif_f1"),
             "motif_best_name": motif.get("best_motif"),
+            "position_best_f1": posn.get("best_position_f1"),
+            "position_best_name": posn.get("best_position"),
             "geometry_protein_r2_cv": geom.get("protein_r2_cv"),
-            "geometry_residue_gbm_auc_cv": geom.get("residue_gbm_auc_cv"),
+            "geometry_residue_pr_auc": geom.get("residue_pr_auc"),
+            "is_geometry_primary": gp.get("is_geometry_primary"),
+            "geometry_primary_score": gp.get("composite_score"),
         }
         index.append(row)
 
     logger.info(
-        "Built feature index: %d features, %d with interpro, %d with geometry, %d with motif",
+        "Built feature index: %d features, %d with interpro, %d with geometry, %d with motif, %d with position",
         num_features,
         sum(1 for r in index if r["interpro_protein_best_f1"] is not None),
         sum(1 for r in index if r["geometry_protein_r2_cv"] is not None),
         sum(1 for r in index if r["motif_best_f1"] is not None),
+        sum(1 for r in index if r["position_best_f1"] is not None),
     )
     return index
 
@@ -271,7 +301,7 @@ def _scan_geometry_files(geometry_dir: Path) -> dict[str, dict]:
     """
     Fallback: scan individual geometry enrichment JSONs to extract key scores.
 
-    Returns dict keyed by feature_id str -> {protein_r2_cv, residue_gbm_auc_cv}.
+    Returns dict keyed by feature_id str -> {protein_r2_cv, residue_pr_auc}.
     """
     if not geometry_dir.is_dir():
         return {}
@@ -292,8 +322,9 @@ def _scan_geometry_files(geometry_dir: Path) -> dict[str, dict]:
             entry["protein_r2_cv"] = protein["r2_cv"]
 
         residue = data.get("geometric_residue_level", {})
-        if residue.get("gbm_auc_cv") is not None:
-            entry["residue_gbm_auc_cv"] = residue["gbm_auc_cv"]
+        concordance = residue.get("concordance", {})
+        if concordance.get("avg_precision") is not None:
+            entry["residue_pr_auc"] = concordance["avg_precision"]
 
         if entry:
             result[fid_str] = entry
@@ -334,4 +365,38 @@ def _scan_motif_files(motif_dir: Path) -> dict[str, dict]:
 
     if result:
         logger.info("Scanned %d motif files, found %d with enrichment", len(result), len(result))
+    return result
+
+
+def _scan_position_files(position_dir: Path) -> dict[str, dict]:
+    """
+    Fallback: scan individual position enrichment JSONs to extract best F1 scores.
+
+    Each file has a ``top_positions`` list sorted by F1 descending.  We extract the
+    best position predicate name and its F1 score.
+
+    Returns dict keyed by feature_id str -> {best_position_f1, best_position}.
+    """
+    if not position_dir.is_dir():
+        return {}
+
+    result = {}
+    for fpath in sorted(position_dir.iterdir()):
+        if fpath.name == "summary.json" or fpath.suffix != ".json":
+            continue
+        data = load_json(fpath)
+        if not data:
+            continue
+
+        fid_str = str(data.get("feature_id", fpath.stem.lstrip("0") or "0"))
+        top_positions = data.get("top_positions", [])
+        if top_positions:
+            best = top_positions[0]
+            result[fid_str] = {
+                "best_position_f1": best.get("best_f1"),
+                "best_position": best.get("position"),
+            }
+
+    if result:
+        logger.info("Scanned %d position files, found %d with enrichment", len(result), len(result))
     return result

@@ -3,7 +3,7 @@
  *
  * On page load:
  *   1. Extracts feature_id from the URL path (/feature/{id})
- *   2. Fetches /api/feature/{id}, /api/feature/{id}/interpro, /api/feature/{id}/geometry in parallel
+ *   2. Fetches /api/feature/{id}, /api/feature/{id}/interpro, /api/feature/{id}/geometry, /api/feature/{id}/motif, /api/feature/{id}/position in parallel
  *   3. Renders summary stat cards (Section 1)
  *   4. Renders top 5 protein entries with sequence strips + 3D viewers (Section 2)
  *   5. Renders activation bins as collapsible <details> sections (Section 3)
@@ -48,8 +48,11 @@ function getFeatureIdFromUrl() {
  * @param {Object} featureData        - Feature JSON from /api/feature/{id}.
  * @param {Object|null} interproData  - InterPro enrichment JSON, or null if 404.
  * @param {Object|null} geometryData  - Geometry enrichment JSON, or null if 404.
+ * @param {Object|null} motifData    - Motif enrichment JSON, or null if 404.
+ * @param {Object|null} positionData - Position enrichment JSON, or null if 404.
+ * @param {Object|null} gpInfo       - Geometry-primary info for this feature, or null.
  */
-function renderSummaryCards(container, featureData, interproData, geometryData) {
+function renderSummaryCards(container, featureData, interproData, geometryData, motifData, positionData, gpInfo) {
     container.innerHTML = "";
 
     const cov = featureData.dataset_coverage || {};
@@ -76,7 +79,13 @@ function renderSummaryCards(container, featureData, interproData, geometryData) 
     container.appendChild(renderGeometryProteinCard(geometryData));
 
     // --- Geometry residue-level card ---
-    container.appendChild(renderGeometryResidueCard(geometryData));
+    container.appendChild(renderGeometryResidueCard(geometryData, gpInfo));
+
+    // --- Sequence motif F1 card ---
+    container.appendChild(renderSequenceMotifCard(motifData));
+
+    // --- Position F1 card ---
+    container.appendChild(renderPositionCard(positionData));
 
     // --- Motif superposition card ---
     container.appendChild(renderMotifCard(geometryData));
@@ -221,7 +230,7 @@ function renderGeometryProteinCard(data) {
  * @param {Object|null} data - Geometry enrichment JSON, or null if 404.
  * @returns {HTMLElement}
  */
-function renderGeometryResidueCard(data) {
+function renderGeometryResidueCard(data, gpInfo) {
     if (!data) return pendingCard("Geometry Residue-Level");
 
     const geo = data.geometric_residue_level;
@@ -232,9 +241,30 @@ function renderGeometryResidueCard(data) {
 
     const conc = geo.concordance || {};
 
+    let gpBadge = "";
+    if (gpInfo && gpInfo.is_geometry_primary) {
+        gpBadge = `
+            <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:0.4rem 0.6rem;margin-bottom:0.5rem;">
+                <strong style="color:#856404;">Geometry-primary</strong>
+                <span style="color:#856404;"> (score: ${fmtVal(gpInfo.composite_score)})</span>
+                <div class="detail" style="color:#856404;margin-top:0.2rem;">
+                    Activation best explained by local 3D structure.
+                    Category: <strong>${gpInfo.structural_category || "\u2014"}</strong>
+                    (${gpInfo.top_geometric_feature || "\u2014"})
+                </div>
+                <div class="detail" style="color:#856404;">
+                    All sequence metrics below null p95:
+                    Motif F1=${fmtVal(gpInfo.motif_f1)} \u2264 0.71,
+                    Position F1=${fmtVal(gpInfo.position_f1)} \u2264 0.12,
+                    InterPro Res F1=${fmtVal(gpInfo.interpro_res_f1)} \u2264 0.20
+                </div>
+            </div>`;
+    }
+
     return createStatCard("Geometry Residue-Level", `
-        <div class="value">GBM AUC = ${fmtVal(geo.gbm_auc_cv)}</div>
-        <div class="detail">Tree F1: ${fmtVal(geo.tree_f1_cv)}</div>
+        ${gpBadge}
+        <div class="value">PR-AUC = ${fmtVal(conc.avg_precision)}</div>
+        <div class="detail">GBM ROC-AUC: ${fmtVal(geo.gbm_auc_cv)} · Tree F1: ${fmtVal(geo.tree_f1_cv)}</div>
         <div class="detail" style="margin-top:0.3rem"><strong>Concordance:</strong></div>
         <div class="detail">
             Spearman r: ${fmtVal(conc.spearman_r)} ·
@@ -263,13 +293,104 @@ function renderMotifCard(data) {
             '<div class="detail">Not computed</div>');
     }
 
+    const motifLen = (motif.per_position_flexibility || []).length;
+    const normRmsd = motifLen > 0 ? motif.mean_rmsd / motifLen : null;
+
     return createStatCard("Motif Superposition", `
-        <div class="value">RMSD = ${fmtVal(motif.mean_rmsd, 2)} A</div>
+        <div class="value">RMSD/pos = ${fmtVal(normRmsd, 3)} \u00c5</div>
         <div class="detail">
-            ${motif.n_fragments ?? "?"} fragments, Std: ${fmtVal(motif.std_rmsd, 2)} A
+            Raw RMSD: ${fmtVal(motif.mean_rmsd, 2)} \u00c5 over ${motifLen} positions
         </div>
         <div class="detail">
-            Per-position flexibility: ${(motif.per_position_flexibility || []).length} values
+            ${motif.n_fragments ?? "?"} fragments, Std: ${fmtVal(motif.std_rmsd, 2)} \u00c5
+        </div>
+    `);
+}
+
+/**
+ * Render the sequence motif F1 enrichment card.
+ *
+ * Shows the best k-mer motif, its F1, threshold, precision, recall,
+ * occurrence count, and interpretation string. Lists up to 5 top motifs.
+ *
+ * @param {Object|null} data - Motif enrichment JSON from /api/feature/{id}/motif, or null if 404.
+ * @returns {HTMLElement}
+ */
+function renderSequenceMotifCard(data) {
+    if (!data) return pendingCard("Sequence Motif F1");
+
+    const motifs = data.top_motifs || [];
+    if (motifs.length === 0) {
+        return createStatCard("Sequence Motif F1",
+            '<div class="detail">No eligible motifs found</div>');
+    }
+
+    const best = motifs[0];
+    const otherMotifs = motifs.slice(1, 5)
+        .map((m) => `<span style="font-family:monospace">${m.motif}</span> F1=${fmtVal(m.best_f1)}`)
+        .join(", ");
+
+    return createStatCard("Sequence Motif F1", `
+        <div class="value">F1 = ${fmtVal(best.best_f1)}</div>
+        <div class="detail"><strong style="font-family:monospace;font-size:1.1rem">${best.motif}</strong></div>
+        <div class="detail">
+            Threshold: ${fmtVal(best.best_threshold_normalized, 2)} (norm) / ${fmtVal(best.best_threshold, 2)} (abs)
+        </div>
+        <div class="detail">
+            Precision: ${fmtVal(best.precision_at_best)} · Recall: ${fmtVal(best.recall_at_best)}
+        </div>
+        <div class="detail">
+            Occurrences: ${best.n_occurrences ?? "—"} ·
+            TP: ${best.n_true_positives ?? "—"} · FP: ${best.n_false_positives ?? "—"} · FN: ${best.n_false_negatives ?? "—"}
+        </div>
+        ${best.interpretation ? `<div class="detail" style="margin-top:0.3rem;font-style:italic">${best.interpretation}</div>` : ""}
+        ${otherMotifs ? `<div class="detail" style="margin-top:0.3rem"><strong>Other top motifs:</strong> ${otherMotifs}</div>` : ""}
+        <div class="detail" style="margin-top:0.3rem">
+            ${data.n_proteins_evaluated ?? "?"} proteins · ${data.n_total_residues ?? "?"} residues · ${data.n_unique_kmers_tested ?? "?"} k-mers tested
+        </div>
+    `);
+}
+
+/**
+ * Render the sequence position F1 enrichment card.
+ *
+ * Shows the best position predicate, its F1, threshold, precision, recall,
+ * and occurrence count. Lists up to 5 top predicates.
+ *
+ * @param {Object|null} data - Position enrichment JSON from /api/feature/{id}/position, or null if 404.
+ * @returns {HTMLElement}
+ */
+function renderPositionCard(data) {
+    if (!data) return pendingCard("Sequence Position F1");
+
+    const positions = data.top_positions || [];
+    if (positions.length === 0) {
+        return createStatCard("Sequence Position F1",
+            '<div class="detail">No eligible position predicates found</div>');
+    }
+
+    const best = positions[0];
+    const otherPositions = positions.slice(1, 5)
+        .map((p) => `<span style="font-family:monospace">${p.position}</span> F1=${fmtVal(p.best_f1)}`)
+        .join(", ");
+
+    return createStatCard("Sequence Position F1", `
+        <div class="value">F1 = ${fmtVal(best.best_f1)}</div>
+        <div class="detail"><strong style="font-family:monospace;font-size:1.1rem">${best.position}</strong></div>
+        <div class="detail">
+            Threshold: ${fmtVal(best.best_threshold_normalized, 2)} (norm) / ${fmtVal(best.best_threshold, 2)} (abs)
+        </div>
+        <div class="detail">
+            Precision: ${fmtVal(best.precision_at_best)} · Recall: ${fmtVal(best.recall_at_best)}
+        </div>
+        <div class="detail">
+            Matching residues: ${best.n_occurrences ?? "—"} ·
+            TP: ${best.n_true_positives ?? "—"} · FP: ${best.n_false_positives ?? "—"} · FN: ${best.n_false_negatives ?? "—"}
+        </div>
+        ${best.interpretation ? `<div class="detail" style="margin-top:0.3rem;font-style:italic">${best.interpretation}</div>` : ""}
+        ${otherPositions ? `<div class="detail" style="margin-top:0.3rem"><strong>Other top predicates:</strong> ${otherPositions}</div>` : ""}
+        <div class="detail" style="margin-top:0.3rem">
+            ${data.n_proteins_evaluated ?? "?"} proteins · ${data.n_total_residues ?? "?"} residues · ${data.n_predicates_tested ?? "?"} predicates tested
         </div>
     `);
 }
@@ -474,12 +595,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.title = `Feature ${featureId} — SAE Visualizer`;
 
     try {
-        // Fetch all three endpoints in parallel
-        // InterPro and Geometry may 404 — that's expected for missing enrichment
-        const [featureRes, interproRes, geometryRes] = await Promise.all([
+        // Fetch all endpoints in parallel
+        // InterPro, Geometry, Motif, Position may 404 — that's expected for missing enrichment
+        const [featureRes, interproRes, geometryRes, motifRes, positionRes, gpRes] = await Promise.all([
             fetch(`/api/feature/${featureId}`),
             fetch(`/api/feature/${featureId}/interpro`).catch(() => null),
             fetch(`/api/feature/${featureId}/geometry`).catch(() => null),
+            fetch(`/api/feature/${featureId}/motif`).catch(() => null),
+            fetch(`/api/feature/${featureId}/position`).catch(() => null),
+            fetch(`/api/geometry-primary`).catch(() => null),
         ]);
 
         if (!featureRes.ok) {
@@ -489,6 +613,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         const featureData = await featureRes.json();
         const interproData = interproRes && interproRes.ok ? await interproRes.json() : null;
         const geometryData = geometryRes && geometryRes.ok ? await geometryRes.json() : null;
+        const motifData = motifRes && motifRes.ok ? await motifRes.json() : null;
+        const positionData = positionRes && positionRes.ok ? await positionRes.json() : null;
+
+        // Extract this feature's geometry-primary info
+        let gpInfo = null;
+        if (gpRes && gpRes.ok) {
+            const gpData = await gpRes.json();
+            gpInfo = (gpData.features || {})[String(featureId)] || null;
+        }
 
         const featureMaxAct = featureData.max_activation || 1;
         const bestAnnotationName = getBestAnnotationName(interproData);
@@ -496,7 +629,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         // Section 1: Summary stats
         renderSummaryCards(
             document.getElementById("summary-cards"),
-            featureData, interproData, geometryData
+            featureData, interproData, geometryData, motifData, positionData, gpInfo
         );
 
         // Section 1b: Top 3 sequence alignment

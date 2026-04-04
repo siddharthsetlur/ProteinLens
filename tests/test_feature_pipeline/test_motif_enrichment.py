@@ -75,10 +75,10 @@ def test_extract_kmers_skips_non_standard():
     assert len(result) == 0
 
 
-def test_extract_kmers_length_mismatch_raises():
-    """Mismatched sequence and activation lengths raise AssertionError."""
-    with pytest.raises(AssertionError, match="Sequence length"):
-        _extract_kmers_with_activations("ACDEF", [0.1, 0.2], k=3)
+def test_extract_kmers_length_mismatch_returns_empty():
+    """Mismatched sequence and activation lengths return empty list (skip gracefully)."""
+    result = _extract_kmers_with_activations("ACDEF", [0.1, 0.2], k=3)
+    assert result == []
 
 
 # ===================================================================

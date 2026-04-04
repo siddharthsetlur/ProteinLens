@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Case Studies — SAE Visualizer</title>
+
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <main class="container-fluid">
+        <header>
+            <nav>
+                <ul><li><a href="/">&larr; Back to features</a></li></ul>
+                <ul><li><strong>Geometry vs InterPro Case Studies</strong></li></ul>
+            </nav>
+        </header>
+
+        <section id="intro">
+            <p>
+                These are families of SAE nodes that share the <strong>same best residue-level InterPro annotation</strong>
+                (F1 above null) and also have <strong>geometry PR-AUC above null</strong>. Within each family, the
+                nodes respond to the same protein domain but capture <em>different geometric properties</em> of
+                that domain — showing that geometry is more granular than InterPro annotations alone.
+            </p>
+            <div id="summary-stats" class="secondary" style="font-size:0.9rem;">Loading...</div>
+        </section>
+
+        <section id="families-section">
+            <div id="families-container">
+                <div class="loading-spinner"></div> Loading...
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/js/case_studies.js"></script>
+</body>
+</html>

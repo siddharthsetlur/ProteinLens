@@ -117,6 +117,25 @@ class PipelineConfig:
     motif_top_n: int = 10
     """Number of top motifs to keep per feature (ranked by best F1)."""
 
+    # --- Sequence position enrichment (Stage 8) ---
+    position_f1_threshold_steps: int = 50
+    """Number of evenly-spaced activation thresholds to sweep.
+
+    Consistent with motif and InterPro enrichment sweep strategies.
+    """
+    position_min_count: int = 20
+    """Minimum residues matching a position predicate for it to be tested.
+
+    Higher than motif_min_count (5) because position predicates are coarser
+    — a predicate matching <20 residues out of ~16K is not meaningful.
+    """
+    position_top_n: int = 5
+    """Number of top position predicates to keep per feature (ranked by best F1).
+
+    21 predicates are tested; keeping the top 5 provides sufficient detail
+    without bloating per-feature JSON files.
+    """
+
     # --- Geometric descriptor enrichment (Stages 6a-6c) ---
     geometry_min_active_proteins: int = 300
     """Min activated proteins for protein-level Lasso (Stage 6b)."""
@@ -261,6 +280,13 @@ class PipelineConfig:
     # -----------------------------------------------------------------
     # Motif enrichment paths (Stage 7)
     # -----------------------------------------------------------------
+
+    @property
+    def position_enrichment_dir(self) -> Path:
+        """Directory for per-feature sequence position enrichment JSON files."""
+        d = self.output_dir / "position_enrichment"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
     @property
     def motif_enrichment_dir(self) -> Path:

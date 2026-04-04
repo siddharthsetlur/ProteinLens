@@ -11,6 +11,7 @@ Endpoints:
   GET /api/feature/{id}   -> per-feature JSON (top sequences, bins, coverage)
   GET /api/feature/{id}/interpro  -> interpro enrichment JSON (404 if missing)
   GET /api/feature/{id}/motif     -> motif enrichment JSON (404 if missing)
+  GET /api/feature/{id}/position  -> position enrichment JSON (404 if missing)
   GET /api/feature/{id}/geometry  -> geometry enrichment JSON (404 if missing)
   GET /api/pdb/{accession}        -> PDB file as text/plain (404 if missing)
   GET /api/interpro/{accession}   -> interpro cache JSON (404 if missing)
@@ -66,6 +67,30 @@ def get_index() -> list[dict[str, Any]]:
     return _feature_index
 
 
+@router.get("/geometry-primary")
+def get_geometry_primary() -> dict[str, Any]:
+    """Return geometry-primary analysis results (404 if not computed)."""
+    fpath = _data_dir / "geometry_primary_analysis.json"
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail="Geometry-primary analysis not computed yet")
+    with open(fpath) as f:
+        return json.load(f)
+
+
+@router.get("/cross-family-geometry")
+def get_cross_family_geometry() -> dict[str, Any]:
+    """Return cross-family geometry case study data (404 if not built)."""
+    fpath = _data_dir / "cross_family_geometry.json"
+    if not fpath.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Cross-family geometry case study not built. "
+            "Run scripts/build_cross_family_case_study.py first.",
+        )
+    with open(fpath) as f:
+        return json.load(f)
+
+
 @router.get("/feature/{feature_id}")
 def get_feature(feature_id: int) -> dict[str, Any]:
     """
@@ -107,6 +132,19 @@ def get_feature_motif(feature_id: int) -> dict[str, Any]:
         return json.load(f)
 
 
+@router.get("/feature/{feature_id}/position")
+def get_feature_position(feature_id: int) -> dict[str, Any]:
+    """
+    Return sequence position enrichment results for a feature.
+    Returns 404 if enrichment hasn't been computed yet.
+    """
+    fpath = _data_dir / "position_enrichment" / f"{feature_id:04d}.json"
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail=f"Position enrichment for feature {feature_id} not found")
+    with open(fpath) as f:
+        return json.load(f)
+
+
 @router.get("/feature/{feature_id}/geometry")
 def get_feature_geometry(feature_id: int) -> dict[str, Any]:
     """
@@ -118,6 +156,21 @@ def get_feature_geometry(feature_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Geometry enrichment for feature {feature_id} not found")
     with open(fpath) as f:
         return json.load(f)
+
+
+@router.get("/static-plot/{filename}")
+def get_static_plot(filename: str) -> Response:
+    """Serve a pre-generated scatter plot PNG from static_plots/."""
+    if not re.match(r"^[a-z0-9_]+\.png$", filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    fpath = _data_dir / "static_plots" / filename
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail=f"Plot {filename} not found")
+    return Response(
+        content=fpath.read_bytes(),
+        media_type="image/png",
+        headers={"Cache-Control": "max-age=3600"},
+    )
 
 
 _ACCESSION_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -171,6 +224,16 @@ async def get_pdb(accession: str) -> Response:
         pass
 
     raise HTTPException(status_code=404, detail=f"PDB for {accession} not found locally or on AlphaFold")
+
+
+@router.get("/case-study-families")
+def get_case_study_families() -> dict[str, Any]:
+    """Return pre-computed case study families (404 if not built)."""
+    fpath = _data_dir / "case_study_families.json"
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail="Case study families not built. Run scripts/build_case_studies.py")
+    with open(fpath) as f:
+        return json.load(f)
 
 
 @router.get("/interpro/{accession}")

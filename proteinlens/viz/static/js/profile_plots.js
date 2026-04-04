@@ -77,12 +77,15 @@ function renderGeometryPlots(container, geometryData) {
         motifSection.appendChild(motifLabel);
 
         // Stats
+        const motifLen = (motif.per_position_flexibility || []).length;
+        const normRmsd = motifLen > 0 ? (motif.mean_rmsd / motifLen).toFixed(3) : "\u2014";
         const statsP = document.createElement("p");
         statsP.className = "secondary";
         statsP.style.fontSize = "0.85rem";
-        statsP.textContent = `Mean RMSD: ${motif.mean_rmsd?.toFixed(2) ?? "—"} A, ` +
+        statsP.textContent = `RMSD/pos: ${normRmsd} \u00c5 ` +
+            `(raw: ${motif.mean_rmsd?.toFixed(2) ?? "\u2014"} \u00c5 over ${motifLen} positions), ` +
             `${motif.n_fragments ?? "?"} fragments, ` +
-            `Std RMSD: ${motif.std_rmsd?.toFixed(2) ?? "—"} A`;
+            `Std: ${motif.std_rmsd?.toFixed(2) ?? "\u2014"} \u00c5`;
         motifSection.appendChild(statsP);
 
         const motifViewer = document.createElement("div");
@@ -96,7 +99,154 @@ function renderGeometryPlots(container, geometryData) {
         // Create the viewer with flexibility coloring
         const flexibility = motif.per_position_flexibility || [];
         createMotifViewer(motifViewer, motif.mean_structure_pdb, flexibility);
+
+        // Per-position flexibility bar chart
+        if (flexibility.length > 0) {
+            const flexDiv = document.createElement("div");
+            flexDiv.className = "plot-container";
+            flexDiv.style.marginTop = "1rem";
+            motifSection.appendChild(flexDiv);
+            renderFlexibilityChart(flexDiv, flexibility);
+        }
+
+        // Motif-on-protein overlay: protein selector + 3D viewer
+        renderMotifOverlaySelector(
+            motifSection, plotData.top_proteins, motif, geometryData.feature_max_activation || 1
+        );
     }
+}
+
+/**
+ * Render a dropdown selector for overlaying the motif onto a chosen protein.
+ *
+ * For each protein, the peak activated position is found and a Kabsch-aligned
+ * motif is superimposed in a 3D viewer alongside the full protein structure.
+ *
+ * @param {HTMLElement} parent       - Container to append the selector + viewer to.
+ * @param {Array<Object>} proteins   - plot_data.top_proteins array.
+ * @param {Object} motif             - motif_superposition data.
+ * @param {number} featureMaxAct     - Feature-level max activation.
+ */
+function renderMotifOverlaySelector(parent, proteins, motif, featureMaxAct) {
+    const motifLength = (motif.per_position_flexibility || []).length;
+    if (!motif.mean_structure_pdb || motifLength === 0) return;
+
+    // Filter to proteins that have ca_backbone and activated_positions
+    const eligible = proteins.filter(p =>
+        p.ca_backbone && p.ca_backbone.length > 0 &&
+        p.activated_positions && p.activated_positions.length > 0
+    );
+    if (eligible.length === 0) return;
+
+    const halfW = Math.floor((motifLength - 1) / 2);
+
+    // Build options with peak position info
+    const options = eligible.map(p => {
+        const peak = p.activated_positions.reduce(
+            (a, b) => (b.activation > a.activation ? b : a),
+            p.activated_positions[0]
+        );
+        return { protein: p, peakPos: peak.position, peakAct: peak.activation };
+    }).filter(o => o.peakPos >= halfW && o.peakPos + halfW < o.protein.ca_backbone.length);
+
+    if (options.length === 0) return;
+
+    // --- UI ---
+    const wrapper = document.createElement("div");
+    wrapper.style.marginTop = "1.5rem";
+
+    const heading = document.createElement("h4");
+    heading.textContent = "Motif Overlay on Protein";
+    wrapper.appendChild(heading);
+
+    const desc = document.createElement("p");
+    desc.className = "secondary";
+    desc.style.fontSize = "0.85rem";
+    desc.textContent = "Select a protein to see the motif (green) Kabsch-aligned onto its structure at the peak activation site.";
+    wrapper.appendChild(desc);
+
+    const select = document.createElement("select");
+    select.style.marginBottom = "0.75rem";
+    select.style.maxWidth = "400px";
+    for (const opt of options) {
+        const el = document.createElement("option");
+        el.value = opt.protein.accession;
+        el.textContent = `${opt.protein.accession} (peak res ${opt.peakPos + 1}, act ${opt.peakAct.toFixed(3)})`;
+        select.appendChild(el);
+    }
+    wrapper.appendChild(select);
+
+    const viewerDiv = document.createElement("div");
+    viewerDiv.className = "viewer-container";
+    viewerDiv.style.width = "600px";
+    viewerDiv.style.height = "450px";
+    wrapper.appendChild(viewerDiv);
+
+    parent.appendChild(wrapper);
+
+    // Load overlay for the selected protein
+    function loadOverlay(accession) {
+        const opt = options.find(o => o.protein.accession === accession);
+        if (!opt) return;
+
+        // Clear any previous RMSD label
+        const oldLabel = viewerDiv.nextElementSibling;
+        if (oldLabel && oldLabel.classList.contains("secondary")) {
+            oldLabel.remove();
+        }
+
+        const p = opt.protein;
+        const activations = p.sae_activation_profile || [];
+
+        createMotifOverlayViewer(
+            viewerDiv, p.accession, activations, featureMaxAct,
+            p.ca_backbone, opt.peakPos, motif.mean_structure_pdb, motifLength
+        );
+    }
+
+    select.addEventListener("change", () => loadOverlay(select.value));
+
+    // Load first protein immediately
+    loadOverlay(options[0].protein.accession);
+}
+
+/**
+ * Render a bar chart of per-position flexibility (std of aligned coords).
+ *
+ * Blue (rigid) -> Red (flexible), matching the 3D viewer coloring.
+ *
+ * @param {HTMLElement} div          - DOM element for the Plotly chart.
+ * @param {Array<number>} flexibility - Per-position flexibility values (Angstroms).
+ */
+function renderFlexibilityChart(div, flexibility) {
+    const maxFlex = Math.max(...flexibility, 0.01);
+    const xPositions = flexibility.map((_, i) => i + 1);
+
+    // Color each bar blue->red matching the 3D viewer
+    const colors = flexibility.map((v) => {
+        const norm = Math.min(v / maxFlex, 1);
+        const r = Math.round(norm * 255);
+        const b = Math.round((1 - norm) * 255);
+        return `rgb(${r},0,${b})`;
+    });
+
+    const traces = [{
+        x: xPositions,
+        y: flexibility,
+        type: "bar",
+        marker: { color: colors },
+        hovertemplate: "Position %{x}<br>Flexibility: %{y:.3f} \u00c5<extra></extra>",
+    }];
+
+    const layout = {
+        title: { text: "Per-Position Flexibility (\u00c5)", font: { size: 13 } },
+        xaxis: { title: "Motif Position" },
+        yaxis: { title: "Std of Aligned Coords (\u00c5)" },
+        height: 250,
+        margin: { t: 40, b: 40, l: 60, r: 20 },
+    };
+
+    Plotly.newPlot(div, traces, layout, { responsive: true, displayModeBar: false });
 }
 
 /**

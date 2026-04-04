@@ -70,6 +70,26 @@ def create_app(data_dir: Path) -> FastAPI:
         """Serve the feature detail page. JS reads the feature ID from the URL."""
         return FileResponse(STATIC_DIR / "feature.html")
 
+    @app.get("/cross-family-geometry", response_class=FileResponse)
+    def cross_family_geometry_page():
+        """Serve the cross-family geometry case study overview."""
+        return FileResponse(STATIC_DIR / "cross_family_geometry.html")
+
+    @app.get("/cross-family-geometry/{feature_id}", response_class=FileResponse)
+    def cross_family_geometry_detail_page(feature_id: int):
+        """Serve a single feature deep-dive within the cross-family case study."""
+        return FileResponse(STATIC_DIR / "cross_family_detail.html")
+
+    @app.get("/case-studies", response_class=FileResponse)
+    def case_studies_page():
+        """Serve the case studies list page."""
+        return FileResponse(STATIC_DIR / "case_studies.html")
+
+    @app.get("/case-studies/{annotation_code}", response_class=FileResponse)
+    def case_study_detail_page(annotation_code: str):
+        """Serve the case study detail page. JS reads annotation code from URL."""
+        return FileResponse(STATIC_DIR / "case_study_detail.html")
+
     # --- Static file mount (CSS, JS) ---
     # Mounted last so it doesn't shadow the page routes
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

@@ -305,3 +305,166 @@ class TestEdgeCases:
         assert len(result["activated"]) == 0, "Expected 0 activated fragments for inactive node"
         assert len(result["background"]) == 0, "Expected 0 background fragments for inactive node"
         assert result["n_total_active"] == 0, "Expected n_total_active == 0"
+
+
+class TestNumericalEquivalence:
+    """Verify optimised code produces identical results to original logic."""
+
+    @staticmethod
+    def _collect_node_fragments_original(
+        protein_data, node_idx, half_w=10, act_quantile=0.80,
+        max_fragments=100, bg_ratio=3,
+    ):
+        """ORIGINAL collect_node_fragments before deferred-extraction optimisation.
+
+        Computes extract_local_feature_vector for ALL positions, then
+        categorises and samples.  Kept here as a reference implementation
+        for numerical-equivalence testing.
+        """
+        from proteinlens.analysis.geometry.residue_features import (
+            extract_local_feature_vector,
+        )
+
+        all_nonzero = []
+        for pdata in protein_data:
+            col = pdata["act_matrix"][:, node_idx]
+            nz = col[col > 0]
+            if len(nz) > 0:
+                all_nonzero.append(nz)
+        if not all_nonzero:
+            return {"activated": [], "background": [], "threshold": 0.0,
+                    "n_total_active": 0, "n_hard_negatives": 0}
+
+        all_nonzero_arr = np.concatenate(all_nonzero)
+        n_total_active = len(all_nonzero_arr)
+        if n_total_active < 20:
+            return {"activated": [], "background": [], "threshold": 0.0,
+                    "n_total_active": n_total_active, "n_hard_negatives": 0}
+
+        threshold = float(np.quantile(all_nonzero_arr, act_quantile))
+        if threshold <= 0:
+            threshold = float(np.median(all_nonzero_arr))
+
+        activated, background, hard_negatives = [], [], []
+        for pdata in protein_data:
+            ca = pdata["ca"]
+            profiles = pdata["profiles"]
+            col = pdata["act_matrix"][:, node_idx]
+            n = pdata["n_residues"]
+            seq = pdata.get("sequence", None)
+            for pos in range(half_w, n - half_w):
+                feat_vec = extract_local_feature_vector(
+                    profiles, ca, pos, half_w, sequence=seq)
+                if feat_vec is None:
+                    continue
+                fragment = ca[pos - half_w: pos + half_w + 1].copy()
+                category = int(profiles["categories"][pos])
+                entry = {
+                    "accession": pdata["accession"], "position": pos,
+                    "fragment": fragment, "features": feat_vec,
+                    "category": category, "activation": float(col[pos]),
+                }
+                if col[pos] >= threshold:
+                    activated.append(entry)
+                elif 0 < col[pos] < threshold:
+                    hard_negatives.append(entry)
+                else:
+                    background.append(entry)
+
+        activated.sort(key=lambda x: -x["activation"])
+        rng = np.random.default_rng(42)
+        n_bg_total = min(len(background) + len(hard_negatives),
+                         len(activated) * bg_ratio)
+        n_hard = min(len(hard_negatives), n_bg_total // 2)
+        n_zero = min(len(background), n_bg_total - n_hard)
+        if n_hard > 0 and len(hard_negatives) > n_hard:
+            idx = rng.choice(len(hard_negatives), size=n_hard, replace=False)
+            hard_negatives = [hard_negatives[i] for i in idx]
+        else:
+            hard_negatives = hard_negatives[:n_hard]
+        if n_zero > 0 and len(background) > n_zero:
+            idx = rng.choice(len(background), size=n_zero, replace=False)
+            background = [background[i] for i in idx]
+        else:
+            background = background[:n_zero]
+
+        return {
+            "activated": activated[:max_fragments * 5],
+            "background": hard_negatives + background,
+            "threshold": threshold,
+            "n_total_active": n_total_active,
+            "n_hard_negatives": len(hard_negatives),
+        }
+
+    def test_collect_fragments_identical(self):
+        """Deferred extraction gives identical fragments to original."""
+        protein_data = _make_synthetic_protein_data(
+            n_proteins=8, n_residues=100, signal_strength=5.0,
+        )
+
+        old = self._collect_node_fragments_original(
+            protein_data, node_idx=0, half_w=5, act_quantile=0.80, bg_ratio=3,
+        )
+        new = collect_node_fragments(
+            protein_data, node_idx=0, half_w=5, act_quantile=0.80, bg_ratio=3,
+        )
+
+        assert old["threshold"] == new["threshold"]
+        assert old["n_total_active"] == new["n_total_active"]
+        assert old["n_hard_negatives"] == new["n_hard_negatives"]
+        assert len(old["activated"]) == len(new["activated"])
+        assert len(old["background"]) == len(new["background"])
+
+        for o, n in zip(old["activated"], new["activated"]):
+            assert o["accession"] == n["accession"]
+            assert o["position"] == n["position"]
+            assert o["activation"] == n["activation"]
+            assert o["category"] == n["category"]
+            np.testing.assert_array_equal(o["features"], n["features"])
+            np.testing.assert_array_equal(o["fragment"], n["fragment"])
+
+        for o, n in zip(old["background"], new["background"]):
+            assert o["accession"] == n["accession"]
+            assert o["position"] == n["position"]
+            assert o["activation"] == n["activation"]
+            np.testing.assert_array_equal(o["features"], n["features"])
+
+    def test_concordance_with_and_without_cache(self):
+        """Concordance with feat_cache gives identical results to without."""
+        protein_data = _make_synthetic_protein_data(
+            n_proteins=5, n_residues=80, signal_strength=5.0,
+        )
+        frags = collect_node_fragments(
+            protein_data, node_idx=0, half_w=5, act_quantile=0.5, bg_ratio=3,
+        )
+        assert len(frags["activated"]) >= 20
+        assert len(frags["background"]) >= 20
+
+        clf = train_motif_classifier(
+            frags["activated"], frags["background"],
+            feature_names=list(ACTIVE_GEOM_NAMES), cv_folds=3,
+        )
+
+        # Build cache from fragments (same as process_node does)
+        feat_cache = {}
+        for frag in frags["activated"] + frags["background"]:
+            if frag["features"] is not None:
+                feat_cache[(frag["accession"], frag["position"])] = frag["features"]
+
+        # Run concordance WITHOUT cache
+        conc_no_cache = compute_concordance_metrics(
+            protein_data, 0, clf["tree"],
+            frags["threshold"], clf["optimal_threshold"], half_w=5,
+            feat_cache=None,
+        )
+        # Run concordance WITH cache
+        conc_with_cache = compute_concordance_metrics(
+            protein_data, 0, clf["tree"],
+            frags["threshold"], clf["optimal_threshold"], half_w=5,
+            feat_cache=feat_cache,
+        )
+
+        for key in conc_no_cache:
+            assert conc_no_cache[key] == conc_with_cache[key], (
+                f"Mismatch on {key}: {conc_no_cache[key]} vs {conc_with_cache[key]}"
+            )

@@ -17,7 +17,13 @@
 <body>
     <main class="container-fluid">
         <header>
-            <h1>SAE Feature Visualizer</h1>
+            <nav>
+                <ul><li><h1 style="margin:0">SAE Feature Visualizer</h1></li></ul>
+                <ul>
+                    <li><a href="/case-studies" role="button" class="outline">Case Studies</a></li>
+                    <li><a href="/cross-family-geometry" role="button" class="outline">Cross-Family Geometry</a></li>
+                </ul>
+            </nav>
             <p id="subtitle" class="secondary">Loading...</p>
         </header>
 
@@ -37,6 +43,16 @@
             </article>
         </section>
 
+        <!-- Scatter plots -->
+        <section id="scatter-section" style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+            <div id="scatter-protein" style="height:500px;"></div>
+            <div id="scatter-residue" style="height:500px;"></div>
+            <div id="scatter-motif" style="height:500px;"></div>
+            <div id="scatter-position" style="height:500px;"></div>
+            <div id="scatter-best-f1" style="height:500px;"></div>
+            <div id="scatter-geom-primary" style="height:500px;"></div>
+        </section>
+
         <!-- Feature table -->
         <section id="table-section">
             <h2>Features</h2>
@@ -46,6 +62,8 @@
 
     <!-- AG Grid JS -->
     <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@32.0.2/dist/ag-grid-community.min.js"></script>
+    <!-- Plotly for scatter plots -->
+    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
 
     <script src="/static/js/homepage.js"></script>
 </body>

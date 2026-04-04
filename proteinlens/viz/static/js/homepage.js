@@ -104,6 +104,7 @@ function renderPipelineCard(pipeline, numFeatures) {
         { label: "Features", count: pipeline.feature_count },
         { label: "InterPro", count: pipeline.interpro_count },
         { label: "Geometry", count: pipeline.geometry_count },
+        { label: "Motif", count: pipeline.motif_count },
     ];
 
     const badgeHtml = counts
@@ -255,6 +256,37 @@ function buildColumnDefs() {
             filter: "agNumberColumnFilter",
         },
         {
+            field: "motif_best_f1",
+            headerName: "Motif F1",
+            width: 110,
+            valueFormatter: nullFormatter(3),
+            cellStyle: greenScale(1.0),
+            comparator: nullBottomComparator,
+            filter: "agNumberColumnFilter",
+        },
+        {
+            field: "motif_best_name",
+            headerName: "Best Motif",
+            width: 110,
+            filter: "agTextColumnFilter",
+        },
+        {
+            field: "position_best_f1",
+            headerName: "Position F1",
+            width: 110,
+            valueFormatter: nullFormatter(3),
+            cellStyle: greenScale(1.0),
+            comparator: nullBottomComparator,
+            filter: "agNumberColumnFilter",
+        },
+        {
+            field: "position_best_name",
+            headerName: "Best Position",
+            width: 130,
+            valueFormatter: (params) => params.value || "\u2014",
+            filter: "agTextColumnFilter",
+        },
+        {
             field: "geometry_protein_r2_cv",
             headerName: "Geom. R2 CV",
             width: 130,
@@ -264,9 +296,26 @@ function buildColumnDefs() {
             filter: "agNumberColumnFilter",
         },
         {
-            field: "geometry_residue_gbm_auc_cv",
-            headerName: "Geom. GBM AUC",
+            field: "geometry_residue_pr_auc",
+            headerName: "Geom. PR-AUC",
             width: 140,
+            valueFormatter: nullFormatter(3),
+            cellStyle: greenScale(1.0),
+            comparator: nullBottomComparator,
+            filter: "agNumberColumnFilter",
+        },
+        {
+            field: "is_geometry_primary",
+            headerName: "Geom. Primary",
+            width: 80,
+            valueFormatter: (params) => params.value === true ? "\u2713" : "",
+            cellStyle: (params) => params.value === true ? { color: "#28a745", fontWeight: "bold", textAlign: "center" } : { textAlign: "center" },
+            filter: "agTextColumnFilter",
+        },
+        {
+            field: "geometry_primary_score",
+            headerName: "Geom. Score",
+            width: 110,
             valueFormatter: nullFormatter(3),
             cellStyle: greenScale(1.0),
             comparator: nullBottomComparator,
@@ -307,6 +356,326 @@ function initGrid(rowData) {
 }
 
 // ============================================================
+// Scatter plots: density-colored, seaborn-styled Plotly plots
+// ============================================================
+
+/**
+ * Estimate per-point density via fast 2D grid binning.
+ * Returns an array of density values (one per point), normalised to [0, 1].
+ */
+function estimateDensity(xs, ys, nBins = 40) {
+    const n = xs.length;
+    if (n === 0) return [];
+
+    const xMin = Math.min(...xs), xMax = Math.max(...xs);
+    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    const xRange = xMax - xMin || 1;
+    const yRange = yMax - yMin || 1;
+
+    // Count points per bin
+    const grid = Array.from({ length: nBins }, () => new Float32Array(nBins));
+    const binXs = new Int32Array(n);
+    const binYs = new Int32Array(n);
+    for (let i = 0; i < n; i++) {
+        const bx = Math.min(Math.floor((xs[i] - xMin) / xRange * nBins), nBins - 1);
+        const by = Math.min(Math.floor((ys[i] - yMin) / yRange * nBins), nBins - 1);
+        binXs[i] = bx;
+        binYs[i] = by;
+        grid[bx][by]++;
+    }
+
+    // Gaussian blur (3x3 kernel) for smoothing
+    const smoothed = Array.from({ length: nBins }, () => new Float32Array(nBins));
+    const k = [0.0625, 0.125, 0.0625, 0.125, 0.25, 0.125, 0.0625, 0.125, 0.0625];
+    for (let i = 0; i < nBins; i++) {
+        for (let j = 0; j < nBins; j++) {
+            let val = 0;
+            let ki = 0;
+            for (let di = -1; di <= 1; di++) {
+                for (let dj = -1; dj <= 1; dj++) {
+                    const ni = i + di, nj = j + dj;
+                    if (ni >= 0 && ni < nBins && nj >= 0 && nj < nBins) {
+                        val += grid[ni][nj] * k[ki];
+                    }
+                    ki++;
+                }
+            }
+            smoothed[i][j] = val;
+        }
+    }
+
+    // Look up each point's density
+    const densities = new Float64Array(n);
+    let maxD = 0;
+    for (let i = 0; i < n; i++) {
+        densities[i] = smoothed[binXs[i]][binYs[i]];
+        if (densities[i] > maxD) maxD = densities[i];
+    }
+    // Normalise to [0, 1]
+    if (maxD > 0) {
+        for (let i = 0; i < n; i++) densities[i] /= maxD;
+    }
+    return Array.from(densities);
+}
+
+/**
+ * Create a density-colored scatter plot with seaborn-like styling.
+ *
+ * @param {string} divId     - Target div id.
+ * @param {Array}  rows      - Data rows (each must have x, y, feature_id fields).
+ * @param {string} xField    - Key for x values.
+ * @param {string} yField    - Key for y values.
+ * @param {string} title     - Plot title.
+ * @param {string} xlabel    - X-axis label.
+ * @param {string} ylabel    - Y-axis label.
+ * @param {Array}  colorscale - Plotly colorscale (seaborn-like).
+ */
+function densityScatter(divId, rows, xField, yField, title, xlabel, ylabel, colorscale) {
+    const xs = rows.map((r) => r[xField]);
+    const ys = rows.map((r) => r[yField]);
+    const ids = rows.map((r) => r.feature_id);
+    const density = estimateDensity(xs, ys);
+
+    // Sort by density ascending so dense points render on top
+    const indices = density.map((_, i) => i).sort((a, b) => density[a] - density[b]);
+
+    const traces = [
+        // Background contour for filled density regions
+        {
+            x: xs,
+            y: ys,
+            type: "histogram2dcontour",
+            colorscale: colorscale,
+            showscale: false,
+            contours: { coloring: "fill", showlines: false },
+            ncontours: 15,
+            opacity: 0.35,
+            hoverinfo: "skip",
+        },
+        // Scatter points colored by density
+        {
+            x: indices.map((i) => xs[i]),
+            y: indices.map((i) => ys[i]),
+            text: indices.map((i) => `Feature ${ids[i]}`),
+            customdata: indices.map((i) => ids[i]),
+            mode: "markers",
+            type: "scatter",
+            marker: {
+                size: 4.5,
+                color: indices.map((i) => density[i]),
+                colorscale: colorscale,
+                showscale: true,
+                colorbar: { title: "Density", thickness: 12, len: 0.6, tickfont: { size: 9 } },
+                opacity: 0.8,
+                line: { width: 0 },
+            },
+            hovertemplate: "%{text}<br>x: %{x:.3f}<br>y: %{y:.3f}<extra></extra>",
+        },
+    ];
+
+    const layout = {
+        title: { text: title, font: { size: 13, family: "sans-serif" } },
+        xaxis: {
+            title: { text: xlabel, font: { size: 11 } },
+            tickfont: { size: 10 },
+            gridcolor: "#e9ecef",
+            gridwidth: 1,
+            zeroline: false,
+        },
+        yaxis: {
+            title: { text: ylabel, font: { size: 11 } },
+            tickfont: { size: 10 },
+            gridcolor: "#e9ecef",
+            gridwidth: 1,
+            zeroline: false,
+        },
+        margin: { t: 45, r: 60, b: 50, l: 55 },
+        hovermode: "closest",
+        paper_bgcolor: "#fff",
+        plot_bgcolor: "#f8f9fa",
+        showlegend: false,
+        font: { family: "sans-serif" },
+    };
+
+    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
+}
+
+/**
+ * Render all scatter plots from the feature index data.
+ * Uses density-colored scatter with contour backgrounds.
+ *
+ * @param {Array} index - Feature index rows from /api/index.
+ */
+function renderScatterPlots(index) {
+    // Seaborn-inspired colorscales
+    const csMako    = [[0,"#0b0405"],[0.25,"#35628b"],[0.5,"#3d8e8a"],[0.75,"#8fd0a3"],[1,"#dff8d2"]];
+    const csRocket  = [[0,"#03051a"],[0.25,"#6b1d5e"],[0.5,"#cb3b47"],[0.75,"#f0944d"],[1,"#faebdd"]];
+    const csViridis = [[0,"#440154"],[0.25,"#3b528b"],[0.5,"#21918c"],[0.75,"#5ec962"],[1,"#fde725"]];
+    const csFlare   = [[0,"#e98d6b"],[0.25,"#cc5b6a"],[0.5,"#8f3a84"],[0.75,"#4c2c7a"],[1,"#180e4a"]];
+    const csCrest   = [[0,"#1a1530"],[0.25,"#1b6b72"],[0.5,"#36a66d"],[0.75,"#a0d55e"],[1,"#f0f921"]];
+
+    const plots = [
+        {
+            divId: "scatter-protein",
+            xField: "geometry_residue_pr_auc",
+            yField: "interpro_protein_best_f1",
+            title: "Geometry PR-AUC vs InterPro Protein F1",
+            xlabel: "Geometry PR-AUC",
+            ylabel: "InterPro Protein F1",
+            colorscale: csMako,
+        },
+        {
+            divId: "scatter-residue",
+            xField: "geometry_residue_pr_auc",
+            yField: "interpro_residue_best_f1",
+            title: "Geometry PR-AUC vs InterPro Residue F1",
+            xlabel: "Geometry PR-AUC",
+            ylabel: "InterPro Residue F1",
+            colorscale: csRocket,
+        },
+        {
+            divId: "scatter-motif",
+            xField: "geometry_residue_pr_auc",
+            yField: "motif_best_f1",
+            title: "Geometry PR-AUC vs Motif F1",
+            xlabel: "Geometry PR-AUC",
+            ylabel: "Motif F1",
+            colorscale: csViridis,
+        },
+        {
+            divId: "scatter-position",
+            xField: "geometry_residue_pr_auc",
+            yField: "position_best_f1",
+            title: "Geometry PR-AUC vs Position F1",
+            xlabel: "Geometry PR-AUC",
+            ylabel: "Position F1",
+            colorscale: csFlare,
+        },
+    ];
+
+    for (const p of plots) {
+        const rows = index.filter((r) => r[p.xField] != null && r[p.yField] != null);
+        densityScatter(p.divId, rows, p.xField, p.yField, p.title, p.xlabel, p.ylabel, p.colorscale);
+    }
+
+    // --- Best F1 plot ---
+    const bestRows = index
+        .map((r) => {
+            const f1s = [
+                r.interpro_protein_best_f1,
+                r.interpro_residue_best_f1,
+                r.motif_best_f1,
+                r.position_best_f1,
+            ].filter((v) => v != null);
+            if (f1s.length === 0 || r.geometry_residue_pr_auc == null) return null;
+            return { ...r, best_f1: Math.max(...f1s) };
+        })
+        .filter((r) => r != null);
+    densityScatter(
+        "scatter-best-f1", bestRows,
+        "geometry_residue_pr_auc", "best_f1",
+        "Geometry PR-AUC vs Best F1",
+        "Geometry PR-AUC", "Best F1 (max of all metrics)",
+        csCrest
+    );
+
+    // --- Geometry-primary plot (custom: gold highlights over grey density) ---
+    const gpRows = index
+        .map((r) => {
+            const seqF1s = [r.motif_best_f1, r.position_best_f1, r.interpro_residue_best_f1].filter((v) => v != null);
+            if (r.geometry_residue_pr_auc == null) return null;
+            return { ...r, best_seq_f1: seqF1s.length > 0 ? Math.max(...seqF1s) : 0 };
+        })
+        .filter((r) => r != null);
+
+    const gpPrimary = gpRows.filter((r) => r.is_geometry_primary === true);
+    const gpOther = gpRows.filter((r) => r.is_geometry_primary !== true);
+
+    const otherXs = gpOther.map((r) => r.geometry_residue_pr_auc);
+    const otherYs = gpOther.map((r) => r.best_seq_f1);
+    const otherDens = estimateDensity(otherXs, otherYs);
+    const otherIdx = otherDens.map((_, i) => i).sort((a, b) => otherDens[a] - otherDens[b]);
+
+    const csGrey = [[0, "#f8f9fa"], [0.5, "#adb5bd"], [1, "#495057"]];
+
+    Plotly.newPlot(
+        "scatter-geom-primary",
+        [
+            {
+                x: otherXs,
+                y: otherYs,
+                type: "histogram2dcontour",
+                colorscale: csGrey,
+                showscale: false,
+                contours: { coloring: "fill", showlines: false },
+                ncontours: 12,
+                opacity: 0.3,
+                hoverinfo: "skip",
+            },
+            {
+                x: otherIdx.map((i) => otherXs[i]),
+                y: otherIdx.map((i) => otherYs[i]),
+                text: otherIdx.map((i) => `Feature ${gpOther[i].feature_id}`),
+                customdata: otherIdx.map((i) => gpOther[i].feature_id),
+                mode: "markers",
+                type: "scatter",
+                marker: {
+                    size: 3.5,
+                    color: otherIdx.map((i) => otherDens[i]),
+                    colorscale: csGrey,
+                    showscale: false,
+                    opacity: 0.5,
+                    line: { width: 0 },
+                },
+                name: "Other",
+                hovertemplate: "%{text}<br>x: %{x:.3f}<br>y: %{y:.3f}<extra></extra>",
+            },
+            {
+                x: gpPrimary.map((r) => r.geometry_residue_pr_auc),
+                y: gpPrimary.map((r) => r.best_seq_f1),
+                text: gpPrimary.map((r) => `Feature ${r.feature_id}`),
+                customdata: gpPrimary.map((r) => r.feature_id),
+                mode: "markers",
+                type: "scatter",
+                marker: {
+                    size: 7,
+                    color: "#f59f00",
+                    opacity: 0.9,
+                    line: { color: "#c77c00", width: 0.5 },
+                },
+                name: `Geometry-primary (${gpPrimary.length})`,
+                hovertemplate: "%{text}<br>x: %{x:.3f}<br>y: %{y:.3f}<extra></extra>",
+            },
+        ],
+        {
+            title: { text: `Geometry PR-AUC vs Best Sequence F1 (${gpPrimary.length} geometry-primary)`, font: { size: 13, family: "sans-serif" } },
+            xaxis: { title: { text: "Geometry PR-AUC", font: { size: 11 } }, tickfont: { size: 10 }, gridcolor: "#e9ecef", zeroline: false },
+            yaxis: { title: { text: "Best Sequence F1", font: { size: 11 } }, tickfont: { size: 10 }, gridcolor: "#e9ecef", zeroline: false },
+            margin: { t: 45, r: 20, b: 50, l: 55 },
+            hovermode: "closest",
+            paper_bgcolor: "#fff",
+            plot_bgcolor: "#f8f9fa",
+            showlegend: true,
+            legend: { x: 0.02, y: 0.98, font: { size: 10 }, bgcolor: "rgba(255,255,255,0.85)" },
+            font: { family: "sans-serif" },
+            shapes: [
+                { type: "line", x0: 0.3, x1: 0.3, y0: 0, y1: 1, line: { color: "#868e96", width: 1, dash: "dash" } },
+            ],
+        },
+        { responsive: true, displayModeBar: false }
+    );
+
+    // Click on any point -> navigate to feature page
+    const allScatterDivs = ["scatter-protein", "scatter-residue", "scatter-motif", "scatter-position", "scatter-best-f1", "scatter-geom-primary"];
+    for (const divId of allScatterDivs) {
+        document.getElementById(divId).on("plotly_click", (data) => {
+            const fid = data.points[0].customdata;
+            if (fid != null) window.location.href = `/feature/${fid}`;
+        });
+    }
+}
+
+// ============================================================
 // Main: fetch data and render
 // ============================================================
 
@@ -336,6 +705,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         // Initialize feature table
         initGrid(index);
+
+        // Render scatter plots
+        renderScatterPlots(index);
     } catch (err) {
         console.error("Failed to load homepage data:", err);
         document.getElementById("subtitle").textContent = `Error: ${err.message}`;

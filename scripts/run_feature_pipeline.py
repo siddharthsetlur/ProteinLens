@@ -227,6 +227,36 @@ def _run_stage_geometry_residue_enrichment(
     state.mark_stage_complete("geometry_residue_enrichment")
 
 
+def _run_stage_motif_enrichment(
+    config: PipelineConfig, state: PipelineState
+) -> None:
+    """Stage 7: Sequence motif (k-mer) F1 enrichment per feature."""
+    if state.is_stage_complete("motif_enrichment"):
+        print("[pipeline] Stage 7 (motif_enrichment) already complete — skipping.")
+        return
+    from proteinlens.analysis.feature_pipeline.motif_enrichment import (
+        run_motif_enrichment,
+    )
+
+    run_motif_enrichment(config)
+    state.mark_stage_complete("motif_enrichment")
+
+
+def _run_stage_position_enrichment(
+    config: PipelineConfig, state: PipelineState
+) -> None:
+    """Stage 8: Sequence position F1 enrichment per feature."""
+    if state.is_stage_complete("position_enrichment"):
+        print("[pipeline] Stage 8 (position_enrichment) already complete — skipping.")
+        return
+    from proteinlens.analysis.feature_pipeline.position_enrichment import (
+        run_position_enrichment,
+    )
+
+    run_position_enrichment(config)
+    state.mark_stage_complete("position_enrichment")
+
+
 # Map of stage name -> runner function, in execution order
 STAGES = [
     ("download", _run_stage_download),
@@ -241,6 +271,8 @@ STAGES = [
     ("geometry_features", _run_stage_geometry_features),
     ("geometry_protein_enrichment", _run_stage_geometry_protein_enrichment),
     ("geometry_residue_enrichment", _run_stage_geometry_residue_enrichment),
+    ("motif_enrichment", _run_stage_motif_enrichment),
+    ("position_enrichment", _run_stage_position_enrichment),
 ]
 STAGE_NAMES = [name for name, _ in STAGES]
 

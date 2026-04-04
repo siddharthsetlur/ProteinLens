@@ -57,11 +57,12 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
     if not config.protein_feature_maxes_path.exists():
         logger.warning("protein_feature_maxes.npy not found.")
         return
-    act_memmap = np.memmap(
+    act_memmap = np.array(np.memmap(
         config.protein_feature_maxes_path,
         dtype=np.float32, mode="r",
         shape=(n_proteins_total, n_features),
-    )
+    ))
+    logger.info("Loaded protein max activations into RAM: %s", act_memmap.shape)
 
     # Map geometry accessions to memmap rows
     valid_geom_indices = []
@@ -85,28 +86,34 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
         len(valid_geom_indices), int(geom_valid.sum()),
     )
 
+    # Build set of already-done nodes + cache existing JSONs (one glob, not 5120 stat calls)
+    done_nodes: set[int] = set()
+    existing_jsons: dict[int, dict] = {}
+    for feat_path in enrichment_dir.glob("????.json"):
+        try:
+            feat_json = json.loads(feat_path.read_text())
+            fid = feat_json.get("feature_id")
+            if fid is not None:
+                existing_jsons[fid] = feat_json
+                if "geometric_protein_level" in feat_json:
+                    done_nodes.add(fid)
+        except (json.JSONDecodeError, OSError, KeyError):
+            continue
+    logger.info("Found %d already-completed nodes", len(done_nodes))
+
     # Per-node loop
     n_fitted = 0
-    n_skipped = 0
+    n_skipped = len(done_nodes)
 
-    for ni in range(n_features):
-        if ni % 500 == 0:
-            logger.info("Node %d/%d (fitted=%d, skipped=%d)", ni, n_features, n_fitted, n_skipped)
+    nodes_to_process = [
+        ni for ni in range(n_features)
+        if ni not in done_nodes and feature_maxes[ni] > 0
+    ]
+    logger.info("%d nodes to process (%d dead/done skipped)", len(nodes_to_process), n_features - len(nodes_to_process))
 
-        # Resumability: skip if already done
-        feat_path = enrichment_dir / f"{ni:04d}.json"
-        if feat_path.exists():
-            try:
-                existing = json.loads(feat_path.read_text())
-                if "geometric_protein_level" in existing:
-                    n_skipped += 1
-                    continue
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        # Skip dead features
-        if feature_maxes[ni] == 0:
-            continue
+    for i, ni in enumerate(nodes_to_process):
+        if (i + 1) % 500 == 0:
+            logger.info("Progress: %d/%d (fitted=%d)", i + 1, len(nodes_to_process), n_fitted)
 
         # Get activations for proteins with geometry
         y_all = act_memmap[memmap_rows, ni]
@@ -123,15 +130,8 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
         if result is None:
             continue
 
-        # Write per-feature JSON
-        if feat_path.exists():
-            try:
-                feat_json = json.loads(feat_path.read_text())
-            except (json.JSONDecodeError, OSError):
-                feat_json = {}
-        else:
-            feat_json = {}
-
+        # Write per-feature JSON (reuse cached existing JSON if available)
+        feat_json = existing_jsons.get(ni, {})
         feat_json["feature_id"] = ni
         feat_json["feature_max_activation"] = float(feature_maxes[ni])
         feat_json["geometric_protein_level"] = {
@@ -145,6 +145,7 @@ def run_geometry_protein_enrichment(config: PipelineConfig) -> None:
             "n_nonzero": result["n_nonzero"],
             "top_features": result["top_features"],
         }
+        feat_path = enrichment_dir / f"{ni:04d}.json"
         feat_path.write_text(json.dumps(feat_json, indent=2))
         n_fitted += 1
 

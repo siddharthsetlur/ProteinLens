@@ -189,76 +189,79 @@ def collect_node_fragments(
     if threshold <= 0:
         threshold = float(np.median(all_nonzero_arr))
 
-    # Second pass: collect fragments
-    activated: list[dict] = []
-    background: list[dict] = []
-    hard_negatives: list[dict] = []
+    # Second pass: categorise positions by activation value (NO feature
+    # extraction yet — deferred to after sampling to avoid computing
+    # features for ~140k positions when only ~2k are kept).
+    # Each entry is (protein_index, position, activation_value).
+    act_positions: list[tuple[int, int, float]] = []
+    hneg_positions: list[tuple[int, int, float]] = []
+    bg_positions: list[tuple[int, int, float]] = []
 
-    for pdata in protein_data:
-        ca = pdata["ca"]
-        profiles = pdata["profiles"]
+    for pi, pdata in enumerate(protein_data):
         col = pdata["act_matrix"][:, node_idx]
         n = pdata["n_residues"]
-        seq = pdata.get("sequence", None)
 
         for pos in range(half_w, n - half_w):
-            feat_vec = extract_local_feature_vector(
-                profiles, ca, pos, half_w, sequence=seq
-            )
-            if feat_vec is None:
-                continue
-
-            fragment = ca[pos - half_w: pos + half_w + 1].copy()
-            category = int(profiles["categories"][pos])
-
-            entry = {
-                "accession": pdata["accession"],
-                "position": pos,
-                "fragment": fragment,
-                "features": feat_vec,
-                "category": category,
-                "activation": float(col[pos]),
-            }
-
-            if col[pos] >= threshold:
-                activated.append(entry)
-            elif 0 < col[pos] < threshold:
-                hard_negatives.append(entry)
+            val = float(col[pos])
+            if val >= threshold:
+                act_positions.append((pi, pos, val))
+            elif val > 0:
+                hneg_positions.append((pi, pos, val))
             else:
-                background.append(entry)
+                bg_positions.append((pi, pos, val))
 
     # Sort activated by activation strength (descending)
-    activated.sort(key=lambda x: -x["activation"])
+    act_positions.sort(key=lambda x: -x[2])
 
     # Build combined background: ~50% hard negatives + ~50% true zeros
     rng = np.random.default_rng(42)
     n_bg_total = min(
-        len(background) + len(hard_negatives),
-        len(activated) * bg_ratio,
+        len(bg_positions) + len(hneg_positions),
+        len(act_positions) * bg_ratio,
     )
-    n_hard = min(len(hard_negatives), n_bg_total // 2)
-    n_zero = min(len(background), n_bg_total - n_hard)
+    n_hard = min(len(hneg_positions), n_bg_total // 2)
+    n_zero = min(len(bg_positions), n_bg_total - n_hard)
 
-    if n_hard > 0 and len(hard_negatives) > n_hard:
-        idx = rng.choice(len(hard_negatives), size=n_hard, replace=False)
-        hard_negatives = [hard_negatives[i] for i in idx]
+    if n_hard > 0 and len(hneg_positions) > n_hard:
+        idx = rng.choice(len(hneg_positions), size=n_hard, replace=False)
+        hneg_positions = [hneg_positions[i] for i in idx]
     else:
-        hard_negatives = hard_negatives[:n_hard]
+        hneg_positions = hneg_positions[:n_hard]
 
-    if n_zero > 0 and len(background) > n_zero:
-        idx = rng.choice(len(background), size=n_zero, replace=False)
-        background = [background[i] for i in idx]
+    if n_zero > 0 and len(bg_positions) > n_zero:
+        idx = rng.choice(len(bg_positions), size=n_zero, replace=False)
+        bg_positions = [bg_positions[i] for i in idx]
     else:
-        background = background[:n_zero]
+        bg_positions = bg_positions[:n_zero]
 
-    combined_background = hard_negatives + background
+    # Now compute features + fragments ONLY for the kept positions (~2k)
+    def _build_entry(pi: int, pos: int, val: float) -> dict:
+        pdata = protein_data[pi]
+        feat_vec = extract_local_feature_vector(
+            pdata["profiles"], pdata["ca"], pos, half_w,
+            sequence=pdata.get("sequence", None),
+        )
+        return {
+            "accession": pdata["accession"],
+            "position": pos,
+            "fragment": pdata["ca"][pos - half_w: pos + half_w + 1].copy(),
+            "features": feat_vec,
+            "category": int(pdata["profiles"]["categories"][pos]),
+            "activation": val,
+        }
+
+    activated = [_build_entry(*t) for t in act_positions[:max_fragments * 5]]
+    combined_background = (
+        [_build_entry(*t) for t in hneg_positions]
+        + [_build_entry(*t) for t in bg_positions]
+    )
 
     return {
-        "activated": activated[:max_fragments * 5],
+        "activated": activated,
         "background": combined_background,
         "threshold": threshold,
         "n_total_active": n_total_active,
-        "n_hard_negatives": len(hard_negatives),
+        "n_hard_negatives": len(hneg_positions),
     }
 
 
@@ -602,6 +605,7 @@ def compute_concordance_metrics(
     threshold: float,
     geom_threshold: float,
     half_w: int,
+    feat_cache: dict[tuple[str, int], np.ndarray] | None = None,
 ) -> dict:
     """Quantify concordance between SAE activation and geometry prediction.
 
@@ -645,7 +649,6 @@ def compute_concordance_metrics(
 
     all_sae_act: list[float] = []
     all_geom_prob: list[float] = []
-    tp = fp = fn = tn = 0
     n_proteins_used = 0
 
     for pdata in protein_data:
@@ -661,41 +664,50 @@ def compute_concordance_metrics(
 
         n_proteins_used += 1
 
-        for pos in range(half_w, n - half_w):
-            sae_val = float(col[pos])
-            feat_vec = extract_local_feature_vector(
-                profiles, ca, pos, half_w, sequence=seq,
-            )
+        # Collect feature vectors for this protein in batch
+        positions = list(range(half_w, n - half_w))
+        sae_vals = [float(col[pos]) for pos in positions]
+        batch_fvs: list[np.ndarray] = []
+        batch_indices: list[int] = []  # index into positions
+        geom_probs = [0.0] * len(positions)
 
+        acc = pdata["accession"]
+        for i, pos in enumerate(positions):
+            if feat_cache is not None:
+                feat_vec = feat_cache.get((acc, pos))
+            else:
+                feat_vec = extract_local_feature_vector(
+                    profiles, ca, pos, half_w, sequence=seq,
+                )
             if feat_vec is not None and np.all(np.isfinite(feat_vec)):
-                fv = select_features(feat_vec)
-                prob = tree.predict_proba(fv.reshape(1, -1))[0]
-                geom_prob = float(prob[1] if len(prob) > 1 else prob[0])
-            else:
-                geom_prob = 0.0
+                batch_fvs.append(select_features(feat_vec))
+                batch_indices.append(i)
 
-            all_sae_act.append(sae_val)
-            all_geom_prob.append(geom_prob)
+        # Batch predict_proba (one call per protein instead of per-position)
+        if batch_fvs:
+            X_batch = np.array(batch_fvs)
+            probs_batch = tree.predict_proba(X_batch)
+            for j, idx in enumerate(batch_indices):
+                p = probs_batch[j]
+                geom_probs[idx] = float(p[1] if len(p) > 1 else p[0])
 
-            # Binary classification
-            sae_active = sae_val >= threshold
-            geom_active = geom_prob >= geom_threshold
-            if sae_active and geom_active:
-                tp += 1
-            elif not sae_active and geom_active:
-                fp += 1
-            elif sae_active and not geom_active:
-                fn += 1
-            else:
-                tn += 1
+        all_sae_act.extend(sae_vals)
+        all_geom_prob.extend(geom_probs)
 
-    total = tp + fp + fn + tn
+    total = len(all_sae_act)
     if total < 10 or n_proteins_used == 0:
         return empty
 
     sae_arr = np.array(all_sae_act)
     geom_arr = np.array(all_geom_prob)
     sae_binary = (sae_arr >= threshold).astype(int)
+    geom_binary = (geom_arr >= geom_threshold).astype(int)
+
+    # Binary confusion matrix
+    tp = int(np.sum((sae_binary == 1) & (geom_binary == 1)))
+    fp = int(np.sum((sae_binary == 0) & (geom_binary == 1)))
+    fn = int(np.sum((sae_binary == 1) & (geom_binary == 0)))
+    tn = int(np.sum((sae_binary == 0) & (geom_binary == 0)))
 
     # -- Continuous metrics --
     try:

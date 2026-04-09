@@ -581,6 +581,150 @@ function renderBins(container, featureData, featureMaxAct, bestAnnotationName) {
 }
 
 // ============================================================
+// Section 4: NMPFams Novel Metagenomic Hits
+// ============================================================
+
+/**
+ * Render NMPFams protein hits with sequence strips and 3D viewers.
+ *
+ * @param {HTMLElement} container - The #nmpfam-container div.
+ * @param {Object} nmpfamData    - NMPFams enrichment JSON from /api/feature/{id}/nmpfam.
+ * @param {number} featureMaxAct - Feature-level max activation for color normalization.
+ */
+function renderNmpfamHits(container, nmpfamData, featureMaxAct) {
+    container.innerHTML = "";
+
+    const hits = nmpfamData.nmpfam_hits || [];
+    const threshold = nmpfamData.activation_threshold || 0;
+
+    // Summary line
+    const summary = document.createElement("p");
+    summary.innerHTML = `<strong>${hits.length}</strong> novel metagenomic famil${hits.length === 1 ? "y" : "ies"} activated above threshold (${fmtVal(threshold, 3)})`;
+    container.appendChild(summary);
+
+    for (const hit of hits) {
+        const entry = document.createElement("div");
+        entry.className = "protein-entry";
+
+        // Label with family info and link
+        const label = document.createElement("div");
+        label.className = "protein-label";
+        label.innerHTML = `<a href="${hit.nmpfams_url}" target="_blank">${hit.family_id}</a> · `
+            + `max: ${fmtVal(hit.max_activation, 4)} (${fmtVal(hit.normalized_activation * 100, 1)}% of global max) · `
+            + `${hit.sequence_length || "?"} residues · `
+            + `<span style="opacity:0.7">${hit.category} · ${hit.sequence_count} members</span>`;
+        entry.appendChild(label);
+
+        // Sequence strip with activation coloring
+        if (hit.per_residue_activations && hit.sequence) {
+            // Text sequence
+            createTextSequence(entry, {
+                sequence: hit.sequence,
+                activations: hit.per_residue_activations,
+                maxActivation: featureMaxAct,
+                accession: hit.family_id,
+                maxAct: hit.max_activation,
+                showLabel: false,
+            });
+
+            // Canvas strip
+            const stripDiv = document.createElement("div");
+            entry.appendChild(stripDiv);
+            createSequenceStrip(stripDiv, {
+                sequence: hit.sequence,
+                activations: hit.per_residue_activations,
+                maxActivation: featureMaxAct,
+                accession: hit.family_id,
+            });
+        }
+
+        // 3D viewer from NMPFams PDB proxy
+        if (hit.pdb_available) {
+            const viewerDiv = document.createElement("div");
+            viewerDiv.className = "viewer-container";
+            entry.appendChild(viewerDiv);
+            lazyLoadNmpfamViewer(
+                viewerDiv, hit.family_id,
+                hit.per_residue_activations || [],
+                featureMaxAct
+            );
+        }
+
+        container.appendChild(entry);
+    }
+}
+
+/**
+ * Lazy-load a 3D viewer for an NMPFams protein, fetching the PDB via our proxy.
+ */
+function lazyLoadNmpfamViewer(container, familyId, activations, maxActivation) {
+    container.innerHTML = '<div class="viewer-placeholder">Scroll to load 3D structure</div>';
+    container.dataset.loaded = "false";
+
+    const observer = new IntersectionObserver(
+        (entries) => {
+            for (const entry of entries) {
+                if (entry.isIntersecting && container.dataset.loaded === "false") {
+                    container.dataset.loaded = "true";
+                    container.innerHTML = '<div class="viewer-placeholder"><div class="loading-spinner"></div> Loading structure...</div>';
+                    createNmpfamMolViewer(container, familyId, activations, maxActivation);
+                    observer.unobserve(container);
+                }
+            }
+        },
+        { rootMargin: "200px" }
+    );
+    observer.observe(container);
+}
+
+/**
+ * Create a 3Dmol viewer for an NMPFams protein, colored by SAE activation.
+ */
+async function createNmpfamMolViewer(container, familyId, activations, maxActivation) {
+    try {
+        const res = await fetch(`/api/nmpfam-pdb/${familyId}`);
+        if (!res.ok) {
+            container.innerHTML = '<div class="viewer-placeholder">No structure available</div>';
+            return;
+        }
+        const pdbData = await res.text();
+
+        container.innerHTML = "";
+        const viewer = $3Dmol.createViewer(container, {
+            backgroundColor: "white",
+            antialias: true,
+        });
+        viewer.addModel(pdbData, "pdb");
+
+        // Color by activation (blue=low, red=high)
+        const atoms = viewer.getModel().selectedAtoms({});
+        if (activations && activations.length > 0) {
+            const colorMap = {};
+            for (let i = 0; i < activations.length; i++) {
+                const norm = maxActivation > 0 ? activations[i] / maxActivation : 0;
+                const r = Math.round(255 * Math.min(1, norm * 2));
+                const b = Math.round(255 * Math.max(0, 1 - norm * 2));
+                colorMap[i + 1] = `rgb(${r},0,${b})`;
+            }
+            viewer.setStyle({}, {
+                cartoon: {
+                    colorfunc: function(atom) {
+                        return colorMap[atom.resi] || "rgb(200,200,200)";
+                    }
+                }
+            });
+        } else {
+            viewer.setStyle({}, { cartoon: { color: "spectrum" } });
+        }
+
+        viewer.zoomTo();
+        viewer.render();
+    } catch (e) {
+        container.innerHTML = '<div class="viewer-placeholder">Failed to load structure</div>';
+    }
+}
+
+// ============================================================
 // Main: fetch data and orchestrate rendering
 // ============================================================
 
@@ -597,13 +741,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
         // Fetch all endpoints in parallel
         // InterPro, Geometry, Motif, Position may 404 — that's expected for missing enrichment
-        const [featureRes, interproRes, geometryRes, motifRes, positionRes, gpRes] = await Promise.all([
+        const [featureRes, interproRes, geometryRes, motifRes, positionRes, gpRes, nmpfamRes] = await Promise.all([
             fetch(`/api/feature/${featureId}`),
             fetch(`/api/feature/${featureId}/interpro`).catch(() => null),
             fetch(`/api/feature/${featureId}/geometry`).catch(() => null),
             fetch(`/api/feature/${featureId}/motif`).catch(() => null),
             fetch(`/api/feature/${featureId}/position`).catch(() => null),
             fetch(`/api/geometry-primary`).catch(() => null),
+            fetch(`/api/feature/${featureId}/nmpfam`).catch(() => null),
         ]);
 
         if (!featureRes.ok) {
@@ -615,6 +760,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const geometryData = geometryRes && geometryRes.ok ? await geometryRes.json() : null;
         const motifData = motifRes && motifRes.ok ? await motifRes.json() : null;
         const positionData = positionRes && positionRes.ok ? await positionRes.json() : null;
+        const nmpfamData = nmpfamRes && nmpfamRes.ok ? await nmpfamRes.json() : null;
 
         // Extract this feature's geometry-primary info
         let gpInfo = null;
@@ -631,6 +777,23 @@ document.addEventListener("DOMContentLoaded", async () => {
             document.getElementById("summary-cards"),
             featureData, interproData, geometryData, motifData, positionData, gpInfo
         );
+
+        // Geometry Radar Profile (between summary and sequences)
+        if (geometryData) {
+            const geo = geometryData.geometric_residue_level;
+            const importances = geo && geo.feature_importances;
+            if (importances && typeof aggregateToCategories === "function") {
+                const scores = aggregateToCategories(importances);
+                if (scores) {
+                    document.getElementById("radar-section").style.display = "";
+                    renderRadarWithLegend(
+                        document.getElementById("radar-container"),
+                        scores,
+                        { size: 240 }
+                    );
+                }
+            }
+        }
 
         // Section 1b: Top 3 sequence alignment
         renderAlignment(
@@ -650,12 +813,22 @@ document.addEventListener("DOMContentLoaded", async () => {
             featureData, featureMaxAct, bestAnnotationName
         );
 
-        // Section 4: Geometry plots (only if data exists)
+        // Section 4: NMPFams novel protein hits
+        if (nmpfamData && nmpfamData.nmpfam_hits && nmpfamData.nmpfam_hits.length > 0) {
+            document.getElementById("nmpfam-section").style.display = "";
+            renderNmpfamHits(
+                document.getElementById("nmpfam-container"),
+                nmpfamData, featureMaxAct
+            );
+        }
+
+        // Section 5: Geometry plots (only if data exists)
         if (geometryData) {
             document.getElementById("geometry-section").style.display = "";
             renderGeometryPlots(
                 document.getElementById("geometry-container"),
-                geometryData
+                geometryData,
+                nmpfamData
             );
         }
     } catch (err) {

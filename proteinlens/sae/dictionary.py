@@ -472,10 +472,8 @@ class MatryoshkaBatchTopKSAE(Dictionary, nn.Module):
 
     @t.no_grad()
     def encode_feat_subset(self, x, feat_list, normalize_features: bool = False):
-        encoder_w_subset = self.encoder.weight[feat_list, :]
-        encoder_b_subset = self.encoder.bias[feat_list]
         encoded_acts_BF = t.nn.ReLU()(
-            (x - self.b_dec) @ encoder_w_subset.T + encoder_b_subset
+            (x - self.b_dec) @ self.W_enc[:, feat_list] + self.b_enc[feat_list]
         )
         encoded_acts_BF = encoded_acts_BF * (encoded_acts_BF > self.threshold)
 

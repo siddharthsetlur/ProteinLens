@@ -26,7 +26,9 @@ this, with configurable rate via ``config.interpro_api_rate_limit``.
 from __future__ import annotations
 
 import json
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -264,19 +266,42 @@ def run_interpro_fetch(config: PipelineConfig) -> None:
         print("[interpro_fetch] Nothing to do.")
         return
 
-    session = requests.Session()
-    rate_limiter = RateLimiter(config.interpro_api_rate_limit)
+    n_workers = min(int(os.environ.get("PIPELINE_WORKERS", "1")), 4)
+    per_worker_rate = config.interpro_api_rate_limit / max(n_workers, 1)
 
     n_with_annotations = 0
     n_empty = 0
-    for acc in tqdm(todo, desc="Fetching InterPro annotations"):
-        domains = fetch_interpro_annotations(
-            acc, cache_dir, session, rate_limiter
-        )
-        if domains:
-            n_with_annotations += 1
-        else:
-            n_empty += 1
+
+    def _fetch_one(acc: str, session: requests.Session, rl: RateLimiter) -> bool:
+        domains = fetch_interpro_annotations(acc, cache_dir, session, rl)
+        return bool(domains)
+
+    if n_workers > 1:
+        print(f"[interpro_fetch] Using {n_workers} parallel workers "
+              f"({per_worker_rate:.1f} req/s each)")
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = {}
+            sessions_and_rls = [
+                (requests.Session(), RateLimiter(per_worker_rate))
+                for _ in range(n_workers)
+            ]
+            for i, acc in enumerate(todo):
+                s, rl = sessions_and_rls[i % n_workers]
+                futures[pool.submit(_fetch_one, acc, s, rl)] = acc
+            for fut in tqdm(as_completed(futures), total=len(futures),
+                            desc="Fetching InterPro annotations"):
+                if fut.result():
+                    n_with_annotations += 1
+                else:
+                    n_empty += 1
+    else:
+        session = requests.Session()
+        rate_limiter = RateLimiter(config.interpro_api_rate_limit)
+        for acc in tqdm(todo, desc="Fetching InterPro annotations"):
+            if _fetch_one(acc, session, rate_limiter):
+                n_with_annotations += 1
+            else:
+                n_empty += 1
 
     print(
         f"[interpro_fetch] Fetched annotations for {len(todo)} proteins "

@@ -421,7 +421,8 @@ function coordsToPdb(coords, chainId, startSerial, startResi) {
  * @returns {Promise<void>}
  */
 async function createMotifOverlayViewer(container, accession, activations, maxActivation,
-                                         caBackbone, peakPosition, motifPdb, motifLength) {
+                                         caBackbone, peakPosition, motifPdb, motifLength,
+                                         pdbUrl) {
     // Enforce WebGL limit
     if (_activeViewers.length >= MAX_WEBGL_CONTEXTS) {
         const oldest = _activeViewers.shift();
@@ -464,7 +465,8 @@ async function createMotifOverlayViewer(container, accession, activations, maxAc
     container.innerHTML = '<div class="viewer-placeholder"><div class="loading-spinner"></div> Loading structure...</div>';
     let pdbData;
     try {
-        const res = await fetch(`/api/pdb/${accession}`);
+        const fetchUrl = pdbUrl || `/api/pdb/${accession}`;
+        const res = await fetch(fetchUrl);
         if (!res.ok) {
             container.innerHTML = '<div class="viewer-placeholder">No structure available for ' + accession + '</div>';
             return;

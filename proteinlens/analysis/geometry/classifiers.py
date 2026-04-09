@@ -528,6 +528,9 @@ def train_motif_classifier(
         # Optimal threshold via CV precision-recall on held-out GBM probs
         all_probs = np.zeros(len(y))
         for train_idx, val_idx in cv.split(*cv_split_args):
+            if len(np.unique(y[train_idx])) < 2:
+                all_probs[val_idx] = 0.5
+                continue
             gbm_cv = GradientBoostingClassifier(
                 n_estimators=80, max_depth=3, learning_rate=0.1,
                 subsample=0.8,

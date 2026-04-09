@@ -421,6 +421,8 @@ class TestResidueLevelF1:
         residue-level F1 should be near 1.0."""
         config, activations = residue_enrichment_setup
 
+        npz_dir_map = {"TESTPROT": config.residue_activations_dir}
+
         # Build protein-level result to feed into residue-level
         protein_level_results = [{
             "annotation_code": "IPR999999",
@@ -445,7 +447,10 @@ class TestResidueLevelF1:
             protein_annotations=protein_annotations,
             feat_idx=0,
             feat_max=5.0,
-            config=config,
+            n_threshold_steps=config.interpro_f1_threshold_steps,
+            npz_cache={},
+            max_npz_cache=500,
+            npz_dir_map=npz_dir_map,
         )
 
         assert len(results) >= 1
@@ -459,6 +464,8 @@ class TestResidueLevelF1:
     def test_residue_counts_sensible(self, residue_enrichment_setup):
         """Domain residue count should be < total residues."""
         config, _ = residue_enrichment_setup
+
+        npz_dir_map = {"TESTPROT": config.residue_activations_dir}
 
         protein_level_results = [{
             "annotation_code": "IPR999999",
@@ -479,7 +486,10 @@ class TestResidueLevelF1:
             protein_annotations=protein_annotations,
             feat_idx=0,
             feat_max=5.0,
-            config=config,
+            n_threshold_steps=config.interpro_f1_threshold_steps,
+            npz_cache={},
+            max_npz_cache=500,
+            npz_dir_map=npz_dir_map,
         )
 
         assert len(results) >= 1

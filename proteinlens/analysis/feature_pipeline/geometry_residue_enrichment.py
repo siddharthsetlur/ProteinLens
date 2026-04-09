@@ -17,6 +17,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import warnings
+
 import numpy as np
 from tqdm import tqdm
 
@@ -159,6 +161,7 @@ def _precompute_plot_data(
 
 def _process_node(ni: int) -> tuple[int, str]:
     """Process a single SAE node. Returns (node_idx, 'fitted'|'skipped')."""
+    warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*empty slice.*|.*Degrees of freedom.*|.*invalid value.*")
     s = _shared
     act_matrix_full = s["act_matrix_full"]
     geom_cache = s["geom_cache"]
@@ -325,6 +328,7 @@ def _process_node(ni: int) -> tuple[int, str]:
 
 def run_geometry_residue_enrichment(config: PipelineConfig) -> None:
     """Stage 6c entry point."""
+    warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*empty slice.*|.*Degrees of freedom.*")
     global _shared
 
     enrichment_dir = config.geometry_enrichment_dir

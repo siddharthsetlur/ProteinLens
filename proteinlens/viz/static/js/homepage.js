@@ -287,6 +287,26 @@ function buildColumnDefs() {
             filter: "agTextColumnFilter",
         },
         {
+            field: "geometry_radar",
+            headerName: "Geom. Profile",
+            width: 80,
+            sortable: false,
+            filter: false,
+            cellRenderer: (params) => {
+                const radar = params.value;
+                if (!radar) return "";
+                const div = document.createElement("div");
+                div.style.cssText = "display:flex;align-items:center;justify-content:center;height:100%;";
+                const scores = [
+                    radar.curvature || 0, radar.torsion || 0,
+                    radar.planarity || 0, radar.compactness || 0,
+                    radar.contacts || 0, radar.composition || 0,
+                ];
+                renderRadarGlyph(div, scores, { size: 48, showLabels: false });
+                return div;
+            },
+        },
+        {
             field: "geometry_protein_r2_cv",
             headerName: "Geom. R2 CV",
             width: 130,
@@ -346,6 +366,8 @@ function initGrid(rowData) {
             const featureId = event.data.feature_id;
             window.location.href = `/feature/${featureId}`;
         },
+        // Taller rows to fit radar glyphs
+        rowHeight: 56,
         // Performance: row virtualization is on by default in AG Grid
         animateRows: false,
         suppressCellFocus: true,

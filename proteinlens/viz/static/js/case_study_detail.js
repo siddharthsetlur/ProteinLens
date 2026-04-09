@@ -93,12 +93,13 @@ function renderNodeComparison(container, member, featureData, interproData, geom
     section.style.border = "1px solid var(--pico-muted-border-color)";
     section.style.borderRadius = "8px";
 
-    // Header with node ID and metrics
+    // Header with node ID, metrics, and radar glyph
     const header = document.createElement("div");
     header.style.marginBottom = "0.75rem";
     header.innerHTML = `
         <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
             <a href="/feature/${member.feature_id}" style="font-size:1.2rem;font-weight:700;">Node ${member.feature_id}</a>
+            <span id="radar-node-${member.feature_id}" style="flex-shrink:0;"></span>
             <span class="badge badge-done">InterPro F1: ${fmtVal(member.interpro_res_f1)}</span>
             <span class="badge badge-done">Geom PR-AUC: ${fmtVal(member.geom_pr_auc)}</span>
             <span class="badge badge-count" style="font-family:monospace">${member.top_geometric_feature}</span>
@@ -106,6 +107,15 @@ function renderNodeComparison(container, member, featureData, interproData, geom
         </div>
     `;
     section.appendChild(header);
+
+    // Render inline radar glyph from member's feature importances
+    if (member.feature_importances && typeof aggregateToCategories === "function") {
+        const scores = aggregateToCategories(member.feature_importances);
+        if (scores) {
+            const radarSpan = header.querySelector(`#radar-node-${member.feature_id}`);
+            renderRadarGlyph(radarSpan, scores, { size: 52, showLabels: false });
+        }
+    }
 
     // Decision tree rules (compact)
     if (member.rules) {

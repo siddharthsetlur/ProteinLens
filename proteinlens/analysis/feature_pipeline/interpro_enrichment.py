@@ -58,6 +58,9 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
     Writes per-feature JSON files to ``config.interpro_enrichment_dir``
     and a summary to ``summary.json``.
 
+    Supports resumption: features with existing output JSON files are
+    skipped.  Their summary entries are loaded from the existing files.
+
     Args:
         config: Pipeline configuration.  Requires that Stages 5a and 5b
             have completed.
@@ -85,24 +88,105 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
         shape=(n_proteins, num_features),
     )
 
+    # ── Resolve directory paths once (each config property calls mkdir) ──
+    residue_act_dir = config.residue_activations_dir
+    interpro_act_dir = config.interpro_residue_activations_dir
+    interpro_cache_dir = config.interpro_cache_dir
+    enrichment_dir = config.interpro_enrichment_dir
+
+    # ── Pre-glob available .npz files once ──
+    # Record which directory each accession lives in for direct loading.
+    npz_dir_map: Dict[str, Path] = {}
+    for d in (residue_act_dir, interpro_act_dir):
+        if d.exists():
+            for p in d.glob("*.npz"):
+                # First directory wins (Stage 3 preferred over Stage 5a)
+                if p.stem not in npz_dir_map:
+                    npz_dir_map[p.stem] = d
+    print(f"[interpro_enrichment] {len(npz_dir_map)} .npz files available.")
+
+    # ── Preload ALL InterPro annotations into memory (one-time I/O) ──
+    # Each JSON is ~1-5 KB; 50K files ≈ 50-250 MB in memory.
+    # This replaces ~2.8M per-feature file reads with a single pass.
+    all_annotations: Dict[str, List[InterProDomain]] = {}
+    interpro_cached: Set[str] = set()
+    if interpro_cache_dir.exists():
+        cache_files = list(interpro_cache_dir.glob("*.json"))
+        print(f"[interpro_enrichment] Preloading {len(cache_files)} InterPro annotations...")
+        for p in tqdm(cache_files, desc="Loading InterPro cache", leave=False):
+            acc = p.stem
+            interpro_cached.add(acc)
+            try:
+                all_annotations[acc] = _load_cached(p)
+            except (json.JSONDecodeError, OSError):
+                all_annotations[acc] = []
+    print(f"[interpro_enrichment] {len(all_annotations)} annotations loaded into memory.")
+
+    # ── Pre-glob existing enrichment outputs for resume ──
+    already_computed: Set[int] = set()
+    if enrichment_dir.exists():
+        for p in enrichment_dir.glob("*.json"):
+            if p.stem == "summary":
+                continue
+            try:
+                already_computed.add(int(p.stem))
+            except ValueError:
+                pass
+    print(f"[interpro_enrichment] {len(already_computed)} features already computed.")
+
+    # ── NPZ LRU cache (shared across features) ──
+    _npz_cache: Dict[str, Optional[np.ndarray]] = {}
+    MAX_NPZ_CACHE = 500
+
+    # ── Rebuild summary from already-computed features ──
+    n_resumed = 0
+    summary_features: Dict[str, Dict[str, Any]] = {}
+    if already_computed:
+        for feat_idx in sorted(already_computed):
+            feat_key = str(feat_idx)
+            out_path = enrichment_dir / f"{feat_idx:04d}.json"
+            try:
+                with open(out_path, "r") as f:
+                    existing = json.load(f)
+                prot_results = existing.get("protein_level", [])
+                res_results = existing.get("residue_level", [])
+                if prot_results:
+                    top_prot = prot_results[0]
+                    entry: Dict[str, Any] = {
+                        "top_protein_annotation": top_prot["annotation_code"],
+                        "top_protein_annotation_name": top_prot["annotation_name"],
+                        "top_protein_f1": top_prot["best_f1"],
+                        "top_residue_annotation": None,
+                        "top_residue_f1": None,
+                    }
+                    if res_results:
+                        top_res = res_results[0]
+                        entry["top_residue_annotation"] = top_res["annotation_code"]
+                        entry["top_residue_f1"] = top_res["best_f1"]
+                    summary_features[feat_key] = entry
+                n_resumed += 1
+            except (json.JSONDecodeError, KeyError, OSError):
+                already_computed.discard(feat_idx)
+        print(f"[interpro_enrichment] Resumed {n_resumed} features from previous run.")
+
     # ── Process each feature ──
     n_analyzed = 0
     n_skipped = 0
-    summary_features: Dict[str, Dict[str, Any]] = {}
 
     for feat_idx in tqdm(range(num_features), desc="InterPro enrichment"):
+        if feat_idx in already_computed:
+            continue
+
+        feat_key = str(feat_idx)
         feat_max = float(global_max[feat_idx])
 
-        # Skip features that never fire
         if feat_max == 0:
             n_skipped += 1
             continue
 
-        feat_key = str(feat_idx)
         feat_selection = interpro_selection["per_feature"].get(feat_key, {})
         bins = feat_selection.get("bins", {})
 
-        # Collect all accessions from all bins with their max activations
         accessions_with_activations = _collect_accessions_with_activations(
             bins, acc_index, protein_maxes, feat_idx
         )
@@ -111,13 +195,12 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
             n_skipped += 1
             continue
 
-        # Load InterPro annotations for all proteins
-        protein_annotations = _load_annotations_for_proteins(
-            [acc for acc, _ in accessions_with_activations],
-            config.interpro_cache_dir,
-        )
+        # Look up annotations from the preloaded dict (zero I/O)
+        protein_annotations = {
+            acc: all_annotations.get(acc, [])
+            for acc, _ in accessions_with_activations
+        }
 
-        # Count proteins with any annotations
         n_with_annotations = sum(
             1 for acc, _ in accessions_with_activations
             if protein_annotations.get(acc)
@@ -127,7 +210,7 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
             n_skipped += 1
             continue
 
-        # ── Protein-level F1 (checklist 4.2) ──
+        # ── Protein-level F1 (vectorized) ──
         protein_level_results = _compute_protein_level_f1(
             accessions_with_activations=accessions_with_activations,
             protein_annotations=protein_annotations,
@@ -137,17 +220,19 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
             top_n=config.interpro_top_annotations,
         )
 
-        # ── Residue-level F1 (checklist 4.3) ──
+        # ── Residue-level F1 ──
         residue_level_results = _compute_residue_level_f1(
             protein_level_results=protein_level_results,
             protein_annotations=protein_annotations,
             feat_idx=feat_idx,
             feat_max=feat_max,
-            config=config,
+            n_threshold_steps=config.interpro_f1_threshold_steps,
+            npz_cache=_npz_cache,
+            max_npz_cache=MAX_NPZ_CACHE,
+            npz_dir_map=npz_dir_map,
         )
 
-        # ── Count only annotations that met the min_proteins threshold ──
-        # (i.e. those that actually went through the F1 threshold sweep)
+        # ── Count annotations that met the min_proteins threshold ──
         annotation_protein_counts: Dict[str, Set[str]] = {}
         for acc, _ in accessions_with_activations:
             for domain in protein_annotations.get(acc, []):
@@ -160,7 +245,7 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
             if len(prots) >= config.interpro_min_proteins
         )
 
-        # ── Write per-feature JSON (checklist 4.4) ──
+        # ── Write per-feature JSON ──
         enrichment_data = {
             "feature_id": feat_idx,
             "feature_max_activation": feat_max,
@@ -171,13 +256,12 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
             "residue_level": residue_level_results,
         }
 
-        out_path = config.interpro_enrichment_dir / f"{feat_idx:04d}.json"
+        out_path = enrichment_dir / f"{feat_idx:04d}.json"
         with open(out_path, "w") as f:
             json.dump(enrichment_data, f, indent=2)
 
         n_analyzed += 1
 
-        # ── Add to summary (checklist 4.5) ──
         if protein_level_results:
             top_prot = protein_level_results[0]
             summary_entry: Dict[str, Any] = {
@@ -193,31 +277,34 @@ def run_interpro_enrichment(config: PipelineConfig) -> None:
                 summary_entry["top_residue_f1"] = top_res["best_f1"]
             summary_features[feat_key] = summary_entry
 
-    # ── Write summary JSON (checklist 4.5) ──
+    # ── Write summary JSON ──
     summary = {
-        "n_features_analyzed": n_analyzed,
+        "n_features_analyzed": n_analyzed + n_resumed,
         "n_features_skipped": n_skipped,
         "features": summary_features,
     }
-    summary_path = config.interpro_enrichment_dir / "summary.json"
+    summary_path = enrichment_dir / "summary.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
+    if n_resumed:
+        print(f"[interpro_enrichment] Resumed: {n_resumed} features already computed.")
     print(
         f"[interpro_enrichment] Analyzed {n_analyzed} features, "
         f"skipped {n_skipped}. "
-        f"Wrote results to {config.interpro_enrichment_dir}/"
+        f"Wrote results to {enrichment_dir}/"
     )
     from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
 
     wlog({
         "interpro_enrichment/analyzed": n_analyzed,
+        "interpro_enrichment/resumed": n_resumed,
         "interpro_enrichment/skipped": n_skipped,
     })
 
 
 # ===================================================================
-# Protein-level F1 (checklist item 4.2)
+# Protein-level F1 — fully vectorized (checklist item 4.2)
 # ===================================================================
 
 
@@ -231,14 +318,9 @@ def _compute_protein_level_f1(
 ) -> List[Dict[str, Any]]:
     """Compute protein-level F1 for each annotation code.
 
-    For each unique InterPro annotation present across the selected
-    proteins, we sweep activation thresholds and find the one that best
-    separates proteins *with* the annotation (positive) from those
-    *without* (negative).
-
-    The sweep tests ``n_threshold_steps`` evenly-spaced thresholds from
-    0 to ``feat_max``.  At each threshold ``t``, a protein is predicted
-    positive if its max activation > t.
+    Fully vectorized: broadcasts all thresholds across all proteins in
+    numpy, then computes tp/fp/fn for every (code, threshold) pair via
+    matrix multiplication.  No Python loops over thresholds.
 
     Args:
         accessions_with_activations: List of ``(accession, max_activation)``
@@ -256,13 +338,13 @@ def _compute_protein_level_f1(
         descending.  Includes all annotations within 0.05 of the top
         F1 if there are ties.
     """
-    # Build arrays for efficient vectorised threshold sweep
     accessions = [acc for acc, _ in accessions_with_activations]
     activations = np.array(
         [act for _, act in accessions_with_activations], dtype=np.float64
     )
+    N = len(accessions)
 
-    # Collect all unique annotation codes and count occurrences
+    # Collect unique annotation codes and their protein sets
     annotation_proteins: Dict[str, Set[str]] = {}
     annotation_meta: Dict[str, Dict[str, str]] = {}
 
@@ -271,7 +353,6 @@ def _compute_protein_level_f1(
             code = domain.interpro_accession
             if code not in annotation_proteins:
                 annotation_proteins[code] = set()
-                # Store metadata from the first occurrence
                 annotation_meta[code] = {
                     "annotation_name": domain.interpro_name,
                     "annotation_type": domain.type,
@@ -280,7 +361,6 @@ def _compute_protein_level_f1(
                 }
             annotation_proteins[code].add(acc)
 
-    # Filter out annotations with too few proteins
     eligible_codes = [
         code for code, proteins in annotation_proteins.items()
         if len(proteins) >= min_proteins
@@ -289,71 +369,95 @@ def _compute_protein_level_f1(
     if not eligible_codes:
         return []
 
-    # Build threshold array: evenly spaced from 0 to feat_max
+    # Thresholds: (T,)
     thresholds = np.linspace(0, feat_max, n_threshold_steps + 1)
+    T = len(thresholds)
+
+    # y_pred for all thresholds at once: (T, N) bool
+    # y_pred[t, n] = activations[n] > thresholds[t]
+    y_pred_all = activations[np.newaxis, :] > thresholds[:, np.newaxis]  # (T, N)
+
+    # Precompute sum of predictions per threshold: (T,)
+    pred_sums = y_pred_all.sum(axis=1).astype(np.float64)
+
+    # Convert y_pred to float for matrix multiply
+    y_pred_float = y_pred_all.astype(np.float64)  # (T, N)
+
+    # Build y_true matrix for all eligible codes: (K, N)
+    acc_set_list = [annotation_proteins[code] for code in eligible_codes]
+    y_true_matrix = np.array(
+        [[1.0 if acc in s else 0.0 for acc in accessions] for s in acc_set_list],
+        dtype=np.float64,
+    )  # (K, N)
+
+    # true_sums[k] = number of proteins with annotation k
+    true_sums = y_true_matrix.sum(axis=1)  # (K,)
+
+    # tp[k, t] = sum(y_true[k] & y_pred[t]) via matmul
+    tp = y_true_matrix @ y_pred_float.T  # (K, T)
+
+    # fp[k, t] = pred_sums[t] - tp[k, t]
+    fp = pred_sums[np.newaxis, :] - tp  # (K, T)
+
+    # fn[k, t] = true_sums[k] - tp[k, t]
+    fn = true_sums[:, np.newaxis] - tp  # (K, T)
+
+    # Precision, recall, F1 with zero-safe division
+    with np.errstate(divide="ignore", invalid="ignore"):
+        precision = np.where(tp + fp > 0, tp / (tp + fp), 0.0)
+        recall = np.where(tp + fn > 0, tp / (tp + fn), 0.0)
+        pr_sum = precision + recall
+        f1 = np.where(pr_sum > 0, 2.0 * precision * recall / pr_sum, 0.0)
+
+    # For each code, find the threshold with the best F1
+    best_t_idx = f1.argmax(axis=1)  # (K,)
+    best_f1_vals = f1[np.arange(len(eligible_codes)), best_t_idx]
 
     results: List[Dict[str, Any]] = []
+    for i, code in enumerate(eligible_codes):
+        bf1 = float(best_f1_vals[i])
+        if bf1 == 0.0:
+            continue
+        ti = int(best_t_idx[i])
+        t = float(thresholds[ti])
+        meta = annotation_meta[code]
+        n_with = int(true_sums[i])
+        prec = float(precision[i, ti])
+        rec = float(recall[i, ti])
+        tp_val = int(tp[i, ti])
+        fp_val = int(fp[i, ti])
+        fn_val = int(fn[i, ti])
 
-    for code in eligible_codes:
-        # y_true: 1 if protein has this annotation, 0 otherwise
-        y_true = np.array(
-            [1 if acc in annotation_proteins[code] else 0 for acc in accessions],
-            dtype=np.int32,
-        )
+        results.append({
+            "annotation_code": code,
+            "annotation_name": meta["annotation_name"],
+            "annotation_type": meta["annotation_type"],
+            "member_db": meta["member_db"],
+            "member_accession": meta["member_accession"],
+            "best_f1": round(bf1, 4),
+            "best_threshold": round(t, 4),
+            "best_threshold_normalized": round(
+                t / feat_max if feat_max > 0 else 0.0, 4
+            ),
+            "precision_at_best": round(prec, 4),
+            "recall_at_best": round(rec, 4),
+            "n_proteins_with_annotation": n_with,
+            "n_proteins_without_annotation": N - n_with,
+            "n_true_positives": tp_val,
+            "n_false_positives": fp_val,
+            "n_false_negatives": fn_val,
+            "interpretation": (
+                f"Proteins with activation > {round(t, 2)} "
+                f"({round(t / feat_max * 100 if feat_max > 0 else 0, 0):.0f}% of max) "
+                f"are predicted by annotation {code} with F1={round(bf1, 2)}"
+            ),
+        })
 
-        best_f1 = 0.0
-        best_result: Optional[Dict[str, Any]] = None
-
-        for t in thresholds:
-            # y_pred: 1 if protein activation > threshold
-            y_pred = (activations > t).astype(np.int32)
-
-            tp, fp, fn, precision, recall, f1 = _compute_f1_from_arrays(
-                y_true, y_pred
-            )
-
-            if f1 > best_f1:
-                best_f1 = f1
-                n_with = int(y_true.sum())
-                n_without = len(y_true) - n_with
-                meta = annotation_meta[code]
-
-                best_result = {
-                    "annotation_code": code,
-                    "annotation_name": meta["annotation_name"],
-                    "annotation_type": meta["annotation_type"],
-                    "member_db": meta["member_db"],
-                    "member_accession": meta["member_accession"],
-                    "best_f1": round(f1, 4),
-                    "best_threshold": round(float(t), 4),
-                    "best_threshold_normalized": round(
-                        float(t) / feat_max if feat_max > 0 else 0.0, 4
-                    ),
-                    "precision_at_best": round(precision, 4),
-                    "recall_at_best": round(recall, 4),
-                    "n_proteins_with_annotation": n_with,
-                    "n_proteins_without_annotation": n_without,
-                    "n_true_positives": int(tp),
-                    "n_false_positives": int(fp),
-                    "n_false_negatives": int(fn),
-                    "interpretation": (
-                        f"Proteins with activation > {round(float(t), 2)} "
-                        f"({round(float(t) / feat_max * 100 if feat_max > 0 else 0, 0):.0f}% of max) "
-                        f"are predicted by annotation {code} with F1={round(f1, 2)}"
-                    ),
-                }
-
-        if best_result is not None:
-            results.append(best_result)
-
-    # Sort by best_f1 descending
     results.sort(key=lambda r: r["best_f1"], reverse=True)
 
-    # Keep top_n, but include all annotations within 0.05 of the best F1
     if results:
         best_f1_overall = results[0]["best_f1"]
         cutoff = best_f1_overall - 0.05
-        # Start with top_n, then extend to include ties
         n_keep = min(top_n, len(results))
         while n_keep < len(results) and results[n_keep]["best_f1"] >= cutoff:
             n_keep += 1
@@ -363,7 +467,7 @@ def _compute_protein_level_f1(
 
 
 # ===================================================================
-# Residue-level F1 (checklist item 4.3)
+# Residue-level F1 — vectorized threshold sweep (checklist item 4.3)
 # ===================================================================
 
 
@@ -372,7 +476,10 @@ def _compute_residue_level_f1(
     protein_annotations: Dict[str, List[InterProDomain]],
     feat_idx: int,
     feat_max: float,
-    config: PipelineConfig,
+    n_threshold_steps: int,
+    npz_cache: Dict[str, Optional[np.ndarray]],
+    max_npz_cache: int,
+    npz_dir_map: Dict[str, Path],
 ) -> List[Dict[str, Any]]:
     """Compute residue-level F1 for the top protein-level annotations.
 
@@ -380,10 +487,7 @@ def _compute_residue_level_f1(
     "does a residue being inside a domain boundary predict high activation
     at that position?"
 
-    We concatenate all residues across all proteins that have both this
-    annotation AND per-residue activation data, then sweep thresholds
-    on the activation values.  Thresholds are based on percentiles of
-    non-zero activations for better coverage of the activation distribution.
+    Threshold sweep is vectorized via numpy broadcasting.
 
     Args:
         protein_level_results: Output of ``_compute_protein_level_f1``.
@@ -391,7 +495,11 @@ def _compute_residue_level_f1(
         feat_idx: Feature index for extracting the correct column from
             per-residue activation matrices.
         feat_max: Global max activation for normalising thresholds.
-        config: Pipeline configuration (for directory paths and settings).
+        n_threshold_steps: Number of threshold steps for the sweep.
+        npz_cache: Mutable LRU cache of loaded activation arrays
+            (shared across features to avoid repeated cephfs reads).
+        max_npz_cache: Maximum entries in the npz cache.
+        npz_dir_map: Pre-built mapping of accession -> directory Path.
 
     Returns:
         List of residue-level result dicts, one per annotation tested.
@@ -401,45 +509,33 @@ def _compute_residue_level_f1(
     for prot_result in protein_level_results:
         code = prot_result["annotation_code"]
 
-        # Collect all proteins that have this annotation AND per-residue data
         all_activations_list: List[np.ndarray] = []
         all_labels_list: List[np.ndarray] = []
         n_proteins_used = 0
 
         for acc, domains in protein_annotations.items():
-            # Check if this protein has the annotation
             matching_domains = [
                 d for d in domains if d.interpro_accession == code
             ]
             if not matching_domains:
                 continue
 
-            # Try to load per-residue activations
-            residue_acts = load_residue_activations(acc, config)
+            residue_acts = _load_residue_cached(
+                acc, npz_cache, max_npz_cache, npz_dir_map,
+            )
             if residue_acts is None:
                 continue
 
-            # Extract the column for this feature
             if feat_idx >= residue_acts.shape[1]:
-                # PM FLAG: This should not happen if the SAE dimensions are
-                # consistent. If it does, we skip this protein silently.
                 continue
 
-            feat_acts = residue_acts[:, feat_idx]  # (seq_len,)
+            feat_acts = residue_acts[:, feat_idx]
             seq_len = len(feat_acts)
 
-            # Build residue-level labels: 1 if residue is inside any domain
-            # boundary for this annotation, 0 otherwise.
-            # InterPro positions are 1-based inclusive, so we convert to
-            # 0-based: residue i is in-domain if start-1 <= i <= end-1.
             labels = np.zeros(seq_len, dtype=np.int32)
             for d in matching_domains:
-                # Convert 1-based inclusive to 0-based inclusive
-                start_0 = d.start - 1
-                end_0 = d.end - 1
-                # Clamp to sequence length to avoid index errors
-                start_0 = max(0, start_0)
-                end_0 = min(seq_len - 1, end_0)
+                start_0 = max(0, d.start - 1)
+                end_0 = min(seq_len - 1, d.end - 1)
                 labels[start_0 : end_0 + 1] = 1
 
             all_activations_list.append(feat_acts)
@@ -449,70 +545,76 @@ def _compute_residue_level_f1(
         if n_proteins_used == 0:
             continue
 
-        # Concatenate across all proteins
         all_activations = np.concatenate(all_activations_list)
         all_labels = np.concatenate(all_labels_list)
         n_total_residues = len(all_labels)
         n_in_domain = int(all_labels.sum())
 
         if n_in_domain == 0 or n_in_domain == n_total_residues:
-            # All or none are in-domain — F1 is trivial/degenerate
             continue
 
-        # Sweep thresholds using percentiles of non-zero activations
-        # for better coverage of the activation distribution
         nonzero_acts = all_activations[all_activations > 0]
         if len(nonzero_acts) == 0:
             continue
 
         percentile_thresholds = np.percentile(
             nonzero_acts,
-            np.linspace(0, 100, config.interpro_f1_threshold_steps),
+            np.linspace(0, 100, n_threshold_steps),
         )
-        # Also include evenly-spaced absolute thresholds for coverage
-        linear_thresholds = np.linspace(0, feat_max, config.interpro_f1_threshold_steps)
+        linear_thresholds = np.linspace(0, feat_max, n_threshold_steps)
         thresholds = np.unique(
             np.concatenate([percentile_thresholds, linear_thresholds])
         )
 
-        best_f1 = 0.0
-        best_res_result: Optional[Dict[str, Any]] = None
+        # Vectorized threshold sweep: (T, R) bool via broadcasting
+        # all_activations: (R,), thresholds: (T,)
+        y_pred_all = all_activations[np.newaxis, :] > thresholds[:, np.newaxis]  # (T, R)
 
-        for t in thresholds:
-            y_pred = (all_activations > t).astype(np.int32)
-            tp, fp, fn, precision, recall, f1 = _compute_f1_from_arrays(
-                all_labels, y_pred
-            )
+        y_true = all_labels.astype(np.float64)  # (R,)
+        y_true_neg = 1.0 - y_true
 
-            if f1 > best_f1:
-                best_f1 = f1
-                best_res_result = {
-                    "annotation_code": code,
-                    "annotation_name": prot_result["annotation_name"],
-                    "member_db": prot_result["member_db"],
-                    "member_accession": prot_result["member_accession"],
-                    "best_f1": round(f1, 4),
-                    "best_threshold": round(float(t), 4),
-                    "best_threshold_normalized": round(
-                        float(t) / feat_max if feat_max > 0 else 0.0, 4
-                    ),
-                    "precision_at_best": round(precision, 4),
-                    "recall_at_best": round(recall, 4),
-                    "n_proteins_used": n_proteins_used,
-                    "n_total_residues": n_total_residues,
-                    "n_residues_in_domain": n_in_domain,
-                    "n_true_positives": int(tp),
-                    "n_false_positives": int(fp),
-                    "n_false_negatives": int(fn),
-                    "interpretation": (
-                        f"Residues with activation > {round(float(t), 2)} "
-                        f"({round(float(t) / feat_max * 100 if feat_max > 0 else 0, 0):.0f}% of max) "
-                        f"overlap with {code} domains with F1={round(f1, 2)}"
-                    ),
-                }
+        # tp[t] = sum(y_true & y_pred[t])
+        tp = y_pred_all.astype(np.float64) @ y_true           # (T,)
+        fp = y_pred_all.astype(np.float64) @ y_true_neg        # (T,)
+        fn = float(n_in_domain) - tp                            # (T,)
 
-        if best_res_result is not None:
-            results.append(best_res_result)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            precision = np.where(tp + fp > 0, tp / (tp + fp), 0.0)
+            recall = np.where(tp + fn > 0, tp / (tp + fn), 0.0)
+            pr_sum = precision + recall
+            f1 = np.where(pr_sum > 0, 2.0 * precision * recall / pr_sum, 0.0)
+
+        best_idx = int(f1.argmax())
+        best_f1 = float(f1[best_idx])
+
+        if best_f1 == 0.0:
+            continue
+
+        t = float(thresholds[best_idx])
+        results.append({
+            "annotation_code": code,
+            "annotation_name": prot_result["annotation_name"],
+            "member_db": prot_result["member_db"],
+            "member_accession": prot_result["member_accession"],
+            "best_f1": round(best_f1, 4),
+            "best_threshold": round(t, 4),
+            "best_threshold_normalized": round(
+                t / feat_max if feat_max > 0 else 0.0, 4
+            ),
+            "precision_at_best": round(float(precision[best_idx]), 4),
+            "recall_at_best": round(float(recall[best_idx]), 4),
+            "n_proteins_used": n_proteins_used,
+            "n_total_residues": n_total_residues,
+            "n_residues_in_domain": n_in_domain,
+            "n_true_positives": int(tp[best_idx]),
+            "n_false_positives": int(fp[best_idx]),
+            "n_false_negatives": int(fn[best_idx]),
+            "interpretation": (
+                f"Residues with activation > {round(t, 2)} "
+                f"({round(t / feat_max * 100 if feat_max > 0 else 0, 0):.0f}% of max) "
+                f"overlap with {code} domains with F1={round(best_f1, 2)}"
+            ),
+        })
 
     return results
 
@@ -553,6 +655,46 @@ def load_residue_activations(
     return None
 
 
+def _load_residue_cached(
+    accession: str,
+    npz_cache: Dict[str, Optional[np.ndarray]],
+    max_npz_cache: int,
+    npz_dir_map: Dict[str, Path],
+) -> Optional[np.ndarray]:
+    """Load per-residue activations with LRU caching — zero cephfs metadata ops.
+
+    Uses ``npz_dir_map`` (built from the startup glob) to go directly
+    to the file without any ``exists()`` or ``mkdir`` calls.
+
+    Args:
+        accession: UniProt accession string.
+        npz_cache: Mutable LRU cache dict (accession -> array or None).
+        max_npz_cache: Max entries before FIFO eviction.
+        npz_dir_map: Pre-built mapping of accession -> directory Path.
+
+    Returns:
+        Numpy array of shape ``(seq_len, num_features)``, or ``None``.
+    """
+    if accession not in npz_dir_map:
+        return None
+
+    if accession in npz_cache:
+        return npz_cache[accession]
+
+    npz_path = npz_dir_map[accession] / f"{accession}.npz"
+    try:
+        arr = np.load(npz_path)["activations"]
+    except (EOFError, OSError, KeyError):
+        arr = None
+
+    if len(npz_cache) >= max_npz_cache:
+        oldest_key = next(iter(npz_cache))
+        del npz_cache[oldest_key]
+
+    npz_cache[accession] = arr
+    return arr
+
+
 # ===================================================================
 # Internal helpers
 # ===================================================================
@@ -588,44 +730,14 @@ def _collect_accessions_with_activations(
                 continue
             seen.add(acc)
 
-            # Look up activation from the memmap
             if acc in acc_index:
                 row = int(acc_index[acc])
                 activation = float(protein_maxes[row, feat_idx])
             else:
-                # PM FLAG: This accession is in the selection but not in
-                # the memmap index. This shouldn't happen in a normal
-                # pipeline run. We include it with activation 0.0 but
-                # this may skew results.
                 activation = 0.0
 
             result.append((acc, activation))
 
-    return result
-
-
-def _load_annotations_for_proteins(
-    accessions: List[str],
-    cache_dir: Path,
-) -> Dict[str, List[InterProDomain]]:
-    """Load cached InterPro annotations for a list of proteins.
-
-    Args:
-        accessions: List of UniProt accession strings.
-        cache_dir: Directory containing cached InterPro JSON files
-            (one per protein, created by Stage 5b).
-
-    Returns:
-        Dict mapping accession to list of ``InterProDomain`` objects.
-        Proteins with no cache file are mapped to an empty list.
-    """
-    result: Dict[str, List[InterProDomain]] = {}
-    for acc in accessions:
-        cache_path = cache_dir / f"{acc}.json"
-        if cache_path.exists():
-            result[acc] = _load_cached(cache_path)
-        else:
-            result[acc] = []
     return result
 
 

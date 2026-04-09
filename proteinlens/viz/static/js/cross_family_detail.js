@@ -406,11 +406,21 @@ document.addEventListener("DOMContentLoaded", async () => {
             feat.interpro_families
         );
 
-        // 3. Feature importance
+        // 3. Feature importance + radar glyph
         renderImportanceChart(
             document.getElementById("importance-chart"),
             feat.feature_importances
         );
+        if (feat.feature_importances && typeof aggregateToCategories === "function") {
+            const scores = aggregateToCategories(feat.feature_importances);
+            if (scores) {
+                const radarDiv = document.createElement("div");
+                radarDiv.style.cssText = "margin:1rem auto; text-align:center;";
+                const chartEl = document.getElementById("importance-chart");
+                chartEl.parentNode.insertBefore(radarDiv, chartEl);
+                renderRadarWithLegend(radarDiv, scores, { size: 200 });
+            }
+        }
 
         // 4. Motif superposition
         if (geometryData) {

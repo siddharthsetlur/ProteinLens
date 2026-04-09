@@ -236,6 +236,55 @@ def get_case_study_families() -> dict[str, Any]:
         return json.load(f)
 
 
+@router.get("/nmpfam-case-study")
+def get_nmpfam_case_study() -> dict[str, Any]:
+    """Return the NMPFams case study JSON (404 if not built)."""
+    fpath = _data_dir / "nmpfam_case_study.json"
+    if not fpath.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="NMPFams case study not built. Run scripts/build_nmpfam_case_study.py first.",
+        )
+    with open(fpath) as f:
+        return json.load(f)
+
+
+@router.get("/feature/{feature_id}/nmpfam")
+def get_feature_nmpfam(feature_id: int) -> dict[str, Any]:
+    """
+    Return NMPFams novel protein annotation for a feature.
+    Returns 404 if NMPFams analysis hasn't been computed yet.
+    """
+    fpath = _data_dir / "nmpfam" / "nmpfam_enrichment" / f"{feature_id:04d}.json"
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail=f"NMPFams annotation for feature {feature_id} not found")
+    with open(fpath) as f:
+        return json.load(f)
+
+
+@router.get("/nmpfam-pdb/{family_id}")
+async def get_nmpfam_pdb(family_id: str) -> Response:
+    """
+    Proxy an NMPFams PDB file from the Fleming Institute API.
+    Streams on demand — no local caching.
+    """
+    if not re.match(r"^[A-Za-z0-9_-]+$", family_id):
+        raise HTTPException(status_code=400, detail=f"Invalid family ID: {family_id}")
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(f"https://bib.fleming.gr/NMPFamsDB/data/pdb/{family_id}.pdb")
+            if resp.status_code == 200:
+                return Response(
+                    content=resp.text,
+                    media_type="text/plain",
+                    headers={"Cache-Control": "max-age=86400"},
+                )
+    except httpx.HTTPError:
+        pass
+    raise HTTPException(status_code=404, detail=f"NMPFams PDB for {family_id} not found")
+
+
 @router.get("/interpro/{accession}")
 def get_interpro_cache(accession: str) -> dict[str, Any]:
     """

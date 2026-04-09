@@ -109,6 +109,8 @@ def build_pipeline_status(data_dir: Path) -> dict[str, Any]:
             return 0
         return sum(1 for f in d.iterdir() if f.suffix == ".json" and f.name != "summary.json")
 
+    nmpfam_count = count_jsons("nmpfam/nmpfam_enrichment")
+
     return {
         "completed_stages": completed_stages,
         "feature_count": count_jsons("features"),
@@ -116,6 +118,7 @@ def build_pipeline_status(data_dir: Path) -> dict[str, Any]:
         "geometry_count": count_jsons("geometry_enrichment"),
         "motif_count": count_jsons("motif_enrichment"),
         "position_count": count_jsons("position_enrichment"),
+        "nmpfam_count": nmpfam_count,
     }
 
 
@@ -193,6 +196,12 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
     else:
         geometry_features = _scan_geometry_files(data_dir / "geometry_enrichment")
 
+    # --- Load NMPFams hit counts ---
+    nmpfam_hits = _scan_nmpfam_files(data_dir / "nmpfam" / "nmpfam_enrichment")
+
+    # --- Load geometry radar data (category-aggregated feature importances) ---
+    geometry_radar = _build_geometry_radar(data_dir / "geometry_enrichment")
+
     # --- Load geometry-primary analysis ---
     gp_data = load_json(data_dir / "geometry_primary_analysis.json")
     gp_features = gp_data.get("features", {}) if gp_data else {}
@@ -218,6 +227,9 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
         # Geometry scores
         geom = geometry_features.get(fid_str, {})
 
+        # NMPFams hits
+        nmpf = nmpfam_hits.get(fid_str, {})
+
         # Geometry-primary classification
         gp = gp_features.get(fid_str, {})
 
@@ -237,6 +249,8 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
             "geometry_residue_pr_auc": geom.get("residue_pr_auc"),
             "is_geometry_primary": gp.get("is_geometry_primary"),
             "geometry_primary_score": gp.get("composite_score"),
+            "geometry_radar": geometry_radar.get(fid_str),
+            "n_nmpfam_hits": nmpf.get("n_nmpfam_hits"),
         }
         index.append(row)
 
@@ -399,4 +413,121 @@ def _scan_position_files(position_dir: Path) -> dict[str, dict]:
 
     if result:
         logger.info("Scanned %d position files, found %d with enrichment", len(result), len(result))
+    return result
+
+
+def _scan_nmpfam_files(nmpfam_dir: Path) -> dict[str, dict]:
+    """
+    Scan NMPFams enrichment JSONs to extract hit counts per feature.
+
+    Returns dict keyed by feature_id str -> {n_nmpfam_hits}.
+    """
+    if not nmpfam_dir.is_dir():
+        return {}
+
+    result = {}
+    for fpath in sorted(nmpfam_dir.iterdir()):
+        if fpath.suffix != ".json":
+            continue
+        data = load_json(fpath)
+        if not data:
+            continue
+
+        fid_str = str(data.get("feature_id", fpath.stem.lstrip("0") or "0"))
+        n_hits = data.get("n_nmpfam_hits", 0)
+        if n_hits > 0:
+            result[fid_str] = {"n_nmpfam_hits": n_hits}
+
+    if result:
+        logger.info("Found NMPFams hits for %d features", len(result))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Geometry radar: aggregate feature importances into 6 semantic categories
+# ---------------------------------------------------------------------------
+
+_RADAR_CATEGORY_MAP: dict[str, str] = {}
+_RADAR_CATEGORIES = {
+    "curvature": [
+        "curvature_mean", "curvature_max", "curvature_std",
+        "curv_N_third", "curv_centre_third", "curv_C_third",
+        "narrow_curvature_mean", "narrow_curvature_max",
+        "wide_curvature_mean", "wide_curvature_max",
+    ],
+    "torsion": [
+        "torsion_mean", "torsion_std", "torsion_frac_pos",
+        "tors_N_third", "tors_centre_third", "tors_C_third",
+        "narrow_torsion_mean", "narrow_torsion_std",
+        "wide_torsion_mean", "wide_torsion_std",
+    ],
+    "planarity": [
+        "planarity_mean", "planarity_std",
+        "plan_N_third", "plan_centre_third", "plan_C_third",
+    ],
+    "compactness": [
+        "tangent_alignment", "end_to_end_ratio",
+        "narrow_tangent_alignment", "narrow_end_to_end_ratio",
+        "wide_tangent_alignment", "wide_end_to_end_ratio",
+    ],
+    "contacts": [
+        "contact_density_8A", "contact_density_12A",
+        "long_range_contacts_8A", "long_range_contacts_12A",
+        "max_seq_sep_contact_8A", "mean_seq_sep_contact_8A",
+        "contact_order_local", "min_spatial_dist_long",
+    ],
+    "composition": [
+        "frac_hydrophobic", "frac_charged", "frac_polar",
+        "frac_gly_pro", "frac_aromatic",
+    ],
+}
+# Build reverse lookup: feature_name → category_name
+for _cat, _feats in _RADAR_CATEGORIES.items():
+    for _f in _feats:
+        _RADAR_CATEGORY_MAP[_f] = _cat
+
+
+def _aggregate_importances(importances: dict[str, float]) -> dict[str, float] | None:
+    """Sum feature importances by category, then normalize to sum=1."""
+    if not importances:
+        return None
+    scores = {cat: 0.0 for cat in _RADAR_CATEGORIES}
+    for feat, val in importances.items():
+        cat = _RADAR_CATEGORY_MAP.get(feat)
+        if cat:
+            scores[cat] += val
+    total = sum(scores.values())
+    if total == 0:
+        return None
+    return {cat: round(v / total, 4) for cat, v in scores.items()}
+
+
+def _build_geometry_radar(geometry_dir: Path) -> dict[str, dict]:
+    """
+    Scan geometry enrichment files and compute category-aggregated radar vectors.
+
+    Returns dict keyed by feature_id str → {curvature, torsion, planarity,
+    compactness, contacts, composition} with normalized scores summing to 1.
+    """
+    if not geometry_dir.is_dir():
+        return {}
+
+    result = {}
+    for fpath in sorted(geometry_dir.iterdir()):
+        if fpath.name == "summary.json" or fpath.suffix != ".json":
+            continue
+        data = load_json(fpath)
+        if not data:
+            continue
+
+        fid_str = str(data.get("feature_id", fpath.stem.lstrip("0") or "0"))
+        importances = (
+            data.get("geometric_residue_level", {}).get("feature_importances", {})
+        )
+        radar = _aggregate_importances(importances)
+        if radar:
+            result[fid_str] = radar
+
+    if result:
+        logger.info("Built geometry radar for %d features", len(result))
     return result

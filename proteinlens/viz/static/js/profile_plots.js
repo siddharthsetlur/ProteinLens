@@ -23,7 +23,7 @@
  * @param {HTMLElement} container    - DOM element to append all geometry plots to.
  * @param {Object} geometryData     - Full geometry enrichment JSON from the API.
  */
-function renderGeometryPlots(container, geometryData) {
+function renderGeometryPlots(container, geometryData, nmpfamData) {
     const plotData = geometryData.plot_data;
     if (!plotData || !plotData.top_proteins || plotData.top_proteins.length === 0) {
         container.innerHTML = '<p class="secondary">No geometry plot data available.</p>';
@@ -111,7 +111,8 @@ function renderGeometryPlots(container, geometryData) {
 
         // Motif-on-protein overlay: protein selector + 3D viewer
         renderMotifOverlaySelector(
-            motifSection, plotData.top_proteins, motif, geometryData.feature_max_activation || 1
+            motifSection, plotData.top_proteins, motif, geometryData.feature_max_activation || 1,
+            nmpfamData
         );
     }
 }
@@ -127,7 +128,7 @@ function renderGeometryPlots(container, geometryData) {
  * @param {Object} motif             - motif_superposition data.
  * @param {number} featureMaxAct     - Feature-level max activation.
  */
-function renderMotifOverlaySelector(parent, proteins, motif, featureMaxAct) {
+function renderMotifOverlaySelector(parent, proteins, motif, featureMaxAct, nmpfamData) {
     const motifLength = (motif.per_position_flexibility || []).length;
     if (!motif.mean_structure_pdb || motifLength === 0) return;
 
@@ -136,7 +137,6 @@ function renderMotifOverlaySelector(parent, proteins, motif, featureMaxAct) {
         p.ca_backbone && p.ca_backbone.length > 0 &&
         p.activated_positions && p.activated_positions.length > 0
     );
-    if (eligible.length === 0) return;
 
     const halfW = Math.floor((motifLength - 1) / 2);
 
@@ -146,8 +146,44 @@ function renderMotifOverlaySelector(parent, proteins, motif, featureMaxAct) {
             (a, b) => (b.activation > a.activation ? b : a),
             p.activated_positions[0]
         );
-        return { protein: p, peakPos: peak.position, peakAct: peak.activation };
+        return { protein: p, peakPos: peak.position, peakAct: peak.activation, isNmpfam: false };
     }).filter(o => o.peakPos >= halfW && o.peakPos + halfW < o.protein.ca_backbone.length);
+
+    // Add NMPFams proteins with geometry data
+    if (nmpfamData && nmpfamData.nmpfam_hits) {
+        for (const hit of nmpfamData.nmpfam_hits) {
+            if (!hit.geometry || !hit.geometry.ca_backbone || !hit.per_residue_activations) continue;
+            const acts = hit.per_residue_activations;
+            const ca = hit.geometry.ca_backbone;
+            if (ca.length === 0 || acts.length === 0) continue;
+
+            // Find peak activation position
+            let peakPos = 0, peakAct = 0;
+            for (let i = 0; i < acts.length; i++) {
+                if (acts[i] > peakAct) { peakAct = acts[i]; peakPos = i; }
+            }
+            if (peakPos < halfW || peakPos + halfW >= ca.length) continue;
+
+            // Build activated_positions list for the overlay
+            const activatedPositions = [];
+            for (let i = 0; i < acts.length; i++) {
+                if (acts[i] > 0) activatedPositions.push({ position: i, activation: acts[i] });
+            }
+
+            options.push({
+                protein: {
+                    accession: hit.family_id,
+                    ca_backbone: ca,
+                    sae_activation_profile: acts,
+                    activated_positions: activatedPositions,
+                    sequence: hit.sequence || "",
+                },
+                peakPos: peakPos,
+                peakAct: peakAct,
+                isNmpfam: true,
+            });
+        }
+    }
 
     if (options.length === 0) return;
 
@@ -171,7 +207,8 @@ function renderMotifOverlaySelector(parent, proteins, motif, featureMaxAct) {
     for (const opt of options) {
         const el = document.createElement("option");
         el.value = opt.protein.accession;
-        el.textContent = `${opt.protein.accession} (peak res ${opt.peakPos + 1}, act ${opt.peakAct.toFixed(3)})`;
+        const prefix = opt.isNmpfam ? "[NMPFam] " : "";
+        el.textContent = `${prefix}${opt.protein.accession} (peak res ${opt.peakPos + 1}, act ${opt.peakAct.toFixed(3)})`;
         select.appendChild(el);
     }
     wrapper.appendChild(select);
@@ -198,9 +235,15 @@ function renderMotifOverlaySelector(parent, proteins, motif, featureMaxAct) {
         const p = opt.protein;
         const activations = p.sae_activation_profile || [];
 
+        // NMPFams proteins use a different PDB endpoint
+        const pdbUrl = opt.isNmpfam
+            ? `/api/nmpfam-pdb/${p.accession}`
+            : `/api/pdb/${p.accession}`;
+
         createMotifOverlayViewer(
             viewerDiv, p.accession, activations, featureMaxAct,
-            p.ca_backbone, opt.peakPos, motif.mean_structure_pdb, motifLength
+            p.ca_backbone, opt.peakPos, motif.mean_structure_pdb, motifLength,
+            pdbUrl
         );
     }
 

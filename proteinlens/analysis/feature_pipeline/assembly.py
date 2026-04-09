@@ -99,12 +99,44 @@ def run_assembly(config: PipelineConfig) -> None:
     _npz_cache: Dict[str, np.ndarray] = {}
     MAX_NPZ_CACHE = 500
 
+    # Precompute the set of available .npz files once (single glob) to
+    # avoid per-protein per-feature cephfs exists() calls.
+    npz_available: Set[str] = set()
+    if config.residue_activations_dir.exists():
+        for p in config.residue_activations_dir.glob("*.npz"):
+            npz_available.add(p.stem)
+    print(f"[assembly] Residue activation files: {len(npz_available)} available.")
+
+    # Precompute PDB-available set once (single glob) to avoid per-protein
+    # per-feature cephfs glob calls inside _has_pdb().
+    pdb_accessions: Set[str] = set()
+    if config.pdb_cache_dir.exists():
+        import re
+        _af_pat = re.compile(r"AF-([^-]+)-F1-model_v")
+        for p in config.pdb_cache_dir.glob("*.pdb"):
+            m = _af_pat.match(p.name)
+            if m:
+                pdb_accessions.add(m.group(1))
+            else:
+                pdb_accessions.add(p.stem)
+    print(f"[assembly] PDB cache: {len(pdb_accessions)} structures available.")
+
     # Track all accessions that appear in the output (for sequences.json)
     all_referenced_accessions: Set[str] = set()
 
     # ── Assemble each feature ──
+    n_skipped = 0
     for feat_idx in tqdm(range(num_features), desc="Assembling features"):
         feat_key = str(feat_idx)
+        out_path = config.features_dir / f"{feat_idx:04d}.json"
+        if out_path.exists():
+            # Still track accessions from the selection data (cheap)
+            sel = selection["per_feature"].get(feat_key, {})
+            all_referenced_accessions.update(sel.get("top", []))
+            for accs in sel.get("bins", {}).values():
+                all_referenced_accessions.update(accs)
+            n_skipped += 1
+            continue
         feat_data = _assemble_single_feature(
             feat_idx=feat_idx,
             feat_max=float(global_max[feat_idx]),
@@ -117,6 +149,8 @@ def run_assembly(config: PipelineConfig) -> None:
             max_cache=MAX_NPZ_CACHE,
             protein_maxes=protein_maxes,
             acc_to_idx=acc_to_idx,
+            pdb_accessions=pdb_accessions,
+            npz_available=npz_available,
         )
 
         # Track referenced accessions
@@ -127,9 +161,11 @@ def run_assembly(config: PipelineConfig) -> None:
                 all_referenced_accessions.add(entry["accession"])
 
         # Write per-feature JSON
-        out_path = config.features_dir / f"{feat_idx:04d}.json"
         with open(out_path, "w") as f:
             json.dump(feat_data, f, indent=2)
+
+    if n_skipped:
+        print(f"[assembly] Resumed: skipped {n_skipped} already-assembled features.")
 
     # Report corrupt files encountered during assembly
     corrupt_count = sum(1 for v in _npz_cache.values() if v is None)
@@ -198,6 +234,8 @@ def _assemble_single_feature(
     max_cache: int,
     protein_maxes: Optional[np.ndarray] = None,
     acc_to_idx: Optional[Dict[str, int]] = None,
+    pdb_accessions: Optional[Set[str]] = None,
+    npz_available: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """Build the JSON dict for one feature.
 
@@ -250,7 +288,7 @@ def _assemble_single_feature(
         )
         entry = _build_protein_entry(
             acc, feat_idx, fallback_max,
-            sequences, config, npz_cache, max_cache,
+            sequences, config, npz_cache, max_cache, pdb_accessions, npz_available,
         )
         if entry is not None:
             top_sequences.append(entry)
@@ -272,7 +310,7 @@ def _assemble_single_feature(
             )
             entry = _build_protein_entry(
                 acc, feat_idx, fallback_max,
-                sequences, config, npz_cache, max_cache,
+                sequences, config, npz_cache, max_cache, pdb_accessions, npz_available,
             )
             if entry is not None:
                 bin_entries.append(entry)
@@ -340,6 +378,8 @@ def _build_protein_entry(
     config: PipelineConfig,
     npz_cache: Dict[str, np.ndarray],
     max_cache: int,
+    pdb_accessions: Optional[Set[str]] = None,
+    npz_available: Optional[Set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Build a protein entry dict for a single feature JSON.
 
@@ -365,7 +405,10 @@ def _build_protein_entry(
         return None
 
     seq = sequences[accession]
-    pdb_available = _has_pdb(accession, config.pdb_cache_dir)
+    if pdb_accessions is not None:
+        pdb_available = accession in pdb_accessions
+    else:
+        pdb_available = _has_pdb(accession, config.pdb_cache_dir)
 
     # Try to load per-residue activations
     per_residue: Optional[List[float]] = None
@@ -373,7 +416,8 @@ def _build_protein_entry(
     mean_activation = 0.0
 
     npz_path = config.residue_activations_dir / f"{accession}.npz"
-    if npz_path.exists():
+    has_npz = (accession in npz_available) if npz_available is not None else npz_path.exists()
+    if has_npz:
         # Load from cache or disk
         if accession not in npz_cache:
             if len(npz_cache) >= max_cache:
@@ -425,7 +469,7 @@ def _build_protein_entry(
         # (OOM crash).  We still include the entry with the survey max
         # but flag the missing data so the front-end can handle it.
         entry["per_residue_activations"] = None
-        if npz_path.exists() or npz_path.with_suffix(".npz.corrupt").exists():
+        if has_npz or npz_path.with_suffix(".npz.corrupt").exists():
             entry["skipped_reason"] = "corrupt_activation_file"
 
     return entry

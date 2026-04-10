@@ -852,10 +852,10 @@ def main() -> None:
         # Fallback: read from first available per-feature motif JSON
         motif_dir = data_dir / "motif_enrichment"
         if motif_dir.is_dir():
-            for mp in motif_dir.iterdir():
-                if mp.suffix == ".json" and mp.name != "summary.json":
+            for mf in motif_dir.iterdir():
+                if mf.suffix == ".json" and mf.name != "summary.json":
                     try:
-                        motif_k = json.loads(mp.read_text()).get("k", 3)
+                        motif_k = json.loads(mf.read_text()).get("k", 3)
                     except (json.JSONDecodeError, OSError, KeyError):
                         pass
                     break

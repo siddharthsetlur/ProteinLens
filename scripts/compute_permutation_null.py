@@ -593,6 +593,28 @@ def process_feature(
     return result
 
 
+# ── Module-level worker (must be picklable for ProcessPoolExecutor) ───
+
+_worker_state: dict[str, Any] = {}
+
+
+def _worker(fid: int) -> tuple[int, str, dict | None]:
+    """Process a single feature. Uses module-level _worker_state for shared data."""
+    s = _worker_state
+    try:
+        result = process_feature(
+            fid, s["data_dir"], s["n_permutations"], s["seed"], s["shared"],
+        )
+        if result is None:
+            return fid, "skipped", None
+        out_path = s["perm_dir"] / f"{fid:04d}.json"
+        out_path.write_text(json.dumps(result, indent=2))
+        return fid, "done", result
+    except Exception as e:
+        logger.error("Feature %d failed: %s", fid, e)
+        return fid, f"error: {e}", None
+
+
 # ── CLI ───────────────────────────────────────────────────────────────
 
 
@@ -766,17 +788,15 @@ def main() -> None:
 
     t0 = time.time()
 
-    def _worker(fid: int) -> tuple[int, str, dict | None]:
-        try:
-            result = process_feature(fid, data_dir, args.n_permutations, args.seed, shared)
-            if result is None:
-                return fid, "skipped", None
-            out_path = perm_dir / f"{fid:04d}.json"
-            out_path.write_text(json.dumps(result, indent=2))
-            return fid, "done", result
-        except Exception as e:
-            logger.error("Feature %d failed: %s", fid, e)
-            return fid, f"error: {e}", None
+    # Set module-level state for picklable worker function
+    global _worker_state
+    _worker_state.update({
+        "data_dir": data_dir,
+        "perm_dir": perm_dir,
+        "n_permutations": args.n_permutations,
+        "seed": args.seed,
+        "shared": shared,
+    })
 
     n_done = 0
     n_skipped = 0

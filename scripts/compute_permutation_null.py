@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import multiprocessing as mp
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -188,15 +189,21 @@ def _compute_domain_f1(
 
     idx = np.where(domain_labels)[0]
     tp = activated_matrix[:, idx].sum(axis=1).astype(float)
-    fp = float(len(idx)) - tp
-    fn = n_activated - tp
+    # Reuses the _compute_best_motif_f1 convention where the "annotation"
+    # (domain positions) is treated as the prediction and activation as the
+    # label.  The names below follow that convention for consistency:
+    #   fn_or_fp_a = domain positions not activated
+    #   fn_or_fp_b = activated positions not in domain
+    # F1 is symmetric in these terms so the result is correct regardless.
+    fn_or_fp_a = float(len(idx)) - tp
+    fn_or_fp_b = n_activated - tp
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        precision = np.where(tp + fp > 0, tp / (tp + fp), 0.0)
-        recall = np.where(tp + fn > 0, tp / (tp + fn), 0.0)
+        prec_or_rec_a = np.where(tp + fn_or_fp_a > 0, tp / (tp + fn_or_fp_a), 0.0)
+        prec_or_rec_b = np.where(tp + fn_or_fp_b > 0, tp / (tp + fn_or_fp_b), 0.0)
         f1 = np.where(
-            precision + recall > 0,
-            2 * precision * recall / (precision + recall),
+            prec_or_rec_a + prec_or_rec_b > 0,
+            2 * prec_or_rec_a * prec_or_rec_b / (prec_or_rec_a + prec_or_rec_b),
             0.0,
         )
     return float(f1.max()) if len(f1) > 0 else 0.0
@@ -310,6 +317,10 @@ def _load_gbm_and_predict(
             return None
 
         try:
+            # Uses function defaults which match PipelineConfig defaults:
+            #   act_quantile=0.80, max_fragments=100, bg_ratio=3, cv_folds=5
+            # If the pipeline was run with non-default config, the retrained
+            # GBM may differ.  This is acceptable since no saved GBM exists.
             frag_result = collect_node_fragments(protein_data, fid, half_w=half_w)
             activated = frag_result["activated"]
             background = frag_result["background"]
@@ -690,7 +701,12 @@ _worker_state: dict[str, Any] = {}
 
 
 def _worker(fid: int) -> tuple[int, str, dict | None]:
-    """Process a single feature. Uses module-level _worker_state for shared data."""
+    """Process a single feature. Uses module-level _worker_state for shared data.
+
+    Returns (fid, status, summary) where summary is a lightweight dict with
+    only p-values and metadata (not the full null distributions) to minimize
+    pickle transfer from worker to parent.
+    """
     s = _worker_state
     try:
         result = process_feature(
@@ -700,7 +716,15 @@ def _worker(fid: int) -> tuple[int, str, dict | None]:
             return fid, "skipped", None
         out_path = s["perm_dir"] / f"{fid:04d}.json"
         out_path.write_text(json.dumps(result, indent=2))
-        return fid, "done", result
+        # Return lightweight summary (p-values + metadata) instead of full
+        # result with null distributions to reduce pickle overhead.
+        summary = {
+            "p_values": result["p_values"],
+            "observed": result["observed"],
+            "n_proteins": result["n_proteins"],
+            "n_residues": result["n_residues"],
+        }
+        return fid, "done", summary
     except Exception as e:
         logger.error("Feature %d failed: %s", fid, e)
         return fid, f"error: {e}", None
@@ -959,7 +983,11 @@ def main() -> None:
             fid_result, status, result = _worker(fid)
             _handle_result(fid_result, status, result)
     else:
-        with ProcessPoolExecutor(max_workers=args.workers) as executor:
+        # Use fork context explicitly — _worker reads module-level _worker_state
+        # which is set in main() and must be visible to children via COW.
+        # spawn re-imports the module and sees empty _worker_state.
+        fork_ctx = mp.get_context("fork")
+        with ProcessPoolExecutor(max_workers=args.workers, mp_context=fork_ctx) as executor:
             futures = {executor.submit(_worker, fid): fid for fid in todo}
             pbar = tqdm(total=len(todo), desc="Permutation testing")
             for future in as_completed(futures):
@@ -988,7 +1016,8 @@ def main() -> None:
                 summary[f"pct_significant_{m}"] = round(100 * (arr < 0.05).mean(), 1)
                 summary[f"median_pvalue_{m}"] = round(float(np.median(arr)), 4)
                 # Log p-value histogram
-                wb_run.log({f"hist/{m}_pvalues": wandb.Histogram(arr, num_bins=20)})
+                import wandb as _wb
+                wb_run.log({f"hist/{m}_pvalues": _wb.Histogram(arr, num_bins=20)})
         wb_run.summary.update(summary)
         wb_run.finish()
 

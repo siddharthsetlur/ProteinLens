@@ -52,7 +52,7 @@ function getFeatureIdFromUrl() {
  * @param {Object|null} positionData - Position enrichment JSON, or null if 404.
  * @param {Object|null} gpInfo       - Geometry-primary info for this feature, or null.
  */
-function renderSummaryCards(container, featureData, interproData, geometryData, motifData, positionData, gpInfo) {
+function renderSummaryCards(container, featureData, interproData, geometryData, motifData, positionData, cathData, gpInfo) {
     container.innerHTML = "";
 
     const cov = featureData.dataset_coverage || {};
@@ -86,6 +86,9 @@ function renderSummaryCards(container, featureData, interproData, geometryData, 
 
     // --- Position F1 card ---
     container.appendChild(renderPositionCard(positionData));
+
+    // --- CATH F1 card ---
+    container.appendChild(renderCathCard(cathData));
 
     // --- Motif superposition card ---
     container.appendChild(renderMotifCard(geometryData));
@@ -391,6 +394,86 @@ function renderPositionCard(data) {
         ${otherPositions ? `<div class="detail" style="margin-top:0.3rem"><strong>Other top predicates:</strong> ${otherPositions}</div>` : ""}
         <div class="detail" style="margin-top:0.3rem">
             ${data.n_proteins_evaluated ?? "?"} proteins · ${data.n_total_residues ?? "?"} residues · ${data.n_predicates_tested ?? "?"} predicates tested
+        </div>
+    `);
+}
+
+/**
+ * Render the CATH enrichment card with per-hierarchy-level breakdown.
+ *
+ * Shows the best (max) residue F1 across all hierarchy levels as the headline,
+ * then a table with each level's best label and residue F1.
+ *
+ * @param {Object|null} data - CATH enrichment JSON from /api/feature/{id}/cath, or null if 404.
+ * @returns {HTMLElement}
+ */
+function renderCathCard(data) {
+    if (!data) return pendingCard("CATH F1");
+
+    const summary = data.summary || {};
+    const levels = ["C", "CA", "CAT", "CATH"];
+    const levelNames = { C: "Class", CA: "Architecture", CAT: "Topology", CATH: "Homology" };
+
+    // Find the best residue F1 across all levels
+    let bestF1 = 0;
+    let bestLevel = "";
+    for (const lvl of levels) {
+        const f1 = (summary[lvl] || {}).top_residue_f1 || 0;
+        if (f1 > bestF1) {
+            bestF1 = f1;
+            bestLevel = lvl;
+        }
+    }
+
+    if (bestF1 === 0) {
+        return createStatCard("CATH F1",
+            '<div class="detail">No CATH enrichment found</div>');
+    }
+
+    // Build per-level breakdown rows
+    const levelRows = levels.map((lvl) => {
+        const s = summary[lvl] || {};
+        const f1 = s.top_residue_f1 || 0;
+        const label = s.top_residue_label || "—";
+        const marker = lvl === bestLevel ? " <strong>&larr; best</strong>" : "";
+        return `<tr><td>${lvl} (${levelNames[lvl]})</td><td style="font-family:monospace">${label}</td><td>${fmtVal(f1)}</td><td>${marker}</td></tr>`;
+    }).join("");
+
+    // Protein-level best F1 (for context)
+    let proteinBestF1 = 0;
+    let proteinBestLabel = "";
+    for (const lvl of levels) {
+        const pf1 = (summary[lvl] || {}).top_protein_f1 || 0;
+        if (pf1 > proteinBestF1) {
+            proteinBestF1 = pf1;
+            proteinBestLabel = (summary[lvl] || {}).top_protein_label || "";
+        }
+    }
+
+    // Find detail metrics for the best residue level
+    const bestLevelResidues = (data.residue_level || {})[bestLevel] || [];
+    const bestEntry = bestLevelResidues.length > 0 ? bestLevelResidues[0] : null;
+    const detailHtml = bestEntry ? `
+        <div class="detail">
+            Precision: ${fmtVal(bestEntry.precision_at_best)} · Recall: ${fmtVal(bestEntry.recall_at_best)}
+        </div>
+        <div class="detail">
+            TP: ${bestEntry.n_true_positives ?? "—"} · FP: ${bestEntry.n_false_positives ?? "—"} · FN: ${bestEntry.n_false_negatives ?? "—"}
+        </div>
+    ` : "";
+
+    return createStatCard("CATH F1", `
+        <div class="value">Residue F1 = ${fmtVal(bestF1)}</div>
+        <table style="width:100%;font-size:0.85rem;margin:0.3rem 0">
+            <thead><tr><th>Level</th><th>Label</th><th>Res. F1</th><th></th></tr></thead>
+            <tbody>${levelRows}</tbody>
+        </table>
+        ${detailHtml}
+        <div class="detail" style="margin-top:0.3rem">
+            Protein-level best F1: ${fmtVal(proteinBestF1)} (<span style="font-family:monospace">${proteinBestLabel}</span>)
+        </div>
+        <div class="detail">
+            ${data.n_proteins_evaluated ?? "?"} proteins evaluated · ${data.n_proteins_with_cath ?? "?"} with CATH hits
         </div>
     `);
 }
@@ -741,12 +824,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
         // Fetch all endpoints in parallel
         // InterPro, Geometry, Motif, Position may 404 — that's expected for missing enrichment
-        const [featureRes, interproRes, geometryRes, motifRes, positionRes, gpRes, nmpfamRes] = await Promise.all([
+        const [featureRes, interproRes, geometryRes, motifRes, positionRes, cathRes, gpRes, nmpfamRes] = await Promise.all([
             fetch(`/api/feature/${featureId}`),
             fetch(`/api/feature/${featureId}/interpro`).catch(() => null),
             fetch(`/api/feature/${featureId}/geometry`).catch(() => null),
             fetch(`/api/feature/${featureId}/motif`).catch(() => null),
             fetch(`/api/feature/${featureId}/position`).catch(() => null),
+            fetch(`/api/feature/${featureId}/cath`).catch(() => null),
             fetch(`/api/geometry-primary`).catch(() => null),
             fetch(`/api/feature/${featureId}/nmpfam`).catch(() => null),
         ]);
@@ -760,6 +844,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const geometryData = geometryRes && geometryRes.ok ? await geometryRes.json() : null;
         const motifData = motifRes && motifRes.ok ? await motifRes.json() : null;
         const positionData = positionRes && positionRes.ok ? await positionRes.json() : null;
+        const cathData = cathRes && cathRes.ok ? await cathRes.json() : null;
         const nmpfamData = nmpfamRes && nmpfamRes.ok ? await nmpfamRes.json() : null;
 
         // Extract this feature's geometry-primary info
@@ -775,7 +860,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         // Section 1: Summary stats
         renderSummaryCards(
             document.getElementById("summary-cards"),
-            featureData, interproData, geometryData, motifData, positionData, gpInfo
+            featureData, interproData, geometryData, motifData, positionData, cathData, gpInfo
         );
 
         // Geometry Radar Profile (between summary and sequences)

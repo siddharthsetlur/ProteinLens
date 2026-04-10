@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sub-Domain Geometric Decomposition</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <main class="container-fluid">
+        <header>
+            <nav>
+                <ul><li><a href="/">&larr; Back to features</a></li></ul>
+                <ul><li><strong>Sub-Domain Geometric Decomposition</strong></li></ul>
+            </nav>
+        </header>
+
+        <section id="thesis">
+            <p>
+                Most geometry-primary features fire on proteins from a known InterPro family
+                (high protein-level F1), but their <em>residue-level</em> activation patterns
+                cannot be explained by the domain boundaries (low residue F1). When multiple
+                geometry-primary features share the same InterPro annotation, each captures a
+                <strong>distinct geometric sub-structure</strong> within the domain &mdash;
+                decomposing a single annotation into fine-grained structural components
+                (curvature, torsion, compactness, contacts, etc.).
+            </p>
+        </section>
+
+        <section id="global-stats-section">
+            <h3>Overview</h3>
+            <div id="global-stats" class="stats-grid"></div>
+        </section>
+
+        <section id="scatter-section">
+            <h3>Protein F1 vs Residue F1: The Granularity Gap</h3>
+            <div id="scatter-chart" style="width:100%;min-height:450px;"></div>
+        </section>
+
+        <section id="groups-section">
+            <h3>Annotation Groups</h3>
+            <p class="secondary">Each group shows an InterPro annotation with multiple geometry-primary features capturing different structural properties. Click a feature ID to view its detail page.</p>
+            <div id="groups-container"></div>
+        </section>
+    </main>
+
+    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
+    <script src="/static/js/subdomain_case_study.js"></script>
+</body>
+</html>

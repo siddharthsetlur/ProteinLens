@@ -17,6 +17,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import joblib
 import warnings
 
 import numpy as np
@@ -278,6 +279,24 @@ def _process_node(ni: int) -> tuple[int, str]:
         feature_importances=clf_result["feature_importances"],
         feat_cache=feat_cache,
     )
+
+    # Save GBM classifier for permutation testing
+    if clf_result["tree"] is not None:
+        gbm_dir = enrichment_dir.parent / "geometry_classifiers"
+        gbm_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            joblib.dump(clf_result["tree"], gbm_dir / f"{ni:04d}_gbm.pkl")
+            meta = {
+                "feature_id": ni,
+                "threshold_sae": float(threshold),
+                "threshold_geom": float(geom_threshold),
+                "half_w": half_w,
+                "n_pos": clf_result["n_pos"],
+                "n_neg": clf_result["n_neg"],
+            }
+            (gbm_dir / f"{ni:04d}_meta.json").write_text(json.dumps(meta))
+        except Exception as e:
+            logging.getLogger(__name__).warning("Failed to save GBM for node %d: %s", ni, e)
 
     motif_pdb = ""
     if sup_result["mean_structure"] is not None:

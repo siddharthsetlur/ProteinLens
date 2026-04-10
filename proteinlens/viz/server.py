@@ -90,6 +90,11 @@ def create_app(data_dir: Path) -> FastAPI:
         """Serve the case study detail page. JS reads annotation code from URL."""
         return FileResponse(STATIC_DIR / "case_study_detail.html")
 
+    @app.get("/subdomain-decomposition", response_class=FileResponse)
+    def subdomain_case_study_page():
+        """Serve the sub-domain geometric decomposition case study."""
+        return FileResponse(STATIC_DIR / "subdomain_case_study.html")
+
     @app.get("/nmpfam-case-study", response_class=FileResponse)
     def nmpfam_case_study_page():
         """Serve the NMPFams case study overview page."""

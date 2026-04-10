@@ -236,6 +236,20 @@ def get_case_study_families() -> dict[str, Any]:
         return json.load(f)
 
 
+@router.get("/subdomain-case-study")
+def get_subdomain_case_study() -> dict[str, Any]:
+    """Return sub-domain geometric decomposition case study (404 if not built)."""
+    fpath = _data_dir / "subdomain_case_study.json"
+    if not fpath.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Sub-domain case study not built. "
+            "Run scripts/build_subdomain_case_study.py first.",
+        )
+    with open(fpath) as f:
+        return json.load(f)
+
+
 @router.get("/nmpfam-case-study")
 def get_nmpfam_case_study() -> dict[str, Any]:
     """Return the NMPFams case study JSON (404 if not built)."""
@@ -245,6 +259,19 @@ def get_nmpfam_case_study() -> dict[str, Any]:
             status_code=404,
             detail="NMPFams case study not built. Run scripts/build_nmpfam_case_study.py first.",
         )
+    with open(fpath) as f:
+        return json.load(f)
+
+
+@router.get("/feature/{feature_id}/cath")
+def get_feature_cath(feature_id: int) -> dict[str, Any]:
+    """
+    Return CATH enrichment results for a feature.
+    Returns 404 if enrichment hasn't been computed yet.
+    """
+    fpath = _data_dir / "cath_enrichment" / f"{feature_id:04d}.json"
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail=f"CATH enrichment for feature {feature_id} not found")
     with open(fpath) as f:
         return json.load(f)
 

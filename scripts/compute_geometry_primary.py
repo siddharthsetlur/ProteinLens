@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compute geometry-primary latent analysis.
 
-Reads existing enrichment outputs (geometry, motif, position, InterPro) and
+Reads existing enrichment outputs (geometry, motif, position, InterPro, CATH) and
 identifies SAE latents whose activation is best explained by local 3D protein
 structure rather than sequence-level features.
 
@@ -86,7 +86,7 @@ GEOM_PR_AUC_THRESHOLD = 0.3
 
 def _load_enrichment_scores(data_dir: Path) -> dict:
     """Load all enrichment scores keyed by feature ID (int)."""
-    geom, motif, pos, ipro_res = {}, {}, {}, {}
+    geom, motif, pos, ipro_res, cath_res = {}, {}, {}, {}, {}
 
     geom_dir = data_dir / "geometry_enrichment"
     if geom_dir.is_dir():
@@ -139,7 +139,86 @@ def _load_enrichment_scores(data_dir: Path) -> dict:
                     x.get("best_f1", 0) for x in rl
                 )
 
-    return {"geom": geom, "motif": motif, "pos": pos, "ipro_res": ipro_res}
+    cath_dir = data_dir / "cath_enrichment"
+    if cath_dir.is_dir():
+        for fpath in cath_dir.iterdir():
+            if fpath.name == "summary.json" or fpath.suffix != ".json":
+                continue
+            d = json.loads(fpath.read_text())
+            summary = d.get("summary", {})
+            best_f1 = 0
+            for level in ("C", "CA", "CAT", "CATH"):
+                f1 = (summary.get(level) or {}).get("top_residue_f1") or 0
+                if f1 > best_f1:
+                    best_f1 = f1
+            if best_f1 > 0:
+                cath_res[d["feature_id"]] = best_f1
+
+    return {"geom": geom, "motif": motif, "pos": pos, "ipro_res": ipro_res, "cath_res": cath_res}
+
+
+def _benjamini_hochberg(pvals: np.ndarray) -> np.ndarray:
+    """Apply Benjamini-Hochberg FDR correction. Returns adjusted p-values."""
+    n = len(pvals)
+    if n == 0:
+        return pvals
+    sorted_idx = np.argsort(pvals)
+    sorted_pvals = pvals[sorted_idx]
+    adjusted = np.zeros(n)
+    # BH: p_adj[i] = min(p[i] * n / rank[i], 1.0), enforcing monotonicity
+    cum_min = 1.0
+    for i in range(n - 1, -1, -1):
+        rank = i + 1
+        adj = min(sorted_pvals[i] * n / rank, 1.0)
+        cum_min = min(cum_min, adj)
+        adjusted[sorted_idx[i]] = cum_min
+    return adjusted
+
+
+def _load_permutation_pvalues(data_dir: Path) -> dict | None:
+    """Load per-feature p-values from permutation null, apply BH FDR.
+
+    Returns dict: metric_name -> {feature_id (int) -> adjusted_pvalue}, or
+    None if permutation null data is not available.
+    """
+    perm_dir = data_dir / "permutation_null"
+    if not perm_dir.is_dir():
+        return None
+
+    metrics = ["motif_f1", "position_f1", "interpro_res_f1", "cath_res_f1", "geometry_prauc"]
+    raw: dict[str, dict[int, float]] = {m: {} for m in metrics}
+
+    n_loaded = 0
+    for fpath in perm_dir.iterdir():
+        if fpath.suffix != ".json":
+            continue
+        try:
+            d = json.loads(fpath.read_text())
+            fid = d["feature_id"]
+            pvals = d["p_values"]
+            for m in metrics:
+                if m in pvals:
+                    raw[m][fid] = pvals[m]
+            n_loaded += 1
+        except (json.JSONDecodeError, KeyError, OSError):
+            continue
+
+    if n_loaded == 0:
+        return None
+
+    # Apply BH FDR correction per metric
+    adjusted: dict[str, dict[int, float]] = {}
+    for m in metrics:
+        fids = sorted(raw[m].keys())
+        if not fids:
+            adjusted[m] = {}
+            continue
+        pvals_arr = np.array([raw[m][fid] for fid in fids])
+        padj = _benjamini_hochberg(pvals_arr)
+        adjusted[m] = {fid: float(padj[i]) for i, fid in enumerate(fids)}
+
+    print(f"  Loaded permutation p-values for {n_loaded} features, applied BH FDR")
+    return adjusted
 
 
 def _compute_null_thresholds(
@@ -148,7 +227,7 @@ def _compute_null_thresholds(
     """Compute p95 null thresholds from features with sparse activation."""
     cov_path = data_dir / "survey_coverage.json"
     if not cov_path.exists():
-        return {"motif_f1": 0.71, "position_f1": 0.12, "interpro_res_f1": 0.20}
+        return {"motif_f1": 0.71, "position_f1": 0.12, "interpro_res_f1": 0.20, "cath_res_f1": 0.20}
 
     cov = json.loads(cov_path.read_text())
     sparse_fids = set()
@@ -166,20 +245,23 @@ def _compute_null_thresholds(
         "motif_f1": _null_p95(scores["motif"], sparse_fids),
         "position_f1": _null_p95(scores["pos"], sparse_fids),
         "interpro_res_f1": _null_p95(scores["ipro_res"], sparse_fids),
+        "cath_res_f1": _null_p95(scores["cath_res"], sparse_fids),
         "n_sparse_features": len(sparse_fids),
     }
 
 
-def _classify_features(scores: dict, null_thresholds: dict) -> dict:
+def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict | None = None) -> dict:
     """Classify each feature and compute composite scores."""
     geom = scores["geom"]
     motif = scores["motif"]
     pos = scores["pos"]
     ipro_res = scores["ipro_res"]
+    cath_res = scores["cath_res"]
 
     motif_null = null_thresholds["motif_f1"]
     pos_null = null_thresholds["position_f1"]
     ipro_null = null_thresholds["interpro_res_f1"]
+    cath_null = null_thresholds["cath_res_f1"]
 
     features = {}
     n_primary = 0
@@ -188,6 +270,7 @@ def _classify_features(scores: dict, null_thresholds: dict) -> dict:
         m = motif.get(fid, 0)
         p = pos.get(fid, 0)
         ir = ipro_res.get(fid, 0)
+        cr = cath_res.get(fid, 0)
 
         # Sequence-derived feature fraction
         imps = g["importances"]
@@ -203,15 +286,28 @@ def _classify_features(scores: dict, null_thresholds: dict) -> dict:
         category = STRUCTURAL_CATEGORIES.get(top_feat, top_feat)
 
         # Best sequence F1 (excluding broken InterPro protein-level)
-        best_seq_f1 = max(m, p, ir)
+        best_seq_f1 = max(m, p, ir, cr)
 
         # Geometry-primary classification
-        is_primary = (
-            g["pr_auc"] > GEOM_PR_AUC_THRESHOLD
-            and m <= motif_null
-            and p <= pos_null
-            and ir <= ipro_null
-        )
+        if perm_pvalues is not None:
+            # Permutation-based: use BH-adjusted p-values
+            fdr_threshold = 0.05
+            is_primary = (
+                perm_pvalues["geometry_prauc"].get(fid, 1.0) < fdr_threshold
+                and perm_pvalues["motif_f1"].get(fid, 0.0) >= fdr_threshold
+                and perm_pvalues["position_f1"].get(fid, 0.0) >= fdr_threshold
+                and perm_pvalues["interpro_res_f1"].get(fid, 0.0) >= fdr_threshold
+                and perm_pvalues["cath_res_f1"].get(fid, 0.0) >= fdr_threshold
+            )
+        else:
+            # Fallback: sparse-feature null thresholds
+            is_primary = (
+                g["pr_auc"] > GEOM_PR_AUC_THRESHOLD
+                and m <= motif_null
+                and p <= pos_null
+                and ir <= ipro_null
+                and cr <= cath_null
+            )
 
         # Composite score
         score = g["pr_auc"] * (1 - seq_frac) * math.sqrt(max(g["f1"], 0.01))
@@ -229,11 +325,18 @@ def _classify_features(scores: dict, null_thresholds: dict) -> dict:
             "motif_f1": round(m, 4),
             "position_f1": round(p, 4),
             "interpro_res_f1": round(ir, 4),
+            "cath_res_f1": round(cr, 4),
             "best_seq_f1": round(best_seq_f1, 4),
             "seq_feature_fraction": round(seq_frac, 4),
             "top_geometric_feature": top_feat,
             "structural_category": category,
             "is_geometry_primary": is_primary,
+            # Permutation p-values (None if not available)
+            "geometry_prauc_padj": perm_pvalues["geometry_prauc"].get(fid) if perm_pvalues else None,
+            "motif_f1_padj": perm_pvalues["motif_f1"].get(fid) if perm_pvalues else None,
+            "position_f1_padj": perm_pvalues["position_f1"].get(fid) if perm_pvalues else None,
+            "interpro_res_f1_padj": perm_pvalues["interpro_res_f1"].get(fid) if perm_pvalues else None,
+            "cath_res_f1_padj": perm_pvalues["cath_res_f1"].get(fid) if perm_pvalues else None,
         }
 
     return features, n_primary
@@ -260,6 +363,7 @@ def _write_case_studies(
         f"- Motif F1 <= {null_thresholds['motif_f1']:.3f} (null p95)",
         f"- Position F1 <= {null_thresholds['position_f1']:.3f} (null p95)",
         f"- InterPro Residue F1 <= {null_thresholds['interpro_res_f1']:.3f} (null p95)",
+        f"- CATH Residue F1 <= {null_thresholds['cath_res_f1']:.3f} (null p95)",
         "",
         "Null thresholds estimated from features with <1% protein activation "
         f"(N={null_thresholds.get('n_sparse_features', '?')}).",
@@ -303,6 +407,7 @@ def _write_case_studies(
             f"| Motif F1 | {f['motif_f1']:.3f} (null p95: {null_thresholds['motif_f1']:.3f}) |",
             f"| Position F1 | {f['position_f1']:.3f} (null p95: {null_thresholds['position_f1']:.3f}) |",
             f"| InterPro Res F1 | {f['interpro_res_f1']:.3f} (null p95: {null_thresholds['interpro_res_f1']:.3f}) |",
+            f"| CATH Res F1 | {f['cath_res_f1']:.3f} (null p95: {null_thresholds['cath_res_f1']:.3f}) |",
             f"| Seq-derived fraction | {f['seq_feature_fraction']:.3f} |",
             f"| Structural category | {f['structural_category']} |",
             "",
@@ -333,7 +438,8 @@ def main() -> None:
     scores = _load_enrichment_scores(data_dir)
     print(
         f"  Geometry: {len(scores['geom'])}, Motif: {len(scores['motif'])}, "
-        f"Position: {len(scores['pos'])}, InterPro Res: {len(scores['ipro_res'])}"
+        f"Position: {len(scores['pos'])}, InterPro Res: {len(scores['ipro_res'])}, "
+        f"CATH Res: {len(scores['cath_res'])}"
     )
 
     print("Computing null thresholds from sparse features ...")
@@ -341,16 +447,23 @@ def main() -> None:
     print(f"  Motif F1 null p95: {null_thresholds['motif_f1']:.3f}")
     print(f"  Position F1 null p95: {null_thresholds['position_f1']:.3f}")
     print(f"  InterPro Res F1 null p95: {null_thresholds['interpro_res_f1']:.3f}")
+    print(f"  CATH Res F1 null p95: {null_thresholds['cath_res_f1']:.3f}")
     print(f"  Sparse features used: {null_thresholds.get('n_sparse_features', '?')}")
 
+    print("Loading permutation p-values (if available) ...")
+    perm_pvalues = _load_permutation_pvalues(data_dir)
+    if perm_pvalues is None:
+        print("  No permutation data found, using sparse-feature null thresholds")
+
     print("Classifying features ...")
-    features, n_primary = _classify_features(scores, null_thresholds)
+    features, n_primary = _classify_features(scores, null_thresholds, perm_pvalues)
     print(
         f"  {n_primary} geometry-primary out of {len(features)} "
         f"with geometry data ({100*n_primary/max(len(features),1):.1f}%)"
     )
 
     analysis = {
+        "method": "permutation" if perm_pvalues else "sparse_null",
         "null_thresholds": {
             k: round(v, 4) if isinstance(v, float) else v
             for k, v in null_thresholds.items()
@@ -360,6 +473,9 @@ def main() -> None:
         "n_features_with_geometry": len(features),
         "features": features,
     }
+    if perm_pvalues:
+        analysis["fdr_method"] = "benjamini-hochberg"
+        analysis["fdr_threshold"] = 0.05
 
     out_path = data_dir / "geometry_primary_analysis.json"
     with open(out_path, "w") as f:

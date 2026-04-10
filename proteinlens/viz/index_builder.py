@@ -118,6 +118,7 @@ def build_pipeline_status(data_dir: Path) -> dict[str, Any]:
         "geometry_count": count_jsons("geometry_enrichment"),
         "motif_count": count_jsons("motif_enrichment"),
         "position_count": count_jsons("position_enrichment"),
+        "cath_count": count_jsons("cath_enrichment"),
         "nmpfam_count": nmpfam_count,
     }
 
@@ -196,6 +197,9 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
     else:
         geometry_features = _scan_geometry_files(data_dir / "geometry_enrichment")
 
+    # --- Load CATH enrichment ---
+    cath_features = _scan_cath_files(data_dir / "cath_enrichment")
+
     # --- Load NMPFams hit counts ---
     nmpfam_hits = _scan_nmpfam_files(data_dir / "nmpfam" / "nmpfam_enrichment")
 
@@ -227,6 +231,9 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
         # Geometry scores
         geom = geometry_features.get(fid_str, {})
 
+        # CATH scores
+        cath = cath_features.get(fid_str, {})
+
         # NMPFams hits
         nmpf = nmpfam_hits.get(fid_str, {})
 
@@ -245,6 +252,8 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
             "motif_best_name": motif.get("best_motif"),
             "position_best_f1": posn.get("best_position_f1"),
             "position_best_name": posn.get("best_position"),
+            "cath_best_f1": cath.get("best_cath_f1"),
+            "cath_best_label": cath.get("best_cath_label"),
             "geometry_protein_r2_cv": geom.get("protein_r2_cv"),
             "geometry_residue_pr_auc": geom.get("residue_pr_auc"),
             "is_geometry_primary": gp.get("is_geometry_primary"),
@@ -255,12 +264,13 @@ def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
         index.append(row)
 
     logger.info(
-        "Built feature index: %d features, %d with interpro, %d with geometry, %d with motif, %d with position",
+        "Built feature index: %d features, %d with interpro, %d with geometry, %d with motif, %d with position, %d with cath",
         num_features,
         sum(1 for r in index if r["interpro_protein_best_f1"] is not None),
         sum(1 for r in index if r["geometry_protein_r2_cv"] is not None),
         sum(1 for r in index if r["motif_best_f1"] is not None),
         sum(1 for r in index if r["position_best_f1"] is not None),
+        sum(1 for r in index if r["cath_best_f1"] is not None),
     )
     return index
 
@@ -413,6 +423,48 @@ def _scan_position_files(position_dir: Path) -> dict[str, dict]:
 
     if result:
         logger.info("Scanned %d position files, found %d with enrichment", len(result), len(result))
+    return result
+
+
+def _scan_cath_files(cath_dir: Path) -> dict[str, dict]:
+    """
+    Scan CATH enrichment JSONs to extract best F1 scores.
+
+    For each feature, takes the max residue F1 across all hierarchy levels
+    (C, CA, CAT, CATH) from the summary block.
+
+    Returns dict keyed by feature_id str -> {best_cath_f1, best_cath_label}.
+    """
+    if not cath_dir.is_dir():
+        return {}
+
+    result = {}
+    for fpath in sorted(cath_dir.iterdir()):
+        if fpath.name == "summary.json" or fpath.suffix != ".json":
+            continue
+        data = load_json(fpath)
+        if not data:
+            continue
+
+        fid_str = str(data.get("feature_id", fpath.stem.lstrip("0") or "0"))
+        summary = data.get("summary", {})
+        best_f1 = 0
+        best_label = ""
+        for level in ("C", "CA", "CAT", "CATH"):
+            level_data = summary.get(level, {})
+            res_f1 = level_data.get("top_residue_f1") or 0
+            if res_f1 > best_f1:
+                best_f1 = res_f1
+                best_label = level_data.get("top_residue_label", "")
+
+        if best_f1 > 0:
+            result[fid_str] = {
+                "best_cath_f1": best_f1,
+                "best_cath_label": best_label,
+            }
+
+    if result:
+        logger.info("Scanned %d CATH files, found %d with enrichment", len(result), len(result))
     return result
 
 

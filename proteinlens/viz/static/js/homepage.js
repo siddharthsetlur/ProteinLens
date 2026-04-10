@@ -287,6 +287,15 @@ function buildColumnDefs() {
             filter: "agTextColumnFilter",
         },
         {
+            field: "cath_best_f1",
+            headerName: "CATH F1",
+            width: 110,
+            valueFormatter: nullFormatter(3),
+            cellStyle: greenScale(1.0),
+            comparator: nullBottomComparator,
+            filter: "agNumberColumnFilter",
+        },
+        {
             field: "geometry_radar",
             headerName: "Geom. Profile",
             width: 80,
@@ -535,6 +544,7 @@ function renderScatterPlots(index) {
     const csViridis = [[0,"#440154"],[0.25,"#3b528b"],[0.5,"#21918c"],[0.75,"#5ec962"],[1,"#fde725"]];
     const csFlare   = [[0,"#e98d6b"],[0.25,"#cc5b6a"],[0.5,"#8f3a84"],[0.75,"#4c2c7a"],[1,"#180e4a"]];
     const csCrest   = [[0,"#1a1530"],[0.25,"#1b6b72"],[0.5,"#36a66d"],[0.75,"#a0d55e"],[1,"#f0f921"]];
+    const csIce     = [[0,"#0b0405"],[0.25,"#2a4858"],[0.5,"#4e8a7e"],[0.75,"#8ec8a5"],[1,"#d6f5d6"]];
 
     const plots = [
         {
@@ -573,6 +583,15 @@ function renderScatterPlots(index) {
             ylabel: "Position F1",
             colorscale: csFlare,
         },
+        {
+            divId: "scatter-cath",
+            xField: "geometry_residue_pr_auc",
+            yField: "cath_best_f1",
+            title: "Geometry PR-AUC vs CATH F1",
+            xlabel: "Geometry PR-AUC",
+            ylabel: "CATH F1",
+            colorscale: csIce,
+        },
     ];
 
     for (const p of plots) {
@@ -588,6 +607,7 @@ function renderScatterPlots(index) {
                 r.interpro_residue_best_f1,
                 r.motif_best_f1,
                 r.position_best_f1,
+                r.cath_best_f1,
             ].filter((v) => v != null);
             if (f1s.length === 0 || r.geometry_residue_pr_auc == null) return null;
             return { ...r, best_f1: Math.max(...f1s) };
@@ -604,7 +624,7 @@ function renderScatterPlots(index) {
     // --- Geometry-primary plot (custom: gold highlights over grey density) ---
     const gpRows = index
         .map((r) => {
-            const seqF1s = [r.motif_best_f1, r.position_best_f1, r.interpro_residue_best_f1].filter((v) => v != null);
+            const seqF1s = [r.motif_best_f1, r.position_best_f1, r.interpro_residue_best_f1, r.cath_best_f1].filter((v) => v != null);
             if (r.geometry_residue_pr_auc == null) return null;
             return { ...r, best_seq_f1: seqF1s.length > 0 ? Math.max(...seqF1s) : 0 };
         })
@@ -688,7 +708,7 @@ function renderScatterPlots(index) {
     );
 
     // Click on any point -> navigate to feature page
-    const allScatterDivs = ["scatter-protein", "scatter-residue", "scatter-motif", "scatter-position", "scatter-best-f1", "scatter-geom-primary"];
+    const allScatterDivs = ["scatter-protein", "scatter-residue", "scatter-motif", "scatter-position", "scatter-cath", "scatter-best-f1", "scatter-geom-primary"];
     for (const divId of allScatterDivs) {
         document.getElementById(divId).on("plotly_click", (data) => {
             const fid = data.points[0].customdata;

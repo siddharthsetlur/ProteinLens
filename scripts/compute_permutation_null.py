@@ -95,23 +95,24 @@ def _pool_proteins(feature_data: dict) -> list[dict]:
 
 
 def _load_interpro_labels(
-    proteins: list[dict], interpro_cache_dir: Path
+    proteins: list[dict], interpro_file_set: set[str], interpro_cache_dir: Path
 ) -> np.ndarray | None:
     """Build pooled residue-level InterPro domain labels (1=inside, 0=outside).
 
     Returns 1D bool array of same length as pooled activations, or None if
     no InterPro data is available.
-    """
-    if not interpro_cache_dir.is_dir():
-        return None
 
+    Args:
+        interpro_file_set: Pre-globbed set of accession stems in interpro_cache_dir.
+    """
     labels = []
     any_domains = False
     for p in proteins:
         n = len(p["activations"])
         res_labels = np.zeros(n, dtype=bool)
-        cache_path = interpro_cache_dir / f"{p['accession']}.json"
-        if cache_path.exists():
+        acc = p["accession"]
+        if acc in interpro_file_set:
+            cache_path = interpro_cache_dir / f"{acc}.json"
             try:
                 domains = json.loads(cache_path.read_text())
                 for d in domains:
@@ -130,22 +131,23 @@ def _load_interpro_labels(
 
 
 def _load_cath_labels(
-    proteins: list[dict], cath_cache_dir: Path
+    proteins: list[dict], cath_file_set: set[str], cath_cache_dir: Path
 ) -> np.ndarray | None:
     """Build pooled residue-level CATH domain labels (1=inside, 0=outside).
 
     Takes max across all CATH hierarchy levels (any domain hit counts).
-    """
-    if not cath_cache_dir.is_dir():
-        return None
 
+    Args:
+        cath_file_set: Pre-globbed set of accession stems in cath_cache_dir.
+    """
     labels = []
     any_domains = False
     for p in proteins:
         n = len(p["activations"])
         res_labels = np.zeros(n, dtype=bool)
-        cache_path = cath_cache_dir / f"{p['accession']}.json"
-        if cache_path.exists():
+        acc = p["accession"]
+        if acc in cath_file_set:
+            cache_path = cath_cache_dir / f"{acc}.json"
             try:
                 hits = json.loads(cache_path.read_text())
                 for h in hits:
@@ -211,6 +213,7 @@ def _load_gbm_and_predict(
     fid: int,
     proteins: list[dict],
     data_dir: Path,
+    shared: dict,
 ) -> tuple[np.ndarray, np.ndarray, float, list[tuple[int, int]]] | None:
     """Load saved GBM, compute geometry predictions for all interior residues.
 
@@ -218,27 +221,28 @@ def _load_gbm_and_predict(
     for all interior residues, or None if GBM not available.
     The geom_protein_boundaries are (start, end) pairs into the returned arrays,
     NOT into the pooled all_activations array.
-    """
-    gbm_dir = data_dir / "geometry_classifiers"
-    gbm_path = gbm_dir / f"{fid:04d}_gbm.pkl"
-    meta_path = gbm_dir / f"{fid:04d}_meta.json"
 
-    if not gbm_path.exists() or not meta_path.exists():
+    Args:
+        shared: Dict with pre-loaded data to avoid per-feature I/O:
+            - geom_profile_files: set of accession stems with geometry profiles
+            - geom_profile_dir: Path to geometry_residue_profiles/
+            - act_file_map: dict mapping accession -> Path for .npz activation files
+            - gbm_files: set of fid stems with saved GBM models
+    """
+    gbm_files = shared.get("gbm_files", set())
+    padded = f"{fid:04d}"
+    if padded not in gbm_files:
         return None
 
+    gbm_dir = data_dir / "geometry_classifiers"
     try:
-        gbm = joblib.load(gbm_path)
-        meta = json.loads(meta_path.read_text())
+        gbm = joblib.load(gbm_dir / f"{padded}_gbm.pkl")
+        meta = json.loads((gbm_dir / f"{padded}_meta.json").read_text())
     except Exception:
         return None
 
     threshold = meta["threshold_sae"]
     half_w = meta["half_w"]
-
-    # Load geometry profiles
-    geom_path = data_dir / "geometry_protein_features.npz"
-    if not geom_path.exists():
-        return None
 
     # Import feature extraction
     from proteinlens.analysis.geometry.residue_features import (
@@ -246,32 +250,19 @@ def _load_gbm_and_predict(
         select_features,
     )
 
-    geom_data = np.load(geom_path, allow_pickle=True)
-    geom_accessions = set(str(a) for a in geom_data.get("accessions", []))
-
-    # Also try loading from per-protein npz files
-    geom_profile_dir = data_dir / "geometry_residue_profiles"
-    if not geom_accessions and geom_profile_dir.is_dir():
-        geom_accessions = {p.stem for p in geom_profile_dir.glob("*.npz")}
-
-    # Load residue activations for geometry computation
-    act_dir = data_dir / "residue_activations"
-    ipro_act_dir = data_dir / "interpro_residue_activations"
+    geom_profile_files = shared.get("geom_profile_files", set())
+    geom_profile_dir = shared["geom_profile_dir"]
+    act_file_map = shared.get("act_file_map", {})
 
     all_sae = []
     all_geom = []
-    geom_protein_boundaries = []  # (start, end) into the geometry arrays
+    geom_protein_boundaries = []
 
     for p in proteins:
         acc = p["accession"]
 
-        # Load per-residue activations from .npz
-        act_path = None
-        for d in [act_dir, ipro_act_dir]:
-            candidate = d / f"{acc}.npz"
-            if candidate.exists():
-                act_path = candidate
-                break
+        # Load per-residue activations from pre-mapped path
+        act_path = act_file_map.get(acc)
         if act_path is None:
             continue
 
@@ -284,27 +275,26 @@ def _load_gbm_and_predict(
         if n_residues < 2 * half_w + 1:
             continue
 
-        # Load geometry profiles for this protein
+        # Load geometry profiles (only if pre-globbed as available)
+        if acc not in geom_profile_files:
+            continue
+
         profiles = None
         ca = None
-
-        # Try per-protein npz
-        if geom_profile_dir.is_dir():
-            gp_path = geom_profile_dir / f"{acc}.npz"
-            if gp_path.exists():
-                try:
-                    gp = np.load(gp_path, allow_pickle=True)
-                    ca = np.array(gp["ca"])
-                    profiles = {
-                        "curvature": np.array(gp["curvature"]),
-                        "torsion": np.array(gp["torsion"]),
-                        "planarity": np.array(gp["planarity"]),
-                        "tangents": np.array(gp["tangents"]) if "tangents" in gp else None,
-                        "helix_mask": np.array(gp["helix_mask"]) if "helix_mask" in gp else None,
-                        "categories": np.array(gp["categories"]) if "categories" in gp else None,
-                    }
-                except Exception:
-                    pass
+        gp_path = geom_profile_dir / f"{acc}.npz"
+        try:
+            gp = np.load(gp_path, allow_pickle=True)
+            ca = np.array(gp["ca"])
+            profiles = {
+                "curvature": np.array(gp["curvature"]),
+                "torsion": np.array(gp["torsion"]),
+                "planarity": np.array(gp["planarity"]),
+                "tangents": np.array(gp["tangents"]) if "tangents" in gp else None,
+                "helix_mask": np.array(gp["helix_mask"]) if "helix_mask" in gp else None,
+                "categories": np.array(gp["categories"]) if "categories" in gp else None,
+            }
+        except Exception:
+            continue
 
         if ca is None or profiles is None:
             continue
@@ -371,17 +361,28 @@ def process_feature(
     data_dir: Path,
     n_permutations: int,
     seed: int,
+    shared: dict | None = None,
 ) -> dict[str, Any] | None:
     """Run permutation testing for a single feature across all 5 metrics.
 
+    Args:
+        shared: Pre-loaded shared data to avoid per-feature I/O on cephfs.
+            Must contain: feat_max_arr, interpro_file_set, cath_file_set,
+            geom_profile_files, geom_profile_dir, act_file_map, gbm_files.
+
     Returns the full result dict, or None if the feature cannot be processed.
     """
+    if shared is None:
+        shared = {}
+
     feat_path = data_dir / "features" / f"{fid:04d}.json"
     if not feat_path.exists():
         return None
 
     feature_data = json.loads(feat_path.read_text())
-    feat_max_arr = np.load(data_dir / "feature_max_activations.npy")
+    feat_max_arr = shared.get("feat_max_arr")
+    if feat_max_arr is None:
+        feat_max_arr = np.load(data_dir / "feature_max_activations.npy")
     feat_max = float(feat_max_arr[fid])
     if feat_max <= 0:
         return None
@@ -447,16 +448,18 @@ def process_feature(
     # 2. Position predicate indices
     predicate_indices = _build_predicate_indices(seq_lengths, total_residues)
 
-    # 3. InterPro domain labels
+    # 3. InterPro domain labels (using pre-globbed file set)
     interpro_cache_dir = data_dir / "interpro_cache"
-    interpro_labels = _load_interpro_labels(proteins, interpro_cache_dir)
+    interpro_file_set = shared.get("interpro_file_set", set())
+    interpro_labels = _load_interpro_labels(proteins, interpro_file_set, interpro_cache_dir)
 
-    # 4. CATH domain labels
+    # 4. CATH domain labels (using pre-globbed file set)
     cath_cache_dir = data_dir / "cath_enrichment" / "cache"
-    cath_labels = _load_cath_labels(proteins, cath_cache_dir)
+    cath_file_set = shared.get("cath_file_set", set())
+    cath_labels = _load_cath_labels(proteins, cath_file_set, cath_cache_dir)
 
-    # 5. Geometry PR-AUC (load GBM, get predictions)
-    geom_result = _load_gbm_and_predict(fid, proteins, data_dir)
+    # 5. Geometry PR-AUC (load GBM, get predictions; uses pre-globbed file sets)
+    geom_result = _load_gbm_and_predict(fid, proteins, data_dir, shared)
 
     # ── Compute observed scores ──
 
@@ -631,11 +634,11 @@ def main() -> None:
     perm_dir.mkdir(parents=True, exist_ok=True)
 
     # Discover features
-    feat_max = np.load(data_dir / "feature_max_activations.npy")
-    n_features = len(feat_max)
-    all_fids = [i for i in range(n_features) if feat_max[i] > 0]
+    feat_max_arr = np.load(data_dir / "feature_max_activations.npy")
+    n_features = len(feat_max_arr)
+    all_fids = [i for i in range(n_features) if feat_max_arr[i] > 0]
 
-    # Check for completed features (resume)
+    # Check for completed features (resume) — single glob
     done_fids = set()
     for fpath in perm_dir.glob("*.json"):
         try:
@@ -645,6 +648,58 @@ def main() -> None:
             pass
 
     todo = [fid for fid in all_fids if fid not in done_fids]
+
+    # ── Pre-glob all directories once to avoid per-feature stat() calls ──
+    print("Pre-globbing directories for cephfs I/O optimization...")
+
+    # InterPro cache: glob once, build accession set
+    interpro_cache_dir = data_dir / "interpro_cache"
+    interpro_file_set = set()
+    if interpro_cache_dir.is_dir():
+        interpro_file_set = {p.stem for p in interpro_cache_dir.glob("*.json")}
+    print(f"  InterPro cache: {len(interpro_file_set)} files")
+
+    # CATH cache: glob once
+    cath_cache_dir = data_dir / "cath_enrichment" / "cache"
+    cath_file_set = set()
+    if cath_cache_dir.is_dir():
+        cath_file_set = {p.stem for p in cath_cache_dir.glob("*.json")}
+    print(f"  CATH cache: {len(cath_file_set)} files")
+
+    # Geometry profiles: glob once
+    geom_profile_dir = data_dir / "geometry_residue_profiles"
+    geom_profile_files = set()
+    if geom_profile_dir.is_dir():
+        geom_profile_files = {p.stem for p in geom_profile_dir.glob("*.npz")}
+    print(f"  Geometry profiles: {len(geom_profile_files)} files")
+
+    # Residue activations: glob both dirs once, build accession -> path map
+    act_file_map: dict[str, Path] = {}
+    for act_dir_name in ("residue_activations", "interpro_residue_activations"):
+        act_dir = data_dir / act_dir_name
+        if act_dir.is_dir():
+            for p in act_dir.glob("*.npz"):
+                if p.stem not in act_file_map:
+                    act_file_map[p.stem] = p
+    print(f"  Residue activations: {len(act_file_map)} files")
+
+    # GBM classifiers: glob once
+    gbm_dir = data_dir / "geometry_classifiers"
+    gbm_files = set()
+    if gbm_dir.is_dir():
+        gbm_files = {p.stem.replace("_gbm", "") for p in gbm_dir.glob("*_gbm.pkl")}
+    print(f"  GBM classifiers: {len(gbm_files)} files")
+
+    # Shared data dict — passed to all workers to avoid per-feature I/O
+    shared = {
+        "feat_max_arr": feat_max_arr,
+        "interpro_file_set": interpro_file_set,
+        "cath_file_set": cath_file_set,
+        "geom_profile_files": geom_profile_files,
+        "geom_profile_dir": geom_profile_dir,
+        "act_file_map": act_file_map,
+        "gbm_files": gbm_files,
+    }
 
     print("=" * 60)
     print("Permutation Null Distribution Computation")
@@ -666,7 +721,7 @@ def main() -> None:
 
     def _worker(fid: int) -> tuple[int, str]:
         try:
-            result = process_feature(fid, data_dir, args.n_permutations, args.seed)
+            result = process_feature(fid, data_dir, args.n_permutations, args.seed, shared)
             if result is None:
                 return fid, "skipped"
             out_path = perm_dir / f"{fid:04d}.json"

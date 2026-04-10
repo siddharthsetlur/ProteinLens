@@ -225,26 +225,123 @@ def _load_gbm_and_predict(
             - act_file_map: dict mapping accession -> Path for .npz activation files
             - gbm_files: set of fid stems with saved GBM models
     """
-    gbm_files = shared.get("gbm_files", set())
-    padded = f"{fid:04d}"
-    if padded not in gbm_files:
-        return None
-
-    gbm_dir = data_dir / "geometry_classifiers"
-    try:
-        gbm = joblib.load(gbm_dir / f"{padded}_gbm.pkl")
-        meta = json.loads((gbm_dir / f"{padded}_meta.json").read_text())
-    except Exception:
-        return None
-
-    threshold = meta["threshold_sae"]
-    half_w = meta["half_w"]
-
-    # Import feature extraction
     from proteinlens.analysis.geometry.residue_features import (
         extract_local_feature_vector,
         select_features,
+        ACTIVE_GEOM_NAMES,
     )
+
+    gbm_files = shared.get("gbm_files", set())
+    padded = f"{fid:04d}"
+    gbm_dir = data_dir / "geometry_classifiers"
+    gbm = None
+    threshold = None
+    half_w = 10  # default
+
+    if padded in gbm_files:
+        # Load pre-saved GBM
+        try:
+            gbm = joblib.load(gbm_dir / f"{padded}_gbm.pkl")
+            meta = json.loads((gbm_dir / f"{padded}_meta.json").read_text())
+            threshold = meta["threshold_sae"]
+            half_w = meta["half_w"]
+        except Exception:
+            gbm = None
+
+    if gbm is None:
+        # Fallback: retrain GBM from geometry profiles + activations.
+        # Must replicate the pipeline's protein selection exactly: top 500
+        # proteins by activation from the full protein_feature_maxes memmap.
+        from proteinlens.analysis.geometry.classifiers import (
+            collect_node_fragments,
+            train_motif_classifier,
+        )
+
+        geom_profile_dir = shared["geom_profile_dir"]
+        geom_profile_files = shared.get("geom_profile_files", set())
+        act_file_map = shared.get("act_file_map", {})
+
+        # Load protein-level max activations (same as pipeline stage 6c)
+        act_matrix_full = shared.get("act_matrix_full")
+        row_to_acc = shared.get("row_to_acc")
+        if act_matrix_full is None or row_to_acc is None:
+            return None
+
+        # Select top 500 proteins by activation for this feature (matching pipeline)
+        node_col = act_matrix_full[:, fid]
+        active_rows = np.where(node_col > 0)[0]
+        if len(active_rows) > 500:
+            top_idx = np.argsort(node_col[active_rows])[-500:]
+            active_rows = active_rows[top_idx]
+
+        # Build protein_data matching pipeline format
+        protein_data = []
+        for row_idx in active_rows:
+            acc = row_to_acc.get(int(row_idx))
+            if acc is None or acc not in geom_profile_files:
+                continue
+            act_path = act_file_map.get(acc)
+            if act_path is None:
+                continue
+            try:
+                act_mat = np.load(act_path)["activations"]
+                gp = np.load(geom_profile_dir / f"{acc}.npz", allow_pickle=True)
+                ca = np.array(gp["ca"])
+                profiles = {k: np.array(gp[k])[:len(ca)]
+                            for k in ("curvature", "torsion", "planarity", "tangents", "helix_mask", "categories")
+                            if k in gp}
+                n = min(len(ca), act_mat.shape[0])
+                if n < 20:
+                    continue
+                seq_arr = gp.get("sequence", np.array([""]))
+                protein_data.append({
+                    "accession": acc,
+                    "act_matrix": act_mat[:n],
+                    "ca": ca[:n],
+                    "profiles": profiles,
+                    "n_residues": n,
+                    "sequence": str(seq_arr[0]) if len(seq_arr) > 0 else "",
+                })
+            except Exception:
+                continue
+
+        if len(protein_data) < 2:
+            return None
+
+        try:
+            frag_result = collect_node_fragments(protein_data, fid, half_w=half_w)
+            activated = frag_result["activated"]
+            background = frag_result["background"]
+            threshold = frag_result["threshold"]
+
+            if len(activated) < 20 or len(background) < 20:
+                return None
+
+            clf_result = train_motif_classifier(
+                activated, background,
+                feature_names=list(ACTIVE_GEOM_NAMES),
+            )
+            gbm = clf_result["tree"]
+            if gbm is None:
+                return None
+
+            # Save retrained GBM for future runs
+            gbm_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                joblib.dump(gbm, gbm_dir / f"{padded}_gbm.pkl")
+                meta = {
+                    "feature_id": fid,
+                    "threshold_sae": float(threshold),
+                    "threshold_geom": float(clf_result["optimal_threshold"]),
+                    "half_w": half_w,
+                    "n_pos": clf_result["n_pos"],
+                    "n_neg": clf_result["n_neg"],
+                }
+                (gbm_dir / f"{padded}_meta.json").write_text(json.dumps(meta))
+            except Exception:
+                pass
+        except Exception:
+            return None
 
     geom_profile_files = shared.get("geom_profile_files", set())
     geom_profile_dir = shared["geom_profile_dir"]
@@ -746,6 +843,26 @@ def main() -> None:
                     break
     print(f"  Motif k-mer length: {motif_k}")
 
+    # Protein-level activation matrix + accession index (for GBM retrain fallback)
+    # Matches the pipeline's protein selection: top 500 by activation from full memmap.
+    act_matrix_full = None
+    row_to_acc = None
+    pipeline_state_path = data_dir / "pipeline_state.json"
+    protein_maxes_path = data_dir / "protein_feature_maxes.npy"
+    if pipeline_state_path.exists() and protein_maxes_path.exists():
+        state = json.loads(pipeline_state_path.read_text())
+        acc_to_idx = state.get("accession_index", {})
+        row_to_acc = {v: k for k, v in acc_to_idx.items()}
+        n_proteins = len(acc_to_idx)
+        act_matrix_full = np.memmap(
+            protein_maxes_path, dtype="float32", mode="r",
+            shape=(n_proteins, len(feat_max_arr)),
+        )
+        print(f"  Protein maxes memmap: {n_proteins} x {len(feat_max_arr)}")
+    else:
+        print("  WARNING: protein_feature_maxes.npy or pipeline_state.json not found")
+        print("           GBM retrain fallback will be disabled for geometry PR-AUC")
+
     # Feature JSONs: glob once to avoid per-feature exists()
     features_dir = data_dir / "features"
     feature_json_fids = set()
@@ -768,6 +885,8 @@ def main() -> None:
         "gbm_files": gbm_files,
         "motif_k": motif_k,
         "feature_json_fids": feature_json_fids,
+        "act_matrix_full": act_matrix_full,
+        "row_to_acc": row_to_acc,
     }
 
     print("=" * 60)

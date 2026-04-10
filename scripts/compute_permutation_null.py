@@ -620,7 +620,27 @@ def main() -> None:
         "--workers", type=int, default=1,
         help="Number of parallel workers (default: 1)",
     )
+    parser.add_argument(
+        "--wandb", action="store_true",
+        help="Log progress and summary statistics to Weights & Biases",
+    )
     args = parser.parse_args()
+
+    # ── Optional W&B init ──
+    wb_run = None
+    if args.wandb:
+        import wandb
+        wb_run = wandb.init(
+            project="proteinlens-pipeline",
+            name="permutation-null",
+            tags=["permutation", "null-distribution"],
+            config={
+                "n_permutations": args.n_permutations,
+                "seed": args.seed,
+                "workers": args.workers,
+                "data_dir": str(args.data_dir),
+            },
+        )
 
     data_dir = args.data_dir
     perm_dir = data_dir / "permutation_null"
@@ -746,48 +766,95 @@ def main() -> None:
 
     t0 = time.time()
 
-    def _worker(fid: int) -> tuple[int, str]:
+    def _worker(fid: int) -> tuple[int, str, dict | None]:
         try:
             result = process_feature(fid, data_dir, args.n_permutations, args.seed, shared)
             if result is None:
-                return fid, "skipped"
+                return fid, "skipped", None
             out_path = perm_dir / f"{fid:04d}.json"
             out_path.write_text(json.dumps(result, indent=2))
-            return fid, "done"
+            return fid, "done", result
         except Exception as e:
             logger.error("Feature %d failed: %s", fid, e)
-            return fid, f"error: {e}"
+            return fid, f"error: {e}", None
 
     n_done = 0
     n_skipped = 0
     n_error = 0
+    # Collect p-values for final summary
+    all_pvalues: dict[str, list[float]] = {
+        "motif_f1": [], "position_f1": [], "interpro_res_f1": [],
+        "cath_res_f1": [], "geometry_prauc": [],
+    }
+
+    def _handle_result(fid_result: int, status: str, result: dict | None) -> None:
+        nonlocal n_done, n_skipped, n_error
+        if status == "done":
+            n_done += 1
+            if result and wb_run:
+                pv = result.get("p_values", {})
+                wb_run.log({
+                    "progress/completed": n_done + len(done_fids),
+                    "progress/total": len(all_fids),
+                    "progress/pct": 100 * (n_done + len(done_fids)) / max(len(all_fids), 1),
+                    "feature/id": fid_result,
+                    "feature/n_proteins": result.get("n_proteins", 0),
+                    "feature/n_residues": result.get("n_residues", 0),
+                    "pvalue/motif_f1": pv.get("motif_f1", 1.0),
+                    "pvalue/position_f1": pv.get("position_f1", 1.0),
+                    "pvalue/interpro_res_f1": pv.get("interpro_res_f1", 1.0),
+                    "pvalue/cath_res_f1": pv.get("cath_res_f1", 1.0),
+                    "pvalue/geometry_prauc": pv.get("geometry_prauc", 1.0),
+                    "observed/geometry_prauc": result.get("observed", {}).get("geometry_prauc", 0),
+                    "observed/motif_f1": result.get("observed", {}).get("motif_f1", 0),
+                })
+            if result:
+                for m in all_pvalues:
+                    pv = result.get("p_values", {}).get(m)
+                    if pv is not None:
+                        all_pvalues[m].append(pv)
+        elif status == "skipped":
+            n_skipped += 1
+        else:
+            n_error += 1
 
     if args.workers <= 1:
         for fid in tqdm(todo, desc="Permutation testing"):
-            fid_result, status = _worker(fid)
-            if status == "done":
-                n_done += 1
-            elif status == "skipped":
-                n_skipped += 1
-            else:
-                n_error += 1
+            fid_result, status, result = _worker(fid)
+            _handle_result(fid_result, status, result)
     else:
         with ProcessPoolExecutor(max_workers=args.workers) as executor:
             futures = {executor.submit(_worker, fid): fid for fid in todo}
             pbar = tqdm(total=len(todo), desc="Permutation testing")
             for future in as_completed(futures):
-                fid_result, status = future.result()
-                if status == "done":
-                    n_done += 1
-                elif status == "skipped":
-                    n_skipped += 1
-                else:
-                    n_error += 1
+                fid_result, status, result = future.result()
+                _handle_result(fid_result, status, result)
                 pbar.update(1)
             pbar.close()
 
     elapsed = time.time() - t0
     print(f"\nDone in {elapsed:.1f}s: {n_done} completed, {n_skipped} skipped, {n_error} errors")
+
+    # ── Final W&B summary ──
+    if wb_run:
+        summary = {
+            "total_features": len(all_fids),
+            "completed": n_done + len(done_fids),
+            "skipped": n_skipped,
+            "errors": n_error,
+            "resumed_from": len(done_fids),
+            "elapsed_seconds": elapsed,
+        }
+        for m, pvals in all_pvalues.items():
+            if pvals:
+                arr = np.array(pvals)
+                summary[f"n_significant_{m}"] = int((arr < 0.05).sum())
+                summary[f"pct_significant_{m}"] = round(100 * (arr < 0.05).mean(), 1)
+                summary[f"median_pvalue_{m}"] = round(float(np.median(arr)), 4)
+                # Log p-value histogram
+                wb_run.log({f"hist/{m}_pvalues": wandb.Histogram(arr, num_bins=20)})
+        wb_run.summary.update(summary)
+        wb_run.finish()
 
 
 if __name__ == "__main__":

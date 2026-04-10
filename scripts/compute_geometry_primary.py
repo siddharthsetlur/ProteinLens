@@ -290,7 +290,11 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
 
         # Geometry-primary classification
         if perm_pvalues is not None:
-            # Permutation-based: use BH-adjusted p-values
+            # Permutation-based: use BH-adjusted p-values.
+            # Defaults: geometry=1.0 (not significant → excluded),
+            # sequence metrics=0.0 (significant → excluded).  This is
+            # conservative: features without full permutation data are
+            # never classified as geometry-primary.
             fdr_threshold = 0.05
             is_primary = (
                 perm_pvalues["geometry_prauc"].get(fid, 1.0) < fdr_threshold

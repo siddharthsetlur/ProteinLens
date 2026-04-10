@@ -173,6 +173,12 @@ def _compute_domain_f1(
 
     Same logic as the motif/position F1 but with a single "annotation"
     (inside-domain vs outside-domain).
+
+    Note: uses a linear threshold grid (n_steps points) rather than the
+    pipeline's hybrid percentile+linear grid.  The permutation test is
+    internally consistent (same grid for observed and null), so p-values
+    are valid.  The absolute observed F1 may differ slightly from the
+    pipeline's reported F1.
     """
     N = len(all_activations)
     if N == 0 or feat_max <= 0 or domain_labels.sum() == 0:
@@ -205,11 +211,13 @@ def _load_gbm_and_predict(
     fid: int,
     proteins: list[dict],
     data_dir: Path,
-) -> tuple[np.ndarray, np.ndarray, float] | None:
+) -> tuple[np.ndarray, np.ndarray, float, list[tuple[int, int]]] | None:
     """Load saved GBM, compute geometry predictions for all interior residues.
 
-    Returns (sae_activations, geom_predictions, threshold) for all interior
-    residues, or None if GBM not available.
+    Returns (sae_activations, geom_predictions, threshold, geom_protein_boundaries)
+    for all interior residues, or None if GBM not available.
+    The geom_protein_boundaries are (start, end) pairs into the returned arrays,
+    NOT into the pooled all_activations array.
     """
     gbm_dir = data_dir / "geometry_classifiers"
     gbm_path = gbm_dir / f"{fid:04d}_gbm.pkl"
@@ -252,6 +260,7 @@ def _load_gbm_and_predict(
 
     all_sae = []
     all_geom = []
+    geom_protein_boundaries = []  # (start, end) into the geometry arrays
 
     for p in proteins:
         acc = p["accession"]
@@ -305,6 +314,7 @@ def _load_gbm_and_predict(
         seq = p.get("sequence", "")
 
         # Extract features and predict for interior residues
+        protein_start = len(all_sae)
         for pos in range(half_w, n - half_w):
             fv = extract_local_feature_vector(profiles, ca, pos, half_w, seq)
             if fv is None:
@@ -319,10 +329,14 @@ def _load_gbm_and_predict(
             all_sae.append(float(sae_col[pos]))
             all_geom.append(geom_prob)
 
+        protein_end = len(all_sae)
+        if protein_end > protein_start:
+            geom_protein_boundaries.append((protein_start, protein_end))
+
     if len(all_sae) < 20:
         return None
 
-    return np.array(all_sae), np.array(all_geom), threshold
+    return np.array(all_sae), np.array(all_geom), threshold, geom_protein_boundaries
 
 
 # ── Within-protein shuffle ────────────────────────────────────────────
@@ -397,15 +411,35 @@ def process_feature(
 
     # ── Build annotation structures (fixed, not shuffled) ──
 
-    # 1. K-mer indices
-    k = 3
-    all_kmers = []
+    # 1. K-mer indices and k-mer-filtered activation array
+    #    The pipeline builds both k-mer indices and activations from the same
+    #    filtered extraction (skipping non-standard AAs and boundary residues),
+    #    so we must do the same here for consistency.
+    #    Read k from existing motif enrichment to match pipeline config.
+    k = 3  # default
+    motif_json_path = data_dir / "motif_enrichment" / f"{fid:04d}.json"
+    if motif_json_path.exists():
+        try:
+            k = json.loads(motif_json_path.read_text()).get("k", 3)
+        except (json.JSONDecodeError, OSError):
+            pass
+    all_kmers: list[str] = []
+    motif_acts: list[float] = []
+    motif_protein_boundaries: list[tuple[int, int]] = []
+    motif_offset = 0
     for p in proteins:
         pairs = _extract_kmers_with_activations(p["sequence"], p["activations"].tolist(), k)
-        for kmer, _ in pairs:
+        protein_start = motif_offset
+        for kmer, act in pairs:
             all_kmers.append(kmer)
+            motif_acts.append(act)
+            motif_offset += 1
+        if motif_offset > protein_start:
+            motif_protein_boundaries.append((protein_start, motif_offset))
 
-    kmer_indices = {}
+    motif_activations = np.array(motif_acts, dtype=np.float64)
+
+    kmer_indices: dict[str, list[int]] = {}
     for i, kmer in enumerate(all_kmers):
         kmer_indices.setdefault(kmer, []).append(i)
     kmer_idx_arrays = {km: np.array(idxs) for km, idxs in kmer_indices.items()}
@@ -429,9 +463,9 @@ def process_feature(
     n_steps = 50
     min_count = 5
 
-    # Motif F1
+    # Motif F1 (uses k-mer-filtered activation array, not full pooled array)
     motif_results = _compute_best_motif_f1(
-        kmer_idx_arrays, all_activations, feat_max,
+        kmer_idx_arrays, motif_activations, feat_max,
         n_steps=n_steps, min_count=min_count, top_n=1,
     )
     motif_f1_obs = motif_results[0]["best_f1"] if motif_results else 0.0
@@ -455,9 +489,10 @@ def process_feature(
 
     # Geometry PR-AUC
     geom_prauc_obs = 0.0
+    geom_boundaries = []
     if geom_result is not None:
         from sklearn.metrics import average_precision_score
-        sae_arr, geom_preds, geom_threshold = geom_result
+        sae_arr, geom_preds, geom_threshold, geom_boundaries = geom_result
         sae_binary = (sae_arr >= geom_threshold).astype(int)
         if sae_binary.sum() > 0 and sae_binary.sum() < len(sae_binary):
             geom_prauc_obs = float(average_precision_score(sae_binary, geom_preds))
@@ -473,12 +508,15 @@ def process_feature(
     null_geom = np.zeros(n_permutations)
 
     for k_perm in range(n_permutations):
-        # Shuffle activations within each protein
+        # Shuffle full pooled activations within each protein (for position/InterPro/CATH)
         shuffled = _shuffle_within_proteins(all_activations, protein_boundaries, rng)
 
-        # Motif F1 with shuffled activations
+        # Shuffle k-mer-filtered activations within each protein (for motif F1)
+        shuffled_motif = _shuffle_within_proteins(motif_activations, motif_protein_boundaries, rng)
+
+        # Motif F1 with shuffled k-mer-filtered activations
         perm_motif = _compute_best_motif_f1(
-            kmer_idx_arrays, shuffled, feat_max,
+            kmer_idx_arrays, shuffled_motif, feat_max,
             n_steps=n_steps, min_count=min_count, top_n=1,
         )
         null_motif[k_perm] = perm_motif[0]["best_f1"] if perm_motif else 0.0
@@ -502,9 +540,8 @@ def process_feature(
         if geom_result is not None:
             from sklearn.metrics import average_precision_score
             # Shuffle the SAE activations within each protein segment
-            # For geometry, we need to shuffle the binary labels
-            # The geometry predictions are from the fixed GBM
-            shuffled_sae = _shuffle_within_proteins(sae_arr, protein_boundaries, rng)
+            # using geometry-specific boundaries (interior residues only)
+            shuffled_sae = _shuffle_within_proteins(sae_arr, geom_boundaries, rng)
             shuffled_binary = (shuffled_sae >= geom_threshold).astype(int)
             if shuffled_binary.sum() > 0 and shuffled_binary.sum() < len(shuffled_binary):
                 null_geom[k_perm] = float(average_precision_score(shuffled_binary, geom_preds))

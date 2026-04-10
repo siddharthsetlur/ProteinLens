@@ -54,14 +54,10 @@ from proteinlens.analysis.feature_pipeline.motif_enrichment import (
     _extract_kmers_with_activations,
 )
 from proteinlens.analysis.feature_pipeline.position_enrichment import (
-    POSITION_PREDICATES,
     _build_predicate_indices,
 )
 
 logger = logging.getLogger(__name__)
-
-# Standard amino acids for k-mer extraction
-STANDARD_AA = set("ACDEFGHIKLMNPQRSTVWY")
 
 
 # ── Data loading helpers ──────────────────────────────────────────────
@@ -372,14 +368,20 @@ def process_feature(
 
     Returns the full result dict, or None if the feature cannot be processed.
     """
+    from sklearn.metrics import average_precision_score
+
     if shared is None:
         shared = {}
 
-    feat_path = data_dir / "features" / f"{fid:04d}.json"
-    if not feat_path.exists():
+    feature_json_fids = shared.get("feature_json_fids", set())
+    if feature_json_fids and fid not in feature_json_fids:
         return None
 
-    feature_data = json.loads(feat_path.read_text())
+    feat_path = data_dir / "features" / f"{fid:04d}.json"
+    try:
+        feature_data = json.loads(feat_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
     feat_max_arr = shared.get("feat_max_arr")
     if feat_max_arr is None:
         feat_max_arr = np.load(data_dir / "feature_max_activations.npy")
@@ -416,14 +418,7 @@ def process_feature(
     #    The pipeline builds both k-mer indices and activations from the same
     #    filtered extraction (skipping non-standard AAs and boundary residues),
     #    so we must do the same here for consistency.
-    #    Read k from existing motif enrichment to match pipeline config.
-    k = 3  # default
-    motif_json_path = data_dir / "motif_enrichment" / f"{fid:04d}.json"
-    if motif_json_path.exists():
-        try:
-            k = json.loads(motif_json_path.read_text()).get("k", 3)
-        except (json.JSONDecodeError, OSError):
-            pass
+    k = shared.get("motif_k", 3)
     all_kmers: list[str] = []
     motif_acts: list[float] = []
     motif_protein_boundaries: list[tuple[int, int]] = []
@@ -494,7 +489,6 @@ def process_feature(
     geom_prauc_obs = 0.0
     geom_boundaries = []
     if geom_result is not None:
-        from sklearn.metrics import average_precision_score
         sae_arr, geom_preds, geom_threshold, geom_boundaries = geom_result
         sae_binary = (sae_arr >= geom_threshold).astype(int)
         if sae_binary.sum() > 0 and sae_binary.sum() < len(sae_binary):
@@ -541,7 +535,6 @@ def process_feature(
 
         # Geometry PR-AUC with shuffled labels
         if geom_result is not None:
-            from sklearn.metrics import average_precision_score
             # Shuffle the SAE activations within each protein segment
             # using geometry-specific boundaries (interior residues only)
             shuffled_sae = _shuffle_within_proteins(sae_arr, geom_boundaries, rng)
@@ -690,6 +683,38 @@ def main() -> None:
         gbm_files = {p.stem.replace("_gbm", "") for p in gbm_dir.glob("*_gbm.pkl")}
     print(f"  GBM classifiers: {len(gbm_files)} files")
 
+    # K-mer length: read once from any motif enrichment JSON (pipeline config constant)
+    motif_k = 3
+    motif_summary = data_dir / "motif_enrichment" / "summary.json"
+    if motif_summary.exists():
+        try:
+            motif_k = json.loads(motif_summary.read_text()).get("k", 3)
+        except (json.JSONDecodeError, OSError, KeyError):
+            pass
+    else:
+        # Fallback: read from first available per-feature motif JSON
+        motif_dir = data_dir / "motif_enrichment"
+        if motif_dir.is_dir():
+            for mp in motif_dir.iterdir():
+                if mp.suffix == ".json" and mp.name != "summary.json":
+                    try:
+                        motif_k = json.loads(mp.read_text()).get("k", 3)
+                    except (json.JSONDecodeError, OSError, KeyError):
+                        pass
+                    break
+    print(f"  Motif k-mer length: {motif_k}")
+
+    # Feature JSONs: glob once to avoid per-feature exists()
+    features_dir = data_dir / "features"
+    feature_json_fids = set()
+    if features_dir.is_dir():
+        for p in features_dir.glob("*.json"):
+            try:
+                feature_json_fids.add(int(p.stem))
+            except ValueError:
+                pass
+    print(f"  Feature JSONs: {len(feature_json_fids)} files")
+
     # Shared data dict — passed to all workers to avoid per-feature I/O
     shared = {
         "feat_max_arr": feat_max_arr,
@@ -699,6 +724,8 @@ def main() -> None:
         "geom_profile_dir": geom_profile_dir,
         "act_file_map": act_file_map,
         "gbm_files": gbm_files,
+        "motif_k": motif_k,
+        "feature_json_fids": feature_json_fids,
     }
 
     print("=" * 60)

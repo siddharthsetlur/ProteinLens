@@ -287,9 +287,10 @@ def _load_gbm_and_predict(
                 act_mat = np.load(act_path)["activations"]
                 gp = np.load(geom_profile_dir / f"{acc}.npz", allow_pickle=True)
                 ca = np.array(gp["ca"])
+                # No `if k in gp` guard — match pipeline which requires all 6 keys.
+                # Missing keys raise KeyError, caught by outer try/except (protein skipped).
                 profiles = {k: np.array(gp[k])[:len(ca)]
-                            for k in ("curvature", "torsion", "planarity", "tangents", "helix_mask", "categories")
-                            if k in gp}
+                            for k in ("curvature", "torsion", "planarity", "tangents", "helix_mask", "categories")}
                 n = min(len(ca), act_mat.shape[0])
                 if n < 20:
                     continue
@@ -378,18 +379,11 @@ def _load_gbm_and_predict(
         try:
             gp = np.load(gp_path, allow_pickle=True)
             ca = np.array(gp["ca"])
-            profiles = {
-                "curvature": np.array(gp["curvature"]),
-                "torsion": np.array(gp["torsion"]),
-                "planarity": np.array(gp["planarity"]),
-                "tangents": np.array(gp["tangents"]) if "tangents" in gp else None,
-                "helix_mask": np.array(gp["helix_mask"]) if "helix_mask" in gp else None,
-                "categories": np.array(gp["categories"]) if "categories" in gp else None,
-            }
+            # Require all 6 profile keys (matching pipeline). Missing keys
+            # raise KeyError, caught by except → protein skipped.
+            profiles = {k: np.array(gp[k])[:len(ca)]
+                        for k in ("curvature", "torsion", "planarity", "tangents", "helix_mask", "categories")}
         except Exception:
-            continue
-
-        if ca is None or profiles is None:
             continue
 
         n = min(len(ca), n_residues)
@@ -852,7 +846,10 @@ def main() -> None:
     if pipeline_state_path.exists() and protein_maxes_path.exists():
         state = json.loads(pipeline_state_path.read_text())
         acc_to_idx = state.get("accession_index", {})
-        row_to_acc = {v: k for k, v in acc_to_idx.items()}
+        # Filter to proteins with BOTH geometry profiles AND activation files,
+        # matching the pipeline's `available` dict so top-500 selection is identical.
+        row_to_acc = {v: k for k, v in acc_to_idx.items()
+                      if k in geom_profile_files and k in act_file_map}
         n_proteins = len(acc_to_idx)
         act_matrix_full = np.memmap(
             protein_maxes_path, dtype="float32", mode="r",

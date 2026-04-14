@@ -197,21 +197,6 @@ def _run_stage_geometry_features(
     state.mark_stage_complete("geometry_features")
 
 
-def _run_stage_geometry_protein_enrichment(
-    config: PipelineConfig, state: PipelineState
-) -> None:
-    """Stage 6b: Protein-level LassoCV geometry enrichment per node."""
-    if state.is_stage_complete("geometry_protein_enrichment"):
-        print("[pipeline] Stage 6b (geometry_protein_enrichment) already complete — skipping.")
-        return
-    from proteinlens.analysis.feature_pipeline.geometry_protein_enrichment import (
-        run_geometry_protein_enrichment,
-    )
-
-    run_geometry_protein_enrichment(config)
-    state.mark_stage_complete("geometry_protein_enrichment")
-
-
 def _run_stage_geometry_residue_enrichment(
     config: PipelineConfig, state: PipelineState
 ) -> None:
@@ -242,6 +227,23 @@ def _run_stage_motif_enrichment(
     state.mark_stage_complete("motif_enrichment")
 
 
+def _run_stage_motif_pwm(
+    config: PipelineConfig, state: PipelineState
+) -> None:
+    """Stage 7b: PWM-based motif discovery (MEME). Optional, gated by config."""
+    if not config.motif_pwm_enabled:
+        return
+    if state.is_stage_complete("motif_pwm"):
+        print("[pipeline] Stage 7b (motif_pwm) already complete — skipping.")
+        return
+    from proteinlens.analysis.feature_pipeline.motif_pwm import (
+        run_motif_pwm_enrichment,
+    )
+
+    run_motif_pwm_enrichment(config)
+    state.mark_stage_complete("motif_pwm")
+
+
 def _run_stage_position_enrichment(
     config: PipelineConfig, state: PipelineState
 ) -> None:
@@ -269,9 +271,9 @@ STAGES = [
     ("interpro_fetch", _run_stage_interpro_fetch),
     ("interpro_enrichment", _run_stage_interpro_enrichment),
     ("geometry_features", _run_stage_geometry_features),
-    ("geometry_protein_enrichment", _run_stage_geometry_protein_enrichment),
     ("geometry_residue_enrichment", _run_stage_geometry_residue_enrichment),
     ("motif_enrichment", _run_stage_motif_enrichment),
+    ("motif_pwm", _run_stage_motif_pwm),
     ("position_enrichment", _run_stage_position_enrichment),
 ]
 STAGE_NAMES = [name for name, _ in STAGES]
@@ -318,12 +320,27 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Cap on number of proteins to process (default: all)",
     )
-    parser.add_argument(
+    stage_group = parser.add_mutually_exclusive_group()
+    stage_group.add_argument(
         "--stage",
         type=str,
         default=None,
         choices=STAGE_NAMES,
         help="Run only this stage (default: run all stages in order)",
+    )
+    stage_group.add_argument(
+        "--start-stage",
+        type=str,
+        default=None,
+        choices=STAGE_NAMES,
+        help="First stage to run (inclusive). Use with --end-stage for a range.",
+    )
+    parser.add_argument(
+        "--end-stage",
+        type=str,
+        default=None,
+        choices=STAGE_NAMES,
+        help="Last stage to run (inclusive). Defaults to last stage if omitted.",
     )
     parser.add_argument(
         "--esm-model",
@@ -355,7 +372,18 @@ def parse_args() -> argparse.Namespace:
         default="proteinlens-pipeline",
         help="wandb project name (default: proteinlens-pipeline)",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.end_stage and not args.start_stage:
+        parser.error("--end-stage requires --start-stage")
+    if args.start_stage and args.end_stage:
+        start_idx = STAGE_NAMES.index(args.start_stage)
+        end_idx = STAGE_NAMES.index(args.end_stage)
+        if start_idx > end_idx:
+            parser.error(
+                f"--start-stage '{args.start_stage}' comes after "
+                f"--end-stage '{args.end_stage}'"
+            )
+    return args
 
 
 def main() -> None:
@@ -408,17 +436,31 @@ def main() -> None:
 
     t0 = time.time()
 
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
     if args.stage is not None:
         # Run a single stage
         stage_map = dict(STAGES)
         print(f"\n>>> Running single stage: {args.stage}")
         stage_map[args.stage](config, state)
+    elif args.start_stage is not None:
+        # Run a contiguous range of stages
+        start_idx = STAGE_NAMES.index(args.start_stage)
+        end_idx = (
+            STAGE_NAMES.index(args.end_stage) if args.end_stage else len(STAGES) - 1
+        )
+        print(
+            f"\n>>> Running stages: {args.start_stage} through "
+            f"{STAGE_NAMES[end_idx]}"
+        )
+        for stage_name, stage_fn in STAGES[start_idx : end_idx + 1]:
+            print(f"\n>>> Stage: {stage_name}")
+            wlog({"stage": stage_name})
+            stage_fn(config, state)
     else:
         # Run all stages in order
         for stage_name, stage_fn in STAGES:
             print(f"\n>>> Stage: {stage_name}")
-            from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
-
             wlog({"stage": stage_name})
             stage_fn(config, state)
 

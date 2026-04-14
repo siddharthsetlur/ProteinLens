@@ -559,7 +559,7 @@ def train_motif_classifier(
         # RF for comparison
         rf = RandomForestClassifier(
             n_estimators=100, max_depth=6, class_weight="balanced",
-            random_state=42, n_jobs=-1,
+            random_state=42, n_jobs=1,
         )
         try:
             rf_auc = cross_val_score(

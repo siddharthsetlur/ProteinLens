@@ -173,31 +173,14 @@ def _process_node(ni: int) -> tuple[int, str]:
     enrichment_dir = s["enrichment_dir"]
     cfg = s["config_params"]
 
-    # Per-process activation LRU cache (initialised on first call per process)
-    if not hasattr(_process_node, "_act_cache"):
-        _process_node._act_cache = {}
-        _process_node._act_order = []
-
-    _act_cache = _process_node._act_cache
-    _act_order = _process_node._act_order
-    _ACT_CACHE_MAX = 500  # smaller per-process to limit total memory
-
     def _load_activations(acc: str) -> np.ndarray | None:
-        if acc in _act_cache:
-            return _act_cache[acc]
         path = available.get(acc)
         if path is None:
             return None
         try:
-            arr = np.load(path, allow_pickle=True)["activations"]
+            return np.load(path, allow_pickle=True)["activations"]
         except Exception:
             return None
-        _act_cache[acc] = arr
-        _act_order.append(acc)
-        if len(_act_order) > _ACT_CACHE_MAX:
-            evict = _act_order.pop(0)
-            _act_cache.pop(evict, None)
-        return arr
 
     node_col = act_matrix_full[:, ni]
     active_rows = np.where(node_col > 0)[0]
@@ -226,23 +209,24 @@ def _process_node(ni: int) -> tuple[int, str]:
         seq_arr = g.get("sequence", np.array([""]))
         protein_data.append({
             "accession": acc,
-            "act_matrix": act_mat[:n],
+            "act_matrix": act_mat[:n, ni:ni+1].copy(),  # (n,1) — only this node's column
             "ca": ca[:n],
             "profiles": {k: g[k][:n] for k in ("curvature", "torsion", "planarity", "tangents", "helix_mask", "categories")},
             "n_residues": n,
             "sequence": str(seq_arr[0]) if len(seq_arr) > 0 else "",
             "memmap_row": int(row_idx),
         })
+        del act_mat  # release full matrix immediately
 
     if not protein_data:
         return (ni, "skipped")
 
-    total_activated = sum(int(np.sum(p["act_matrix"][:, ni] > 0)) for p in protein_data)
+    total_activated = sum(int(np.sum(p["act_matrix"][:, 0] > 0)) for p in protein_data)
     if total_activated < cfg["geometry_min_activated_positions"]:
         return (ni, "skipped")
 
     frag_result = collect_node_fragments(
-        protein_data, ni, half_w=half_w,
+        protein_data, 0, half_w=half_w,
         act_quantile=cfg["geometry_act_quantile"],
         max_fragments=cfg["geometry_frag_top_k"],
         bg_ratio=cfg["geometry_bg_ratio"],
@@ -268,12 +252,12 @@ def _process_node(ni: int) -> tuple[int, str]:
     )
     geom_threshold = clf_result["optimal_threshold"]
     concordance = compute_concordance_metrics(
-        protein_data, ni, clf_result["tree"],
+        protein_data, 0, clf_result["tree"],
         threshold, geom_threshold, half_w,
         feat_cache=feat_cache,
     )
     plot_proteins = _precompute_plot_data(
-        protein_data, ni, clf_result["tree"],
+        protein_data, 0, clf_result["tree"],
         threshold, geom_threshold, half_w,
         top_n=cfg["geometry_top_proteins_for_plots"],
         feature_importances=clf_result["feature_importances"],
@@ -282,8 +266,7 @@ def _process_node(ni: int) -> tuple[int, str]:
 
     # Save GBM classifier for permutation testing
     if clf_result["tree"] is not None:
-        gbm_dir = enrichment_dir.parent / "geometry_classifiers"
-        gbm_dir.mkdir(parents=True, exist_ok=True)
+        gbm_dir = s["gbm_dir"]
         try:
             joblib.dump(clf_result["tree"], gbm_dir / f"{ni:04d}_gbm.pkl")
             meta = {
@@ -446,6 +429,10 @@ def run_geometry_residue_enrichment(config: PipelineConfig) -> None:
     ]
     logger.info("%d nodes to process (%d dead/done skipped)", len(nodes_to_process), n_features - len(nodes_to_process))
 
+    # Pre-create GBM output dir once (avoid per-node mkdir on CephFS)
+    gbm_dir = enrichment_dir.parent / "geometry_classifiers"
+    gbm_dir.mkdir(parents=True, exist_ok=True)
+
     # ── Set shared state for workers (before fork) ───────────────────
     _shared.update({
         "act_matrix_full": act_matrix_full,
@@ -455,6 +442,7 @@ def run_geometry_residue_enrichment(config: PipelineConfig) -> None:
         "feature_maxes": feature_maxes,
         "half_w": half_w,
         "enrichment_dir": enrichment_dir,
+        "gbm_dir": gbm_dir,
         "config_params": {
             "geometry_min_activated_positions": config.geometry_min_activated_positions,
             "geometry_act_quantile": config.geometry_act_quantile,

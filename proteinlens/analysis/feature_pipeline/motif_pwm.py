@@ -1,0 +1,548 @@
+"""Stage 7b — PWM motif discovery per SAE feature (MEME).
+
+Complements Stage 7 (fixed 3-mer F1 search) with a richer motif model.
+For each feature we:
+
+1. Extract fixed-width windows around the highest-activation residues
+   across the feature's pooled top-activating proteins.
+2. Run MEME (EM-based PWM discovery) on those windows to recover up to
+   N position-weight matrices.
+3. Scan each discovered PWM across the feature's full-sequence pool and
+   compute residue-level F1 via an activation-threshold sweep (same
+   protocol as Stage 7 so results are directly comparable).
+
+Designed for sparse-autoencoder features with ~20 top-activating
+proteins — MEME's EM is appropriate at low N; STREME is not.
+
+**Outputs:**
+- ``motif_pwm_enrichment/{feat_idx:04d}.json`` — per-feature results
+  with up to N PWMs, each scored by best residue-level F1.
+- ``motif_pwm_enrichment/summary.json`` — keyed by feature id.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import tempfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+from tqdm import tqdm
+
+from proteinlens.analysis.feature_pipeline.config import PipelineConfig
+from proteinlens.analysis.feature_pipeline.motif_enrichment import (
+    _pool_proteins_for_feature,
+)
+
+_AA_ORDER = "ACDEFGHIKLMNPQRSTVWY"
+_AA_INDEX = {aa: i for i, aa in enumerate(_AA_ORDER)}
+
+
+# ===================================================================
+# Window extraction
+# ===================================================================
+
+
+def _select_high_activation_windows(
+    proteins: List[Tuple[str, str, List[float]]],
+    half_w: int,
+    top_k_per_protein: int,
+    percentile: float,
+) -> List[str]:
+    """Extract fixed-width windows centred on high-activation residues.
+
+    For each protein, picks up to *top_k_per_protein* residues whose activation
+    exceeds the *percentile* quantile of that protein's activations, then
+    extracts the ``2*half_w+1``-residue window around each. Windows containing
+    non-standard amino acids or crossing sequence boundaries are skipped.
+
+    Args:
+        proteins: List of ``(accession, sequence, per_residue_activations)``.
+        half_w: Half-width — window length is ``2*half_w+1``.
+        top_k_per_protein: Cap on windows per protein (prevents long proteins
+            from dominating MEME's input).
+        percentile: Per-protein quantile threshold (0–1).
+
+    Returns:
+        List of window strings (each of length ``2*half_w+1``).
+    """
+    w = 2 * half_w + 1
+    windows: List[str] = []
+    for _acc, seq, pra in proteins:
+        if len(seq) != len(pra) or len(seq) < w:
+            continue
+        acts = np.asarray(pra, dtype=np.float64)
+        if acts.max() <= 0:
+            continue
+        thr = float(np.quantile(acts, percentile))
+        # Require strictly positive activation so that features with mostly-zero
+        # activations (common for sparse SAEs) don't pull in neutral positions.
+        pos = np.arange(len(acts))
+        cand = np.where((acts >= thr) & (acts > 0) &
+                        (pos >= half_w) & (pos < len(acts) - half_w))[0]
+        if cand.size == 0:
+            continue
+        # Take top-K by activation
+        order = cand[np.argsort(-acts[cand])][:top_k_per_protein]
+        for i in order:
+            win = seq[i - half_w : i + half_w + 1]
+            if len(win) == w and all(ch in _AA_INDEX for ch in win):
+                windows.append(win)
+    return windows
+
+
+# ===================================================================
+# MEME runner
+# ===================================================================
+
+
+def _meme_available() -> bool:
+    """Return True iff the `meme` binary is resolvable on PATH."""
+    return shutil.which("meme") is not None
+
+
+def _write_fasta(windows: List[str], path: Path) -> None:
+    """Write windows to a FASTA file with synthetic IDs."""
+    with open(path, "w") as f:
+        for i, w in enumerate(windows):
+            f.write(f">w{i}\n{w}\n")
+
+
+def _parse_meme_xml(xml_path: Path) -> List[Dict[str, Any]]:
+    """Parse ``meme.xml`` into a list of motif dicts.
+
+    Each motif dict contains:
+      - ``id``: MEME motif id (e.g. ``motif_1``)
+      - ``name``: consensus-like name from MEME
+      - ``width``: int
+      - ``e_value``: float
+      - ``pwm``: ``(width, 20)`` float array, probabilities in ``_AA_ORDER``
+      - ``consensus``: best-residue-per-column string
+    """
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    # Alphabet letter -> column index mapping in MEME's probability rows.
+    alphabet_letters: List[str] = []
+    alphabet = root.find("./training_set/alphabet") or root.find("./alphabet")
+    if alphabet is not None:
+        for letter in alphabet.findall("letter"):
+            sym = letter.get("symbol")
+            if sym is not None:
+                alphabet_letters.append(sym)
+
+    motifs: List[Dict[str, Any]] = []
+    for m in root.findall("./motifs/motif"):
+        width = int(m.get("width", "0"))
+        e_value = float(m.get("e_value", "1.0"))
+        mid = m.get("id", "motif")
+        name = m.get("name", mid)
+
+        probs_arrays: List[List[float]] = []
+        for pos in m.findall("./probabilities/alphabet_matrix/alphabet_array"):
+            row = [0.0] * len(alphabet_letters)
+            for v in pos.findall("value"):
+                letter = v.get("letter_id") or v.get("letter")
+                if letter is None:
+                    continue
+                try:
+                    idx = alphabet_letters.index(letter)
+                except ValueError:
+                    continue
+                row[idx] = float(v.text or "0")
+            probs_arrays.append(row)
+
+        if not probs_arrays:
+            continue
+
+        raw = np.asarray(probs_arrays, dtype=np.float64)  # (width, |alpha|)
+
+        # Reindex columns into canonical _AA_ORDER (20 standard AAs).
+        pwm = np.zeros((raw.shape[0], 20), dtype=np.float64)
+        for j, letter in enumerate(alphabet_letters):
+            if letter in _AA_INDEX:
+                pwm[:, _AA_INDEX[letter]] = raw[:, j]
+
+        # Normalise each row to sum 1 (MEME may use pseudocounts).
+        row_sums = pwm.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        pwm = pwm / row_sums
+
+        consensus = "".join(_AA_ORDER[int(i)] for i in pwm.argmax(axis=1))
+        motifs.append({
+            "id": mid,
+            "name": name,
+            "width": width or pwm.shape[0],
+            "e_value": e_value,
+            "pwm": pwm,
+            "consensus": consensus,
+        })
+
+    return motifs
+
+
+def _run_meme(
+    windows: List[str],
+    minw: int,
+    maxw: int,
+    nmotifs: int,
+    timeout_s: int,
+) -> List[Dict[str, Any]]:
+    """Run MEME on the given windows and return parsed motifs.
+
+    Raises:
+        RuntimeError: If `meme` is not on PATH.
+    """
+    if not _meme_available():
+        raise RuntimeError(
+            "MEME binary not found on PATH. Install via "
+            "`conda install -c bioconda meme` and ensure the `meme` "
+            "executable is available."
+        )
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        fasta = tmp_path / "windows.fasta"
+        out_dir = tmp_path / "meme_out"
+        _write_fasta(windows, fasta)
+
+        cmd = [
+            "meme", str(fasta),
+            "-protein",
+            "-oc", str(out_dir),
+            "-nmotifs", str(nmotifs),
+            "-minw", str(minw),
+            "-maxw", str(maxw),
+            "-mod", "zoops",
+            "-nostatus",
+        ]
+        try:
+            subprocess.run(
+                cmd, check=True, timeout=timeout_s,
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            )
+        except subprocess.TimeoutExpired:
+            return []
+        except subprocess.CalledProcessError:
+            return []
+
+        xml_path = out_dir / "meme.xml"
+        if not xml_path.exists():
+            return []
+        return _parse_meme_xml(xml_path)
+
+
+# ===================================================================
+# PWM scanner
+# ===================================================================
+
+
+def _encode_sequence(seq: str) -> np.ndarray:
+    """Return int array of AA indices (20 = non-standard, use as mask)."""
+    enc = np.full(len(seq), 20, dtype=np.int8)
+    for i, ch in enumerate(seq):
+        idx = _AA_INDEX.get(ch)
+        if idx is not None:
+            enc[i] = idx
+    return enc
+
+
+def _pwm_log_odds(pwm: np.ndarray, bg: np.ndarray) -> np.ndarray:
+    """Convert a PWM (width, 20) to log-odds vs. background (20,)."""
+    eps = 1e-6
+    return np.log((pwm + eps) / (bg[None, :] + eps))
+
+
+def _scan_pwm(
+    seq_enc: np.ndarray,
+    log_odds: np.ndarray,
+) -> np.ndarray:
+    """Score every centre position in an encoded sequence against a PWM.
+
+    Returns an array of length ``len(seq_enc)`` with scores. Positions too
+    close to either end (centre would require out-of-bounds residues) and
+    windows containing non-standard residues are filled with ``-inf``.
+    """
+    w = log_odds.shape[0]
+    half = w // 2
+    n = len(seq_enc)
+    scores = np.full(n, -np.inf, dtype=np.float64)
+    if n < w:
+        return scores
+    # Build (n - w + 1, w) view of window starts
+    # Valid centre positions: start + half, for start in [0, n-w]
+    for start in range(0, n - w + 1):
+        window = seq_enc[start : start + w]
+        if (window == 20).any():
+            continue
+        scores[start + half] = log_odds[np.arange(w), window].sum()
+    return scores
+
+
+# ===================================================================
+# F1 sweep over PWM score thresholds
+# ===================================================================
+
+
+def _compute_best_pwm_f1(
+    pwm_scores: np.ndarray,
+    activations: np.ndarray,
+    feat_max: float,
+    n_steps: int,
+) -> Dict[str, float]:
+    """Sweep PWM-score thresholds at a fixed activation threshold policy.
+
+    We mirror Stage 7: positive = residues with activation > τ (swept), then
+    find the PWM-score cutoff σ that best separates activated from
+    non-activated. To keep dimensionality sane, we sweep both:
+      - τ over n_steps thresholds of activation
+      - σ over n_steps thresholds of PWM score (in the finite-score range)
+    and return the (τ, σ) pair maximising F1.
+
+    Only finite PWM scores contribute to the positive/negative candidate set;
+    -inf positions (out-of-bounds or non-standard) are excluded.
+    """
+    valid = np.isfinite(pwm_scores)
+    if not valid.any() or feat_max <= 0:
+        return {}
+    s = pwm_scores[valid]
+    a = activations[valid]
+
+    tau_grid = np.linspace(0, feat_max, n_steps + 1)[1:]
+    s_lo, s_hi = float(s.min()), float(s.max())
+    if s_lo == s_hi:
+        return {}
+    sig_grid = np.linspace(s_lo, s_hi, n_steps + 1)[:-1]
+
+    # activated_matrix[t, i]: True if a[i] > tau_grid[t]
+    activated = a[None, :] > tau_grid[:, None]          # (n_steps, N)
+    n_activated = activated.sum(axis=1).astype(float)   # (n_steps,)
+
+    # predicted_matrix[k, i]: True if s[i] >= sig_grid[k]
+    predicted = s[None, :] >= sig_grid[:, None]          # (n_steps, N)
+    n_predicted = predicted.sum(axis=1).astype(float)    # (n_steps,)
+
+    # tp[t, k] = sum_i activated[t, i] & predicted[k, i]
+    #         = activated @ predicted.T
+    tp = activated.astype(np.float32) @ predicted.astype(np.float32).T  # (nt, nk)
+    fp = n_predicted[None, :] - tp
+    fn = n_activated[:, None] - tp
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        precision = np.where(tp + fp > 0, tp / (tp + fp), 0.0)
+        recall = np.where(tp + fn > 0, tp / (tp + fn), 0.0)
+        f1 = np.where(
+            precision + recall > 0,
+            2 * precision * recall / (precision + recall),
+            0.0,
+        )
+
+    best = np.unravel_index(int(np.argmax(f1)), f1.shape)
+    t_idx, k_idx = int(best[0]), int(best[1])
+    return {
+        "best_f1": round(float(f1[t_idx, k_idx]), 4),
+        "best_activation_threshold": round(float(tau_grid[t_idx]), 4),
+        "best_activation_threshold_normalized": round(
+            float(tau_grid[t_idx]) / feat_max, 4
+        ),
+        "best_pwm_threshold": round(float(sig_grid[k_idx]), 4),
+        "precision_at_best": round(float(precision[t_idx, k_idx]), 4),
+        "recall_at_best": round(float(recall[t_idx, k_idx]), 4),
+        "n_predicted_positive": int(n_predicted[k_idx]),
+        "n_activated": int(n_activated[t_idx]),
+        "n_true_positives": int(tp[t_idx, k_idx]),
+    }
+
+
+# ===================================================================
+# Per-feature analysis
+# ===================================================================
+
+
+_UNIFORM_BG = np.full(20, 1.0 / 20, dtype=np.float64)
+
+
+def _analyze_feature_pwm(
+    feature_data: Dict[str, Any],
+    feat_max: float,
+    config: PipelineConfig,
+) -> Optional[Dict[str, Any]]:
+    proteins = _pool_proteins_for_feature(feature_data)
+    if not proteins:
+        return None
+
+    windows = _select_high_activation_windows(
+        proteins,
+        half_w=config.motif_pwm_window_half_w,
+        top_k_per_protein=config.motif_pwm_top_k_per_protein,
+        percentile=config.motif_pwm_activation_percentile,
+    )
+    if len(windows) < config.motif_pwm_min_windows:
+        return None
+
+    motifs = _run_meme(
+        windows,
+        minw=config.motif_pwm_meme_minw,
+        maxw=config.motif_pwm_meme_maxw,
+        nmotifs=config.motif_pwm_meme_nmotifs,
+        timeout_s=config.motif_pwm_meme_timeout_s,
+    )
+    if not motifs:
+        return None
+
+    # Score each motif against the full-sequence pool.
+    motif_results: List[Dict[str, Any]] = []
+    for motif in motifs:
+        log_odds = _pwm_log_odds(motif["pwm"], _UNIFORM_BG)
+        all_scores: List[np.ndarray] = []
+        all_acts: List[np.ndarray] = []
+        for _acc, seq, pra in proteins:
+            if len(seq) != len(pra):
+                continue
+            enc = _encode_sequence(seq)
+            scores = _scan_pwm(enc, log_odds)
+            all_scores.append(scores)
+            all_acts.append(np.asarray(pra, dtype=np.float64))
+        if not all_scores:
+            continue
+        scores_cat = np.concatenate(all_scores)
+        acts_cat = np.concatenate(all_acts)
+
+        f1_result = _compute_best_pwm_f1(
+            scores_cat, acts_cat, feat_max,
+            n_steps=config.motif_pwm_f1_threshold_steps,
+        )
+        if not f1_result:
+            continue
+
+        motif_results.append({
+            "motif_id": motif["id"],
+            "consensus": motif["consensus"],
+            "width": motif["width"],
+            "e_value": motif["e_value"],
+            "pwm": motif["pwm"].round(4).tolist(),
+            "aa_order": _AA_ORDER,
+            **f1_result,
+        })
+
+    if not motif_results:
+        return None
+
+    motif_results.sort(key=lambda r: r["best_f1"], reverse=True)
+
+    return {
+        "feature_id": feature_data["feature_id"],
+        "feature_max_activation": round(float(feat_max), 6),
+        "n_proteins_evaluated": len(proteins),
+        "n_windows": len(windows),
+        "n_motifs_discovered": len(motifs),
+        "motifs": motif_results,
+    }
+
+
+# ===================================================================
+# Public API
+# ===================================================================
+
+
+def run_motif_pwm_enrichment(config: PipelineConfig) -> None:
+    """Execute the optional PWM motif discovery stage (Stage 7b).
+
+    Gated by ``config.motif_pwm_enabled``; a no-op if the flag is False.
+    Per-feature outputs mirror Stage 7's layout under
+    ``motif_pwm_enrichment/``. Existing outputs are not re-computed.
+    """
+    if not config.motif_pwm_enabled:
+        print("[motif_pwm] disabled (set motif_pwm_enabled=True to run).")
+        return
+
+    if not _meme_available():
+        raise RuntimeError(
+            "MEME binary not found on PATH. Install with "
+            "`conda install -c bioconda meme` before running this stage."
+        )
+
+    global_max = np.load(config.feature_max_path)
+    num_features = len(global_max)
+
+    out_dir = config.motif_pwm_enrichment_dir
+    features_dir = config.features_dir
+
+    n_analyzed = 0
+    n_skipped = 0
+    summary_features: Dict[str, Dict[str, Any]] = {}
+
+    for feat_idx in tqdm(range(num_features), desc="[motif_pwm]"):
+        feat_max = float(global_max[feat_idx])
+        if feat_max == 0:
+            n_skipped += 1
+            continue
+
+        out_path = out_dir / f"{feat_idx:04d}.json"
+        if out_path.exists():
+            try:
+                with open(out_path) as f:
+                    existing = json.load(f)
+                if existing.get("motifs"):
+                    m0 = existing["motifs"][0]
+                    summary_features[str(feat_idx)] = {
+                        "best_consensus": m0["consensus"],
+                        "best_f1": m0["best_f1"],
+                        "e_value": m0["e_value"],
+                        "n_motifs": len(existing["motifs"]),
+                    }
+                n_analyzed += 1
+            except (json.JSONDecodeError, KeyError):
+                pass
+            continue
+
+        feat_path = features_dir / f"{feat_idx:04d}.json"
+        if not feat_path.exists():
+            n_skipped += 1
+            continue
+
+        with open(feat_path) as f:
+            feature_data = json.load(f)
+
+        result = _analyze_feature_pwm(feature_data, feat_max, config)
+        if result is None:
+            n_skipped += 1
+            continue
+
+        with open(out_path, "w") as f:
+            json.dump(result, f, indent=2)
+
+        m0 = result["motifs"][0]
+        summary_features[str(feat_idx)] = {
+            "best_consensus": m0["consensus"],
+            "best_f1": m0["best_f1"],
+            "e_value": m0["e_value"],
+            "n_motifs": len(result["motifs"]),
+        }
+        n_analyzed += 1
+
+    summary = {
+        "n_features_analyzed": n_analyzed,
+        "n_features_skipped": n_skipped,
+        "window_width": 2 * config.motif_pwm_window_half_w + 1,
+        "meme_minw": config.motif_pwm_meme_minw,
+        "meme_maxw": config.motif_pwm_meme_maxw,
+        "features": summary_features,
+    }
+    with open(out_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(
+        f"[motif_pwm] Analyzed {n_analyzed} features, "
+        f"skipped {n_skipped}. Output: {out_dir}/"
+    )
+
+    from proteinlens.analysis.feature_pipeline.wandb_utils import log as wlog
+
+    wlog({
+        "motif_pwm/analyzed": n_analyzed,
+        "motif_pwm/skipped": n_skipped,
+    })

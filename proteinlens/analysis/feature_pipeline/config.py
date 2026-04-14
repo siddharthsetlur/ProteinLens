@@ -117,6 +117,28 @@ class PipelineConfig:
     motif_top_n: int = 10
     """Number of top motifs to keep per feature (ranked by best F1)."""
 
+    # --- PWM motif enrichment (Stage 7b, optional) ---
+    motif_pwm_enabled: bool = False
+    """If True, run the optional PWM-based motif discovery stage (MEME)."""
+    motif_pwm_window_half_w: int = 7
+    """Half-width of windows extracted around high-activation residues (total width = 2*half+1)."""
+    motif_pwm_top_k_per_protein: int = 3
+    """Max high-activation residues selected per protein for window extraction."""
+    motif_pwm_activation_percentile: float = 0.95
+    """Per-protein activation percentile; residues above this are candidates for window centres."""
+    motif_pwm_meme_minw: int = 6
+    """MEME --minw: minimum motif width."""
+    motif_pwm_meme_maxw: int = 12
+    """MEME --maxw: maximum motif width."""
+    motif_pwm_meme_nmotifs: int = 3
+    """MEME --nmotifs: number of motifs to discover per feature."""
+    motif_pwm_f1_threshold_steps: int = 50
+    """Number of evenly-spaced PWM log-odds thresholds to sweep for F1."""
+    motif_pwm_min_windows: int = 10
+    """Skip feature if fewer than this many windows were extracted."""
+    motif_pwm_meme_timeout_s: int = 120
+    """Kill MEME subprocess after this many seconds."""
+
     # --- Sequence position enrichment (Stage 8) ---
     position_f1_threshold_steps: int = 50
     """Number of evenly-spaced activation thresholds to sweep.
@@ -292,6 +314,13 @@ class PipelineConfig:
     def motif_enrichment_dir(self) -> Path:
         """Directory for per-feature sequence motif enrichment JSON files."""
         d = self.output_dir / "motif_enrichment"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @property
+    def motif_pwm_enrichment_dir(self) -> Path:
+        """Directory for per-feature PWM motif enrichment JSON files (Stage 7b)."""
+        d = self.output_dir / "motif_pwm_enrichment"
         d.mkdir(parents=True, exist_ok=True)
         return d
 

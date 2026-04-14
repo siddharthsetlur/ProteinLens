@@ -99,10 +99,13 @@ def fetch_cath_for_protein(
         _save_cache(cache_path, [])
         return []
 
-    # ── Poll ──
+    # ── Poll with exponential backoff (0.5s → 1s → 2s → 4s, cap 4s) ──
     hits: List[Dict[str, Any]] = []
-    for _ in range(60):  # up to ~2 min
-        time.sleep(2)
+    poll_delay = 0.5
+    elapsed = 0.0
+    while elapsed < 120:  # up to 2 min total
+        time.sleep(poll_delay)
+        elapsed += poll_delay
         try:
             check = session.get(
                 CATH_CHECK_URL.format(task_id=task_id),
@@ -118,6 +121,7 @@ def fetch_cath_for_protein(
                     break
         except (requests.Timeout, requests.ConnectionError):
             pass
+        poll_delay = min(poll_delay * 2, 4.0)
 
     _save_cache(cache_path, hits)
     return hits

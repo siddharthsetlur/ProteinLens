@@ -54,14 +54,115 @@ from proteinlens.analysis.feature_pipeline.motif_enrichment import (
     _compute_best_motif_f1,
     _extract_kmers_with_activations,
 )
+from proteinlens.analysis.feature_pipeline.motif_pwm import (
+    _AA_ORDER as _PWM_AA_ORDER,
+    _compute_best_pwm_f1,
+    _encode_sequence as _pwm_encode_sequence,
+    _pwm_log_odds,
+    _scan_pwm,
+)
 from proteinlens.analysis.feature_pipeline.position_enrichment import (
     _build_predicate_indices,
 )
+from proteinlens.analysis.feature_pipeline.interpro_api import _load_cached
+from proteinlens.analysis.feature_pipeline.interpro_enrichment import (
+    InterProDomain,
+    _compute_protein_level_f1,
+)
+
+# RNG seed offset for the protein-level-InterPro across-protein shuffle.
+# A *separate* Generator is used so the pre-existing within-protein rng
+# produces a byte-identical draw sequence — this preserves the five existing
+# null distributions exactly (regression-critical for FDR downstream).
+_PROT_RNG_OFFSET = 10_000_000
+
+# Defaults mirror PipelineConfig (interpro_min_proteins=3,
+# interpro_f1_threshold_steps=50) so the observed score here matches the
+# pipeline's stage-5c protein-level F1 bit-for-bit. Keep these in sync if
+# pipeline defaults change.
+_INTERPRO_PROTEIN_MIN_PROTEINS = 3
 
 logger = logging.getLogger(__name__)
 
 
+# RNG offset for PWM null — uses its own stream so that enabling --include-pwm
+# does not shift the six pre-existing null distributions (they share `rng`).
+_PWM_RNG_OFFSET = 20_000_000
+
+_PWM_UNIFORM_BG = np.full(20, 1.0 / 20, dtype=np.float64)
+
+
 # ── Data loading helpers ──────────────────────────────────────────────
+
+
+def _load_observed_pwms(
+    fid: int, pwm_dir: Path,
+) -> list[dict] | None:
+    """Load the PWMs discovered by Stage 7b for a feature, if present.
+
+    Returns a list of motif dicts each with keys ``consensus``, ``width``,
+    ``e_value``, ``best_f1``, ``pwm`` (np.ndarray, width x 20), or None if no
+    file exists for this feature.
+    """
+    path = pwm_dir / f"{fid:04d}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    motifs = data.get("motifs", [])
+    if not motifs:
+        return None
+    out = []
+    for m in motifs:
+        pwm_list = m.get("pwm")
+        if pwm_list is None:
+            continue
+        pwm_arr = np.asarray(pwm_list, dtype=np.float64)
+        if pwm_arr.ndim != 2 or pwm_arr.shape[1] != 20:
+            continue
+        out.append({
+            "consensus": m.get("consensus", ""),
+            "width": int(m.get("width", pwm_arr.shape[0])),
+            "e_value": float(m.get("e_value", 1.0)),
+            "best_f1": float(m.get("best_f1", 0.0)),
+            "pwm": pwm_arr,
+        })
+    return out or None
+
+
+def _compute_pooled_pwm_scores(
+    proteins: list[dict], pwms: list[dict],
+) -> list[np.ndarray]:
+    """Pre-scan each PWM over the pooled residue sequence once.
+
+    Returns a list (same order as ``pwms``) of 1-D score arrays with the same
+    length as the concatenated pooled activations. -inf at positions where the
+    PWM window is out of bounds or overlaps non-standard residues.
+    """
+    scores_per_pwm: list[list[np.ndarray]] = [[] for _ in pwms]
+    for p in proteins:
+        enc = _pwm_encode_sequence(p["sequence"])
+        for i, motif in enumerate(pwms):
+            lo = _pwm_log_odds(motif["pwm"], _PWM_UNIFORM_BG)
+            scores_per_pwm[i].append(_scan_pwm(enc, lo))
+    return [np.concatenate(s) for s in scores_per_pwm]
+
+
+def _best_pwm_f1_across(
+    pwm_scores: list[np.ndarray],
+    activations: np.ndarray,
+    feat_max: float,
+    n_steps: int,
+) -> float:
+    """Max F1 across all PWMs given pre-computed per-residue scores."""
+    best = 0.0
+    for s in pwm_scores:
+        r = _compute_best_pwm_f1(s, activations, feat_max, n_steps=n_steps)
+        if r and r.get("best_f1", 0.0) > best:
+            best = float(r["best_f1"])
+    return best
 
 
 def _pool_proteins(feature_data: dict) -> list[dict]:
@@ -111,14 +212,18 @@ def _load_interpro_labels(
         if acc in interpro_file_set:
             cache_path = interpro_cache_dir / f"{acc}.json"
             try:
-                domains = json.loads(cache_path.read_text())
+                raw = json.loads(cache_path.read_text())
+                # Cache files use the ``{"accession": ..., "domains": [...]}``
+                # layout written by ``interpro_api._save_cache``; earlier runs
+                # used a bare list, so accept both shapes defensively.
+                domains = raw.get("domains", []) if isinstance(raw, dict) else raw
                 for d in domains:
                     start = max(0, d.get("start", 1) - 1)  # 1-based to 0-based
                     end = min(n, d.get("end", 0))  # 1-based inclusive
                     if start < end:
                         res_labels[start:end] = True
                         any_domains = True
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError, AttributeError, TypeError):
                 pass
         labels.append(res_labels)
 
@@ -160,6 +265,65 @@ def _load_cath_labels(
     if not any_domains:
         return None
     return np.concatenate(labels)
+
+
+def _load_interpro_protein_annotations(
+    proteins: list[dict],
+    interpro_file_set: set[str],
+    interpro_cache_dir: Path,
+) -> dict[str, list[InterProDomain]]:
+    """Load full InterPro domain lists keyed by accession, for protein-level F1.
+
+    Sibling of ``_load_interpro_labels`` (which builds residue-level boolean
+    labels from the same JSON files). Both loaders read the same on-disk
+    cache but project it differently; keeping them separate means the
+    residue-level path is completely untouched and its null distribution
+    remains bit-reproducible.
+
+    Uses the pre-globbed ``interpro_file_set`` from the worker's shared
+    state — no per-file ``.exists()`` / ``.glob()`` calls on cephfs.
+
+    Returns an empty dict (not None) if no proteins have cached annotations,
+    so callers can use a simple truthiness guard.
+    """
+    annotations: dict[str, list[InterProDomain]] = {}
+    for p in proteins:
+        acc = p["accession"]
+        if acc not in interpro_file_set:
+            continue
+        try:
+            annotations[acc] = _load_cached(interpro_cache_dir / f"{acc}.json")
+        except (json.JSONDecodeError, OSError):
+            # Silently drop corrupt cache entries — matches residue loader.
+            continue
+    return annotations
+
+
+def _compute_interpro_protein_f1(
+    accessions: list[str],
+    per_protein_max: np.ndarray,
+    protein_annotations: dict[str, list[InterProDomain]],
+    feat_max: float,
+    n_steps: int,
+    min_proteins: int = _INTERPRO_PROTEIN_MIN_PROTEINS,
+) -> float:
+    """Thin wrapper around ``_compute_protein_level_f1`` returning top-1 F1.
+
+    Centralising the call site guarantees the *observed* and *null* paths
+    use bit-identical parameters — which matters because their equality is
+    the definition of the null hypothesis here.
+    """
+    if not protein_annotations:
+        return 0.0
+    results = _compute_protein_level_f1(
+        list(zip(accessions, per_protein_max.tolist())),
+        protein_annotations,
+        feat_max,
+        n_threshold_steps=n_steps,
+        min_proteins=min_proteins,
+        top_n=1,
+    )
+    return float(results[0]["best_f1"]) if results else 0.0
 
 
 def _compute_domain_f1(
@@ -555,8 +719,29 @@ def process_feature(
     cath_file_set = shared.get("cath_file_set", set())
     cath_labels = _load_cath_labels(proteins, cath_file_set, cath_cache_dir)
 
+    # 4b. InterPro protein-level annotations (for the protein-level null).
+    # Reuses the same pre-globbed interpro_file_set — no extra cephfs I/O.
+    protein_annotations = _load_interpro_protein_annotations(
+        proteins, interpro_file_set, interpro_cache_dir,
+    )
+    # Per-protein max activation is derived from the SAME per-residue arrays
+    # already loaded for the other metrics; no additional data source.
+    accessions = [p["accession"] for p in proteins]
+    per_protein_max = np.array(
+        [float(p["activations"].max()) for p in proteins], dtype=np.float64,
+    )
+
     # 5. Geometry PR-AUC (load GBM, get predictions; uses pre-globbed file sets)
     geom_result = _load_gbm_and_predict(fid, proteins, data_dir, shared)
+
+    # 6. PWM motifs (optional; only if --include-pwm and Stage 7b output exists)
+    pwm_motifs: list[dict] | None = None
+    pwm_scores_pooled: list[np.ndarray] = []
+    if shared.get("include_pwm", False):
+        pwm_dir = data_dir / "motif_pwm_enrichment"
+        pwm_motifs = _load_observed_pwms(fid, pwm_dir)
+        if pwm_motifs:
+            pwm_scores_pooled = _compute_pooled_pwm_scores(proteins, pwm_motifs)
 
     # ── Compute observed scores ──
 
@@ -596,15 +781,41 @@ def process_feature(
         if sae_binary.sum() > 0 and sae_binary.sum() < len(sae_binary):
             geom_prauc_obs = float(average_precision_score(sae_binary, geom_preds))
 
+    # InterPro protein-level F1 (best across eligible codes, top-1).
+    # Observed uses the *un*-shuffled per-protein max vector.
+    interpro_protein_f1_obs = _compute_interpro_protein_f1(
+        accessions, per_protein_max, protein_annotations, feat_max, n_steps,
+    )
+
+    # PWM motif F1 (observed). Recomputed from the pooled per-residue scores
+    # rather than read from Stage 7b JSON so the scoring matches the null
+    # bit-for-bit (Stage 7b rounds the F1 to 4 dp and uses the same sweep).
+    pwm_f1_obs = 0.0
+    if pwm_motifs and pwm_scores_pooled:
+        pwm_f1_obs = _best_pwm_f1_across(
+            pwm_scores_pooled, all_activations, feat_max, n_steps,
+        )
+
     # ── Permutation loop ──
 
     rng = np.random.default_rng(seed + fid)
+    # Independent RNG for the across-protein shuffle. Must not share state
+    # with `rng` above or the five pre-existing null distributions would
+    # shift — they are consumed downstream for BH-FDR and are part of
+    # published results.
+    rng_protein = np.random.default_rng(seed + fid + _PROT_RNG_OFFSET)
 
     null_motif = np.zeros(n_permutations)
     null_position = np.zeros(n_permutations)
     null_interpro = np.zeros(n_permutations)
     null_cath = np.zeros(n_permutations)
     null_geom = np.zeros(n_permutations)
+    null_interpro_protein = np.zeros(n_permutations)
+    null_pwm = np.zeros(n_permutations)
+
+    # Independent RNG for PWM shuffle so enabling --include-pwm does NOT
+    # perturb the six pre-existing null distributions (which share `rng`).
+    rng_pwm = np.random.default_rng(seed + fid + _PWM_RNG_OFFSET)
 
     for k_perm in range(n_permutations):
         # Shuffle full pooled activations within each protein (for position/InterPro/CATH)
@@ -644,6 +855,32 @@ def process_feature(
             if shuffled_binary.sum() > 0 and shuffled_binary.sum() < len(shuffled_binary):
                 null_geom[k_perm] = float(average_precision_score(shuffled_binary, geom_preds))
 
+        # InterPro protein-level F1 with activations shuffled ACROSS proteins.
+        # This is a different shuffle unit from the residue-level ones above:
+        # breaks which-protein-activates vs which-protein-has-annotation while
+        # preserving the per-protein activation magnitude distribution and
+        # the accession->annotation mapping. Uses its own RNG stream
+        # (rng_protein) so the existing null arrays above are unaffected.
+        # Placed last in the loop body as a further safety guard against
+        # any future bug here leaking into earlier null values.
+        if protein_annotations:
+            shuffled_max = per_protein_max.copy()
+            rng_protein.shuffle(shuffled_max)
+            null_interpro_protein[k_perm] = _compute_interpro_protein_f1(
+                accessions, shuffled_max, protein_annotations, feat_max, n_steps,
+            )
+
+        # PWM motif F1 with shuffled activations. PWMs + per-residue scores
+        # stay fixed; only activations are permuted within protein. Uses its
+        # own RNG stream (rng_pwm) — see _PWM_RNG_OFFSET rationale above.
+        if pwm_motifs and pwm_scores_pooled:
+            shuffled_pwm_acts = _shuffle_within_proteins(
+                all_activations, protein_boundaries, rng_pwm,
+            )
+            null_pwm[k_perm] = _best_pwm_f1_across(
+                pwm_scores_pooled, shuffled_pwm_acts, feat_max, n_steps,
+            )
+
     # ── Compute p-values (Phipson & Smyth 2010) ──
 
     def _pvalue(observed: float, null_dist: np.ndarray) -> float:
@@ -669,6 +906,9 @@ def process_feature(
             "interpro_res_f1": round(interpro_f1_obs, 6),
             "cath_res_f1": round(cath_f1_obs, 6),
             "geometry_prauc": round(geom_prauc_obs, 6),
+            # New protein-level InterPro entry — appended last so existing
+            # keys keep their order/position and diff cleanly.
+            "interpro_protein_f1": round(interpro_protein_f1_obs, 6),
         },
         "null_distributions": {
             "motif_f1": [round(float(v), 6) for v in null_motif],
@@ -676,6 +916,7 @@ def process_feature(
             "interpro_res_f1": [round(float(v), 6) for v in null_interpro],
             "cath_res_f1": [round(float(v), 6) for v in null_cath],
             "geometry_prauc": [round(float(v), 6) for v in null_geom],
+            "interpro_protein_f1": [round(float(v), 6) for v in null_interpro_protein],
         },
         "p_values": {
             "motif_f1": round(_pvalue(motif_f1_obs, null_motif), 6),
@@ -683,6 +924,9 @@ def process_feature(
             "interpro_res_f1": round(_pvalue(interpro_f1_obs, null_interpro), 6),
             "cath_res_f1": round(_pvalue(cath_f1_obs, null_cath), 6),
             "geometry_prauc": round(_pvalue(geom_prauc_obs, null_geom), 6),
+            "interpro_protein_f1": round(
+                _pvalue(interpro_protein_f1_obs, null_interpro_protein), 6,
+            ),
         },
         "null_summary": {
             "motif_f1": _null_summary(null_motif),
@@ -690,8 +934,21 @@ def process_feature(
             "interpro_res_f1": _null_summary(null_interpro),
             "cath_res_f1": _null_summary(null_cath),
             "geometry_prauc": _null_summary(null_geom),
+            "interpro_protein_f1": _null_summary(null_interpro_protein),
         },
     }
+
+    # Append PWM entries only when --include-pwm is active AND Stage 7b output
+    # exists for this feature. Omitting keys (vs. writing zeros) lets downstream
+    # consumers reliably detect "PWM null was not computed for this feature".
+    if pwm_motifs and pwm_scores_pooled:
+        result["observed"]["pwm_f1"] = round(pwm_f1_obs, 6)
+        result["null_distributions"]["pwm_f1"] = [
+            round(float(v), 6) for v in null_pwm
+        ]
+        result["p_values"]["pwm_f1"] = round(_pvalue(pwm_f1_obs, null_pwm), 6)
+        result["null_summary"]["pwm_f1"] = _null_summary(null_pwm)
+        result["n_pwms"] = len(pwm_motifs)
     return result
 
 
@@ -760,6 +1017,14 @@ def main() -> None:
     parser.add_argument(
         "--wandb", action="store_true",
         help="Log progress and summary statistics to Weights & Biases",
+    )
+    parser.add_argument(
+        "--include-pwm", action="store_true",
+        help=(
+            "Also compute a null distribution for the PWM motif F1 from "
+            "Stage 7b (requires motif_pwm_enrichment/ outputs). PWMs are "
+            "held fixed; only activations are permuted within protein."
+        ),
     )
     args = parser.parse_args()
 
@@ -908,6 +1173,7 @@ def main() -> None:
         "feature_json_fids": feature_json_fids,
         "act_matrix_full": act_matrix_full,
         "row_to_acc": row_to_acc,
+        "include_pwm": args.include_pwm,
     }
 
     print("=" * 60)
@@ -946,6 +1212,8 @@ def main() -> None:
         "motif_f1": [], "position_f1": [], "interpro_res_f1": [],
         "cath_res_f1": [], "geometry_prauc": [],
     }
+    if args.include_pwm:
+        all_pvalues["pwm_f1"] = []
 
     def _handle_result(fid_result: int, status: str, result: dict | None) -> None:
         nonlocal n_done, n_skipped, n_error

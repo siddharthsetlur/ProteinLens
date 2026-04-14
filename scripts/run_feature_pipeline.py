@@ -197,6 +197,21 @@ def _run_stage_geometry_features(
     state.mark_stage_complete("geometry_features")
 
 
+def _run_stage_geometry_protein_enrichment(
+    config: PipelineConfig, state: PipelineState
+) -> None:
+    """Stage 6b: Protein-level LassoCV geometry enrichment per node."""
+    if state.is_stage_complete("geometry_protein_enrichment"):
+        print("[pipeline] Stage 6b (geometry_protein_enrichment) already complete — skipping.")
+        return
+    from proteinlens.analysis.feature_pipeline.geometry_protein_enrichment import (
+        run_geometry_protein_enrichment,
+    )
+
+    run_geometry_protein_enrichment(config)
+    state.mark_stage_complete("geometry_protein_enrichment")
+
+
 def _run_stage_geometry_residue_enrichment(
     config: PipelineConfig, state: PipelineState
 ) -> None:
@@ -271,6 +286,7 @@ STAGES = [
     ("interpro_fetch", _run_stage_interpro_fetch),
     ("interpro_enrichment", _run_stage_interpro_enrichment),
     ("geometry_features", _run_stage_geometry_features),
+    ("geometry_protein_enrichment", _run_stage_geometry_protein_enrichment),
     ("geometry_residue_enrichment", _run_stage_geometry_residue_enrichment),
     ("motif_enrichment", _run_stage_motif_enrichment),
     ("motif_pwm", _run_stage_motif_pwm),

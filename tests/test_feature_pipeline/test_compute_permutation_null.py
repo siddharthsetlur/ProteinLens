@@ -322,32 +322,116 @@ def _write_pwm_output(data_dir: Path, fid: int, consensus: str,
     }))
 
 
-def test_pwm_null_isolation_preserves_existing_nulls(tmp_path):
+def _write_cath_cache(cache_dir: Path, hits: dict[str, list[dict]]) -> set[str]:
+    """Write one CATH JSON per accession.
+
+    CATH cache format (per compute_cath_enrichment._save_cache) is a flat
+    list of hit dicts with ``cath_id``, ``query_start``, ``query_end`` —
+    *not* the nested {"accession", "domains"} shape used by InterPro.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    file_set: set[str] = set()
+    for acc, domains in hits.items():
+        (cache_dir / f"{acc}.json").write_text(json.dumps(domains))
+        file_set.add(acc)
+    return file_set
+
+
+def test_pwm_null_isolation_preserves_existing_nulls(tmp_path, monkeypatch):
     """Enabling --include-pwm must not perturb the six pre-existing null
-    distributions (their RNG stream is independent from rng_pwm)."""
+    distributions under conditions where all six actually consume RNG draws
+    (not short-circuited to zero).
+
+    Exercises:
+      - motif_f1, position_f1 (always active)
+      - interpro_res_f1 (populated InterPro residue cache)
+      - cath_res_f1 (populated CATH cache)
+      - geometry_prauc (monkeypatched _load_gbm_and_predict returns a real
+        geom_result tuple → rng.shuffle on sae_arr consumes draws)
+      - interpro_protein_f1 (populated protein-level annotations; uses
+        rng_protein, independent stream)
+
+    If enabling PWM leaks draws into rng or rng_protein, any of the above
+    will diverge between the two runs.
+    """
     rng = np.random.default_rng(5)
-    feature_data = _build_feature_data(n_proteins=8, length=40, rng=rng)
+    feature_data = _build_feature_data(n_proteins=10, length=50, rng=rng)
     data_dir = _setup_data_dir(tmp_path, feature_data, feat_max=1.0)
 
-    # Write a trivial PWM (width 5, uniform) — structure test only.
+    # ── InterPro residue + protein cache (8 of 10 proteins annotated) ──
+    hits = {
+        f"P{i:05d}": [{
+            "interpro_accession": f"IPR_{i % 2:02d}",
+            "interpro_name": "X",
+            "type": "family",
+            "member_db": "pfam",
+            "member_accession": "PF_X",
+            "start": 1, "end": 25,
+        }] for i in range(8)
+    }
+    interpro_file_set = _write_interpro_cache(data_dir / "interpro_cache", hits)
+
+    # ── CATH cache (8 of 10 proteins) ──
+    cath_hits = {
+        f"P{i:05d}": [{
+            "cath_id": f"3.40.50.{i}",
+            "query_start": 5, "query_end": 30,
+        }] for i in range(8)
+    }
+    cath_file_set = _write_cath_cache(
+        data_dir / "cath_enrichment" / "cache", cath_hits,
+    )
+
+    # ── Fake GBM result so the geometry branch actually runs its
+    # _shuffle_within_proteins(sae_arr, ...) call on `rng` ──
+    # Concatenate per-protein arrays so total length = 10 * 50 = 500 and
+    # geom_boundaries cover interior residues per protein.
+    total = sum(len(p["per_residue_activations"])
+                for p in feature_data["top_sequences"])
+    fake_sae = np.concatenate([
+        np.asarray(p["per_residue_activations"], dtype=np.float64)
+        for p in feature_data["top_sequences"]
+    ])
+    assert len(fake_sae) == total
+    fake_preds = np.linspace(0.1, 0.9, total)  # non-degenerate for PR-AUC
+    fake_threshold = 0.3  # produces mix of 0/1 labels after binarisation
+    # geom_boundaries: interior of each protein (trim 5 residues each side)
+    fake_bounds = []
+    off = 0
+    for p in feature_data["top_sequences"]:
+        n = len(p["per_residue_activations"])
+        fake_bounds.append((off + 5, off + n - 5))
+        off += n
+
+    def fake_load(fid, proteins, data_dir, shared):
+        # Return fresh copies so any mutation by the null loop doesn't leak
+        # between the two runs.
+        return (
+            fake_sae.copy(), fake_preds.copy(), fake_threshold, list(fake_bounds),
+        )
+
+    monkeypatch.setattr(cpn, "_load_gbm_and_predict", fake_load)
+
+    # Write a trivial PWM.
     pwm = np.full((5, 20), 1.0 / 20)
     _write_pwm_output(data_dir, fid=0, consensus="ACDEF", pwm=pwm)
 
-    # Run A: pwm disabled
-    shared_off = _minimal_shared(interpro_file_set=set())
-    shared_off["include_pwm"] = False
+    # Common shared dict: all six branches active.
+    def build_shared(include_pwm: bool) -> dict:
+        s = _minimal_shared(interpro_file_set=interpro_file_set)
+        s["cath_file_set"] = cath_file_set
+        s["include_pwm"] = include_pwm
+        return s
+
     result_off = cpn.process_feature(fid=0, data_dir=data_dir,
                                       n_permutations=20, seed=99,
-                                      shared=shared_off)
-
-    # Run B: pwm enabled
-    shared_on = _minimal_shared(interpro_file_set=set())
-    shared_on["include_pwm"] = True
+                                      shared=build_shared(False))
     result_on = cpn.process_feature(fid=0, data_dir=data_dir,
                                      n_permutations=20, seed=99,
-                                     shared=shared_on)
+                                     shared=build_shared(True))
 
-    # All six pre-existing metrics must be byte-identical.
+    # Each of the six pre-existing metrics must be byte-identical AND must
+    # have non-trivial variation (so we know the branch actually ran).
     for key in ("motif_f1", "position_f1", "interpro_res_f1",
                 "cath_res_f1", "geometry_prauc", "interpro_protein_f1"):
         assert result_off["null_distributions"][key] == result_on["null_distributions"][key], (
@@ -355,10 +439,24 @@ def test_pwm_null_isolation_preserves_existing_nulls(tmp_path):
         )
         assert result_off["observed"][key] == result_on["observed"][key]
 
-    # PWM entry present in B, absent in A.
+    # Sanity: the branches that consume RNG draws must produce non-zero
+    # null values (otherwise the byte-identical check above is trivial —
+    # two all-zero arrays are trivially equal). motif_f1 is allowed to be
+    # all-zero because with a tiny synthetic pool no k-mer may hit
+    # min_count=5; its RNG draws still advance regardless of the F1 output.
+    for key in ("interpro_res_f1", "cath_res_f1", "geometry_prauc"):
+        null_vals = result_on["null_distributions"][key]
+        assert any(v > 0 for v in null_vals), (
+            f"{key} null is all zeros — branch did not actually run, "
+            f"weakening the isolation check"
+        )
+
     assert "pwm_f1" not in result_off["null_distributions"]
     assert "pwm_f1" in result_on["null_distributions"]
     assert len(result_on["null_distributions"]["pwm_f1"]) == 20
+    # Self-documenting fields present.
+    assert result_on.get("pwm_null_type") == "option_A_fixed_pwm_permuted_activations"
+    assert result_on.get("pwm_background_model") in ("empirical", "uniform")
 
 
 def test_pwm_null_recovers_signal(tmp_path):

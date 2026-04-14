@@ -55,8 +55,8 @@ from proteinlens.analysis.feature_pipeline.motif_enrichment import (
     _extract_kmers_with_activations,
 )
 from proteinlens.analysis.feature_pipeline.motif_pwm import (
-    _AA_ORDER as _PWM_AA_ORDER,
     _compute_best_pwm_f1,
+    _empirical_aa_background,
     _encode_sequence as _pwm_encode_sequence,
     _pwm_log_odds,
     _scan_pwm,
@@ -97,23 +97,32 @@ _PWM_UNIFORM_BG = np.full(20, 1.0 / 20, dtype=np.float64)
 
 def _load_observed_pwms(
     fid: int, pwm_dir: Path,
-) -> list[dict] | None:
-    """Load the PWMs discovered by Stage 7b for a feature, if present.
+) -> tuple[list[dict] | None, str]:
+    """Load the PWMs discovered by Stage 7b for a feature.
 
-    Returns a list of motif dicts each with keys ``consensus``, ``width``,
-    ``e_value``, ``best_f1``, ``pwm`` (np.ndarray, width x 20), or None if no
-    file exists for this feature.
+    Returns ``(motifs, background_model)`` where ``motifs`` is a list of
+    motif dicts each with keys ``consensus``, ``width``, ``e_value``,
+    ``best_f1``, ``pwm`` (np.ndarray, width x 20) — or ``None`` if no PWM
+    output exists for this feature. ``background_model`` is the string
+    read from the JSON's ``background_model`` field (defaults to
+    ``"empirical"`` if absent for older outputs) so the null scoring uses
+    the same log-odds background as Stage 7b did.
+
+    Schema issues are logged but do not raise — the feature just becomes
+    "no PWM null computed" rather than silently poisoning a run.
     """
     path = pwm_dir / f"{fid:04d}.json"
     if not path.exists():
-        return None
+        return None, "empirical"
     try:
         data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("feature %d: PWM JSON exists but failed to parse (%s)", fid, e)
+        return None, "empirical"
     motifs = data.get("motifs", [])
     if not motifs:
-        return None
+        return None, "empirical"
+    bg_model = str(data.get("background_model", "empirical"))
     out = []
     for m in motifs:
         pwm_list = m.get("pwm")
@@ -121,6 +130,10 @@ def _load_observed_pwms(
             continue
         pwm_arr = np.asarray(pwm_list, dtype=np.float64)
         if pwm_arr.ndim != 2 or pwm_arr.shape[1] != 20:
+            logger.warning(
+                "feature %d: skipping motif with bad PWM shape %s",
+                fid, pwm_arr.shape,
+            )
             continue
         out.append({
             "consensus": m.get("consensus", ""),
@@ -129,23 +142,39 @@ def _load_observed_pwms(
             "best_f1": float(m.get("best_f1", 0.0)),
             "pwm": pwm_arr,
         })
-    return out or None
+    if not out:
+        logger.warning("feature %d: PWM JSON present but no usable motifs", fid)
+        return None, bg_model
+    return out, bg_model
 
 
 def _compute_pooled_pwm_scores(
-    proteins: list[dict], pwms: list[dict],
+    proteins: list[dict], pwms: list[dict], background_model: str,
 ) -> list[np.ndarray]:
     """Pre-scan each PWM over the pooled residue sequence once.
 
     Returns a list (same order as ``pwms``) of 1-D score arrays with the same
     length as the concatenated pooled activations. -inf at positions where the
     PWM window is out of bounds or overlaps non-standard residues.
+
+    ``background_model`` must match the setting used by Stage 7b for this
+    feature (read from the per-feature JSON) so that log-odds scores are
+    reproduced exactly. Supported: ``"empirical"`` (pooled AA frequency) or
+    ``"uniform"`` (1/20).
     """
+    if background_model == "uniform":
+        bg = _PWM_UNIFORM_BG
+    else:
+        # _empirical_aa_background expects (acc, seq, pra) tuples; re-pack.
+        bg = _empirical_aa_background(
+            [(p["accession"], p["sequence"], None) for p in proteins]
+        )
+    # Precompute log-odds once per PWM (shared across proteins).
+    log_odds_per_pwm = [_pwm_log_odds(m["pwm"], bg) for m in pwms]
     scores_per_pwm: list[list[np.ndarray]] = [[] for _ in pwms]
     for p in proteins:
         enc = _pwm_encode_sequence(p["sequence"])
-        for i, motif in enumerate(pwms):
-            lo = _pwm_log_odds(motif["pwm"], _PWM_UNIFORM_BG)
+        for i, lo in enumerate(log_odds_per_pwm):
             scores_per_pwm[i].append(_scan_pwm(enc, lo))
     return [np.concatenate(s) for s in scores_per_pwm]
 
@@ -737,11 +766,14 @@ def process_feature(
     # 6. PWM motifs (optional; only if --include-pwm and Stage 7b output exists)
     pwm_motifs: list[dict] | None = None
     pwm_scores_pooled: list[np.ndarray] = []
+    pwm_bg_model: str = "empirical"
     if shared.get("include_pwm", False):
         pwm_dir = data_dir / "motif_pwm_enrichment"
-        pwm_motifs = _load_observed_pwms(fid, pwm_dir)
+        pwm_motifs, pwm_bg_model = _load_observed_pwms(fid, pwm_dir)
         if pwm_motifs:
-            pwm_scores_pooled = _compute_pooled_pwm_scores(proteins, pwm_motifs)
+            pwm_scores_pooled = _compute_pooled_pwm_scores(
+                proteins, pwm_motifs, pwm_bg_model,
+            )
 
     # ── Compute observed scores ──
 
@@ -949,6 +981,12 @@ def process_feature(
         result["p_values"]["pwm_f1"] = round(_pvalue(pwm_f1_obs, null_pwm), 6)
         result["null_summary"]["pwm_f1"] = _null_summary(null_pwm)
         result["n_pwms"] = len(pwm_motifs)
+        # Self-documenting fields so downstream consumers know how this
+        # p-value was computed. Option A: PWMs fixed, activations permuted
+        # within-protein. Tests "does this PWM's score predict activation
+        # better than chance?", NOT "did MEME find a real motif?".
+        result["pwm_null_type"] = "option_A_fixed_pwm_permuted_activations"
+        result["pwm_background_model"] = pwm_bg_model
     return result
 
 

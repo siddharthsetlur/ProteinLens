@@ -8,15 +8,37 @@ For each feature we:
 2. Run MEME (EM-based PWM discovery) on those windows to recover up to
    N position-weight matrices.
 3. Scan each discovered PWM across the feature's full-sequence pool and
-   compute residue-level F1 via an activation-threshold sweep (same
-   protocol as Stage 7 so results are directly comparable).
+   compute residue-level F1 via a **joint (activation, pwm-score)
+   threshold sweep**.
 
 Designed for sparse-autoencoder features with ~20 top-activating
 proteins — MEME's EM is appropriate at low N; STREME is not.
 
+**Not directly comparable to Stage 7.** Stage 7 argmaxes F1 over a 1-D
+sweep of the activation threshold τ alone (k-mers are exact-match, no
+score threshold). Stage 7b argmaxes over a 2-D (τ, σ) grid where σ is
+the PWM log-odds cutoff. Optimising over an extra free threshold
+inflates the max F1 under the null, so the *magnitude* of ``pwm_f1`` is
+not directly comparable to ``motif_f1`` even though both are F1 scores.
+Ranking / p-values from ``compute_permutation_null.py --include-pwm`` are
+still valid (observed and null use the same grid) — it is only the
+point estimate that is biased upward by the extra degree of freedom.
+
+**Background model.** Log-odds use the empirical AA frequency of the
+pooled sequences for this feature by default
+(``config.motif_pwm_background="empirical"``). A uniform 1/20 background
+can be selected with ``"uniform"`` but biases scoring toward motifs
+containing rare amino acids (W, C, M); uniform is retained mainly for
+debugging / backward compatibility.
+
+**Reproducibility.** MEME's EM is stochastic; we pass ``--seed`` from
+``config.motif_pwm_meme_seed`` (default 0) so reruns produce identical
+PWMs.
+
 **Outputs:**
 - ``motif_pwm_enrichment/{feat_idx:04d}.json`` — per-feature results
-  with up to N PWMs, each scored by best residue-level F1.
+  with up to N PWMs, each scored by best residue-level F1. Includes
+  ``sweep_type: "2d_tau_sigma"`` to make the protocol self-documenting.
 - ``motif_pwm_enrichment/summary.json`` — keyed by feature id.
 """
 
@@ -191,6 +213,7 @@ def _run_meme(
     maxw: int,
     nmotifs: int,
     timeout_s: int,
+    seed: int = 0,
 ) -> List[Dict[str, Any]]:
     """Run MEME on the given windows and return parsed motifs.
 
@@ -217,6 +240,7 @@ def _run_meme(
             "-minw", str(minw),
             "-maxw", str(maxw),
             "-mod", "zoops",
+            "-seed", str(seed),  # deterministic EM initialisation
             "-nostatus",
         ]
         try:
@@ -365,6 +389,27 @@ def _compute_best_pwm_f1(
 _UNIFORM_BG = np.full(20, 1.0 / 20, dtype=np.float64)
 
 
+def _empirical_aa_background(proteins: List[Tuple[str, str, List[float]]]) -> np.ndarray:
+    """Return empirical AA frequency over the pooled sequences, shape (20,).
+
+    Non-standard residues are excluded. Falls back to uniform if the pool
+    contains zero valid residues (pathological edge case).
+    """
+    counts = np.zeros(20, dtype=np.float64)
+    for _acc, seq, _pra in proteins:
+        for ch in seq:
+            idx = _AA_INDEX.get(ch)
+            if idx is not None:
+                counts[idx] += 1.0
+    total = counts.sum()
+    if total <= 0:
+        return _UNIFORM_BG.copy()
+    # Pseudocount to avoid zero entries for AAs absent from the pool
+    # (keeps log-odds finite and doesn't skew frequent-AA logs materially).
+    counts += 1.0
+    return counts / counts.sum()
+
+
 def _analyze_feature_pwm(
     feature_data: Dict[str, Any],
     feat_max: float,
@@ -389,14 +434,21 @@ def _analyze_feature_pwm(
         maxw=config.motif_pwm_meme_maxw,
         nmotifs=config.motif_pwm_meme_nmotifs,
         timeout_s=config.motif_pwm_meme_timeout_s,
+        seed=config.motif_pwm_meme_seed,
     )
     if not motifs:
         return None
 
+    # Select background model: empirical (per-feature AA freq) or uniform.
+    if getattr(config, "motif_pwm_background", "empirical") == "uniform":
+        bg = _UNIFORM_BG
+    else:
+        bg = _empirical_aa_background(proteins)
+
     # Score each motif against the full-sequence pool.
     motif_results: List[Dict[str, Any]] = []
     for motif in motifs:
-        log_odds = _pwm_log_odds(motif["pwm"], _UNIFORM_BG)
+        log_odds = _pwm_log_odds(motif["pwm"], bg)
         all_scores: List[np.ndarray] = []
         all_acts: List[np.ndarray] = []
         for _acc, seq, pra in proteins:
@@ -423,7 +475,9 @@ def _analyze_feature_pwm(
             "consensus": motif["consensus"],
             "width": motif["width"],
             "e_value": motif["e_value"],
-            "pwm": motif["pwm"].round(4).tolist(),
+            # Full precision so downstream permutation-null sees the same
+            # PWM values Stage 7b scored with (avoids rounding drift).
+            "pwm": motif["pwm"].tolist(),
             "aa_order": _AA_ORDER,
             **f1_result,
         })
@@ -439,6 +493,11 @@ def _analyze_feature_pwm(
         "n_proteins_evaluated": len(proteins),
         "n_windows": len(windows),
         "n_motifs_discovered": len(motifs),
+        "sweep_type": "2d_tau_sigma",
+        "background_model": (
+            "uniform" if getattr(config, "motif_pwm_background", "empirical") == "uniform"
+            else "empirical"
+        ),
         "motifs": motif_results,
     }
 

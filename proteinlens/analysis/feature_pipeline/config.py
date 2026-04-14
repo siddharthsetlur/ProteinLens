@@ -138,6 +138,10 @@ class PipelineConfig:
     """Skip feature if fewer than this many windows were extracted."""
     motif_pwm_meme_timeout_s: int = 120
     """Kill MEME subprocess after this many seconds."""
+    motif_pwm_meme_seed: int = 0
+    """Random seed passed to MEME (--seed). Fixed for reproducibility."""
+    motif_pwm_background: str = "empirical"
+    """PWM log-odds background: 'empirical' (pooled AA freq) or 'uniform' (1/20)."""
 
     # --- Sequence position enrichment (Stage 8) ---
     position_f1_threshold_steps: int = 50

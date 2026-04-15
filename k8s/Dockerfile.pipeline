@@ -31,6 +31,12 @@ RUN conda env create -f environment.yml && \
     conda clean --tarballs --index-cache -y && \
     /opt/conda/envs/interplm/bin/mmseqs version
 
+# Install MEME Suite for Stage 7b PWM motif discovery (motif_pwm module).
+# Bioconda's meme package provides the `meme` CLI used by motif_pwm._run_meme.
+RUN conda install -n interplm -c bioconda -c conda-forge -y meme && \
+    conda clean --tarballs --index-cache -y && \
+    /opt/conda/envs/interplm/bin/meme -version
+
 # Activate environment by default
 ENV CONDA_DEFAULT_ENV=interplm
 ENV PATH=$CONDA_DIR/envs/interplm/bin:$PATH

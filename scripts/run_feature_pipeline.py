@@ -372,6 +372,15 @@ def parse_args() -> argparse.Namespace:
         default="proteinlens-pipeline",
         help="wandb project name (default: proteinlens-pipeline)",
     )
+    parser.add_argument(
+        "--motif-pwm",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable optional Stage 7b PWM motif discovery via MEME. "
+            "Requires the `meme` binary on PATH."
+        ),
+    )
     args = parser.parse_args()
     if args.end_stage and not args.start_stage:
         parser.error("--end-stage requires --start-stage")
@@ -400,6 +409,7 @@ def main() -> None:
         esm_model_name=args.esm_model,
         esm_layer=args.esm_layer,
         device=args.device,
+        motif_pwm_enabled=args.motif_pwm,
     )
 
     state = PipelineState(config.pipeline_state_path)

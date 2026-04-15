@@ -506,3 +506,114 @@ def test_pwm_null_recovers_signal(tmp_path):
         f"observed {obs} not separated from null mean {np.mean(null):.3f}"
     )
     assert 0.0 < pv <= 1.0
+
+
+def test_pwm_pr_auc_null_recovers_signal(tmp_path):
+    """Plant a strong PWM signal; observed PR-AUC dominates the null → small p.
+
+    Mirrors ``test_pwm_null_recovers_signal`` but for the PR-AUC metric
+    (threshold-free along the predictor axis; truth binarised at a fixed
+    quantile, parallel to the Stage 6c geometric GBM).
+    """
+    rng = np.random.default_rng(17)
+    aa = list("ACDEFGHIKLMNPQRSTVWY")
+
+    motif = "LYGKE"
+    proteins = []
+    for i in range(12):
+        seq_list = rng.choice(aa, size=60).tolist()
+        pos = 25 + (i % 10)
+        for j, ch in enumerate(motif):
+            seq_list[pos + j] = ch
+        seq = "".join(seq_list)
+        acts = [0.0] * 60
+        acts[pos + 2] = 1.0
+        proteins.append({"accession": f"P{i:05d}", "sequence": seq,
+                         "per_residue_activations": acts})
+    feature_data = {"top_sequences": proteins, "activation_bins": {}}
+    data_dir = _setup_data_dir(tmp_path, feature_data, feat_max=1.0)
+
+    aa_idx = {a: i for i, a in enumerate("ACDEFGHIKLMNPQRSTVWY")}
+    pwm = np.full((5, 20), 0.01)
+    for j, ch in enumerate(motif):
+        pwm[j] = 0.01
+        pwm[j, aa_idx[ch]] = 0.81
+    pwm = pwm / pwm.sum(axis=1, keepdims=True)
+    _write_pwm_output(data_dir, fid=0, consensus=motif, pwm=pwm)
+
+    shared = _minimal_shared(interpro_file_set=set())
+    shared["include_pwm"] = True
+    # Synthetic activations are extremely sparse (12 of 720 residues);
+    # match Stage 7b's test and raise the quantile so the positives aren't
+    # swamped. In production this should equal geometry_act_quantile.
+    shared["pwm_act_quantile"] = 0.99
+    result = cpn.process_feature(fid=0, data_dir=data_dir,
+                                  n_permutations=50, seed=3, shared=shared)
+
+    assert "pwm_pr_auc" in result["observed"]
+    assert result.get("pwm_act_quantile") == 0.99
+
+    obs = result["observed"]["pwm_pr_auc"]
+    null = result["null_distributions"]["pwm_pr_auc"]
+    pv = result["p_values"]["pwm_pr_auc"]
+
+    assert obs > 0.0, "observed PR-AUC should be positive with implanted motif"
+    assert obs > float(np.mean(null)) + 2 * float(np.std(null) + 1e-6), (
+        f"observed {obs} not separated from null mean {np.mean(null):.3f}"
+    )
+    assert 0.0 < pv <= 1.0
+    assert len(null) == 50
+
+
+def test_pwm_pr_auc_does_not_perturb_pwm_f1_null(tmp_path):
+    """Adding the PR-AUC code path must not shift the pwm_f1 null by a draw.
+
+    Regression guard: the PR-AUC computation inside the permutation loop
+    reuses the *same* shuffled activation array as pwm_f1 (no fresh rng
+    draws), so enabling PR-AUC cannot change pwm_f1's null distribution.
+    We verify this by monkeypatching ``_best_pwm_pr_auc_across`` to a
+    function that consumes no RNG and comparing null_distributions["pwm_f1"]
+    between the real run and one where PR-AUC is stubbed out.
+    """
+    rng = np.random.default_rng(31)
+    aa = list("ACDEFGHIKLMNPQRSTVWY")
+    proteins = []
+    for i in range(8):
+        seq_list = rng.choice(aa, size=40).tolist()
+        seq = "".join(seq_list)
+        acts = [0.0] * 40
+        acts[10 + (i % 5)] = 1.0
+        proteins.append({"accession": f"P{i:05d}", "sequence": seq,
+                         "per_residue_activations": acts})
+    feature_data = {"top_sequences": proteins, "activation_bins": {}}
+    data_dir = _setup_data_dir(tmp_path, feature_data, feat_max=1.0)
+
+    pwm = np.full((5, 20), 1.0 / 20)
+    _write_pwm_output(data_dir, fid=0, consensus="ACDEF", pwm=pwm)
+
+    shared = _minimal_shared(interpro_file_set=set())
+    shared["include_pwm"] = True
+    shared["pwm_act_quantile"] = 0.95
+
+    # Real run — both pwm_f1 and pwm_pr_auc computed from the same shuffle.
+    real = cpn.process_feature(fid=0, data_dir=data_dir,
+                                n_permutations=25, seed=7, shared=dict(shared))
+
+    # Second run with the PR-AUC helper stubbed to a constant (still called,
+    # but consumes no RNG). If pwm_f1 null differed, it would indicate the
+    # PR-AUC path was silently consuming draws.
+    saved = cpn._best_pwm_pr_auc_across
+    try:
+        cpn._best_pwm_pr_auc_across = lambda *a, **kw: 0.0
+        stubbed = cpn.process_feature(fid=0, data_dir=data_dir,
+                                       n_permutations=25, seed=7,
+                                       shared=dict(shared))
+    finally:
+        cpn._best_pwm_pr_auc_across = saved
+
+    assert (real["null_distributions"]["pwm_f1"]
+            == stubbed["null_distributions"]["pwm_f1"]), (
+        "pwm_f1 null shifted between real and stubbed PR-AUC runs — "
+        "PR-AUC path must not consume RNG draws"
+    )
+    assert real["observed"]["pwm_f1"] == stubbed["observed"]["pwm_f1"]

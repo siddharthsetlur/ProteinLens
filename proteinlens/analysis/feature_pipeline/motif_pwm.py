@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from sklearn.metrics import average_precision_score
 from tqdm import tqdm
 
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
@@ -382,6 +383,56 @@ def _compute_best_pwm_f1(
 
 
 # ===================================================================
+# PR-AUC score (parallel to Stage 6c geometric GBM)
+# ===================================================================
+
+
+def _compute_pwm_pr_auc(
+    pwm_scores: np.ndarray,
+    activations: np.ndarray,
+    act_quantile: float,
+) -> Optional[Dict[str, float]]:
+    """PR-AUC of PWM log-odds against activation > quantile.
+
+    Parallel to Stage 6c: truth = residue activation >= per-feature quantile
+    of the valid-position activations; predictor = PWM log-odds per residue.
+    Threshold-free along the predictor axis, single fixed threshold on truth
+    — so the returned number is directly comparable to
+    ``geometric_residue_level.concordance.avg_precision`` from Stage 6c.
+
+    -inf score positions (out-of-bounds / non-standard) are masked *before*
+    the quantile is computed so observed and null see the same residue set.
+    Returns None on degenerate binarisation (zero or all positives) or when
+    no finite scores exist.
+    """
+    valid = np.isfinite(pwm_scores)
+    if not valid.any():
+        return None
+    s = pwm_scores[valid]
+    a = activations[valid]
+    if s.size == 0:
+        return None
+
+    q = float(np.quantile(a, act_quantile))
+    truth = (a >= q).astype(np.int8)
+    n_pos = int(truth.sum())
+    # Degenerate: PR-AUC is undefined when there are no positives, and
+    # trivially 1.0 when everything is positive — neither is informative,
+    # so we surface it as "no score" for symmetric observed/null handling.
+    if n_pos == 0 or n_pos == truth.size:
+        return None
+
+    ap = float(average_precision_score(truth, s))
+    return {
+        "pr_auc": ap,
+        "activation_threshold": q,
+        "act_quantile": act_quantile,
+        "n_activated": n_pos,
+        "n_valid_residues": int(truth.size),
+    }
+
+
+# ===================================================================
 # Per-feature analysis
 # ===================================================================
 
@@ -470,6 +521,15 @@ def _analyze_feature_pwm(
         if not f1_result:
             continue
 
+        # PR-AUC is the primary Stage 7b score (parallel to Stage 6c GBM).
+        # F1 fields are retained as a diagnostic. Missing pr_auc (degenerate
+        # binarisation) is rendered as an explicit null so downstream code
+        # can distinguish "not computable" from "computed as zero".
+        pr_auc_result = _compute_pwm_pr_auc(
+            scores_cat, acts_cat,
+            act_quantile=config.motif_pwm_act_quantile,
+        )
+
         motif_results.append({
             "motif_id": motif["id"],
             "consensus": motif["consensus"],
@@ -479,13 +539,18 @@ def _analyze_feature_pwm(
             # PWM values Stage 7b scored with (avoids rounding drift).
             "pwm": motif["pwm"].tolist(),
             "aa_order": _AA_ORDER,
+            "pr_auc": pr_auc_result,
             **f1_result,
         })
 
     if not motif_results:
         return None
 
-    motif_results.sort(key=lambda r: r["best_f1"], reverse=True)
+    # Sort by PR-AUC (primary); motifs with no PR-AUC sort last.
+    motif_results.sort(
+        key=lambda r: (r["pr_auc"] or {}).get("pr_auc", -1.0),
+        reverse=True,
+    )
 
     return {
         "feature_id": feature_data["feature_id"],
@@ -494,6 +559,7 @@ def _analyze_feature_pwm(
         "n_windows": len(windows),
         "n_motifs_discovered": len(motifs),
         "sweep_type": "2d_tau_sigma",
+        "primary_score": "pr_auc",
         "background_model": (
             "uniform" if getattr(config, "motif_pwm_background", "empirical") == "uniform"
             else "empirical"
@@ -550,6 +616,7 @@ def run_motif_pwm_enrichment(config: PipelineConfig) -> None:
                     summary_features[str(feat_idx)] = {
                         "best_consensus": m0["consensus"],
                         "best_f1": m0["best_f1"],
+                        "best_pr_auc": (m0.get("pr_auc") or {}).get("pr_auc"),
                         "e_value": m0["e_value"],
                         "n_motifs": len(existing["motifs"]),
                     }
@@ -578,6 +645,7 @@ def run_motif_pwm_enrichment(config: PipelineConfig) -> None:
         summary_features[str(feat_idx)] = {
             "best_consensus": m0["consensus"],
             "best_f1": m0["best_f1"],
+            "best_pr_auc": (m0.get("pr_auc") or {}).get("pr_auc"),
             "e_value": m0["e_value"],
             "n_motifs": len(result["motifs"]),
         }

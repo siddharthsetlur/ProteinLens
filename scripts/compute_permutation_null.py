@@ -56,6 +56,7 @@ from proteinlens.analysis.feature_pipeline.motif_enrichment import (
 )
 from proteinlens.analysis.feature_pipeline.motif_pwm import (
     _compute_best_pwm_f1,
+    _compute_pwm_pr_auc,
     _empirical_aa_background,
     _encode_sequence as _pwm_encode_sequence,
     _pwm_log_odds,
@@ -191,6 +192,27 @@ def _best_pwm_f1_across(
         r = _compute_best_pwm_f1(s, activations, feat_max, n_steps=n_steps)
         if r and r.get("best_f1", 0.0) > best:
             best = float(r["best_f1"])
+    return best
+
+
+def _best_pwm_pr_auc_across(
+    pwm_scores: list[np.ndarray],
+    activations: np.ndarray,
+    act_quantile: float,
+) -> float:
+    """Max PR-AUC across all PWMs given pre-computed per-residue scores.
+
+    Parallel to ``_best_pwm_f1_across`` but threshold-free along the predictor
+    axis. Degenerate binarisations (the scoring function returns None) are
+    treated as 0.0 so the returned float is always well-defined — this is
+    required for the Phipson & Smyth p-value to be well-behaved when some
+    permutations happen to produce a degenerate split.
+    """
+    best = 0.0
+    for s in pwm_scores:
+        r = _compute_pwm_pr_auc(s, activations, act_quantile=act_quantile)
+        if r and r.get("pr_auc", 0.0) > best:
+            best = float(r["pr_auc"])
     return best
 
 
@@ -823,9 +845,17 @@ def process_feature(
     # rather than read from Stage 7b JSON so the scoring matches the null
     # bit-for-bit (Stage 7b rounds the F1 to 4 dp and uses the same sweep).
     pwm_f1_obs = 0.0
+    pwm_pr_auc_obs = 0.0
+    pwm_act_quantile = float(shared.get("pwm_act_quantile", 0.80))
     if pwm_motifs and pwm_scores_pooled:
         pwm_f1_obs = _best_pwm_f1_across(
             pwm_scores_pooled, all_activations, feat_max, n_steps,
+        )
+        # PR-AUC mirrors Stage 6c: threshold-free along the predictor axis,
+        # truth binarised at a fixed quantile. Magnitudes on the same footing
+        # as geometry_prauc.
+        pwm_pr_auc_obs = _best_pwm_pr_auc_across(
+            pwm_scores_pooled, all_activations, act_quantile=pwm_act_quantile,
         )
 
     # ── Permutation loop ──
@@ -844,6 +874,7 @@ def process_feature(
     null_geom = np.zeros(n_permutations)
     null_interpro_protein = np.zeros(n_permutations)
     null_pwm = np.zeros(n_permutations)
+    null_pwm_pr_auc = np.zeros(n_permutations)
 
     # Independent RNG for PWM shuffle so enabling --include-pwm does NOT
     # perturb the six pre-existing null distributions (which share `rng`).
@@ -911,6 +942,13 @@ def process_feature(
             )
             null_pwm[k_perm] = _best_pwm_f1_across(
                 pwm_scores_pooled, shuffled_pwm_acts, feat_max, n_steps,
+            )
+            # Reuse the SAME shuffle for PR-AUC — no extra rng draws, so the
+            # pwm_f1 null is byte-identical whether or not PR-AUC is enabled.
+            # This is covered by a regression test.
+            null_pwm_pr_auc[k_perm] = _best_pwm_pr_auc_across(
+                pwm_scores_pooled, shuffled_pwm_acts,
+                act_quantile=pwm_act_quantile,
             )
 
     # ── Compute p-values (Phipson & Smyth 2010) ──
@@ -980,6 +1018,19 @@ def process_feature(
         ]
         result["p_values"]["pwm_f1"] = round(_pvalue(pwm_f1_obs, null_pwm), 6)
         result["null_summary"]["pwm_f1"] = _null_summary(null_pwm)
+
+        # PR-AUC: structurally parallel to geometry_prauc. Same shuffle
+        # (rng_pwm) as pwm_f1 above, so pwm_f1's null is unaffected.
+        result["observed"]["pwm_pr_auc"] = round(pwm_pr_auc_obs, 6)
+        result["null_distributions"]["pwm_pr_auc"] = [
+            round(float(v), 6) for v in null_pwm_pr_auc
+        ]
+        result["p_values"]["pwm_pr_auc"] = round(
+            _pvalue(pwm_pr_auc_obs, null_pwm_pr_auc), 6,
+        )
+        result["null_summary"]["pwm_pr_auc"] = _null_summary(null_pwm_pr_auc)
+        result["pwm_act_quantile"] = pwm_act_quantile
+
         result["n_pwms"] = len(pwm_motifs)
         # Self-documenting fields so downstream consumers know how this
         # p-value was computed. Option A: PWMs fixed, activations permuted
@@ -1061,7 +1112,18 @@ def main() -> None:
         help=(
             "Also compute a null distribution for the PWM motif F1 from "
             "Stage 7b (requires motif_pwm_enrichment/ outputs). PWMs are "
-            "held fixed; only activations are permuted within protein."
+            "held fixed; only activations are permuted within protein. "
+            "Emits both pwm_f1 (legacy 2-D sweep) and pwm_pr_auc (threshold-"
+            "free, parallel to geometry_prauc)."
+        ),
+    )
+    parser.add_argument(
+        "--pwm-act-quantile", type=float, default=0.80,
+        help=(
+            "Activation quantile used to binarise truth for pwm_pr_auc. "
+            "Keep equal to PipelineConfig.motif_pwm_act_quantile "
+            "(= geometry_act_quantile) so pwm_pr_auc is directly comparable "
+            "to geometry_prauc. Default: 0.80."
         ),
     )
     args = parser.parse_args()
@@ -1212,6 +1274,7 @@ def main() -> None:
         "act_matrix_full": act_matrix_full,
         "row_to_acc": row_to_acc,
         "include_pwm": args.include_pwm,
+        "pwm_act_quantile": args.pwm_act_quantile,
     }
 
     print("=" * 60)
@@ -1252,6 +1315,7 @@ def main() -> None:
     }
     if args.include_pwm:
         all_pvalues["pwm_f1"] = []
+        all_pvalues["pwm_pr_auc"] = []
 
     def _handle_result(fid_result: int, status: str, result: dict | None) -> None:
         nonlocal n_done, n_skipped, n_error

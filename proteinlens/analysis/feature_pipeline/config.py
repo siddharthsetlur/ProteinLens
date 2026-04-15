@@ -142,6 +142,14 @@ class PipelineConfig:
     """Random seed passed to MEME (--seed). Fixed for reproducibility."""
     motif_pwm_background: str = "empirical"
     """PWM log-odds background: 'empirical' (pooled AA freq) or 'uniform' (1/20)."""
+    motif_pwm_act_quantile: float = 0.80
+    """Activation quantile used to binarise truth when computing PWM PR-AUC.
+
+    Keep this equal to ``geometry_act_quantile`` so the PWM PR-AUC score is
+    directly comparable to the Stage 6c geometric GBM PR-AUC — both binarise
+    truth the same way and score a continuous per-residue predictor with
+    ``sklearn.metrics.average_precision_score``.
+    """
 
     # --- Sequence position enrichment (Stage 8) ---
     position_f1_threshold_steps: int = 50
@@ -170,7 +178,11 @@ class PipelineConfig:
     geometry_fragment_half_w: int = 10
     """Half-window for Ca fragment extraction (total window = 21)."""
     geometry_act_quantile: float = 0.80
-    """Activation quantile threshold for separating activated vs background."""
+    """Activation quantile threshold for separating activated vs background.
+
+    Mirrored by ``motif_pwm_act_quantile`` so Stage 7b PWM PR-AUC is on the
+    same footing as the Stage 6c geometric GBM PR-AUC.
+    """
     geometry_frag_top_k: int = 100
     """Max fragments for Kabsch superposition."""
     geometry_bg_ratio: int = 3

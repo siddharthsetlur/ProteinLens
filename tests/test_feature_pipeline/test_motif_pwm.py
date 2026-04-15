@@ -22,6 +22,7 @@ from proteinlens.analysis.feature_pipeline.config import PipelineConfig
 from proteinlens.analysis.feature_pipeline.motif_pwm import (
     _AA_ORDER,
     _compute_best_pwm_f1,
+    _compute_pwm_pr_auc,
     _encode_sequence,
     _meme_available,
     _pwm_log_odds,
@@ -29,6 +30,7 @@ from proteinlens.analysis.feature_pipeline.motif_pwm import (
     _select_high_activation_windows,
     run_motif_pwm_enrichment,
 )
+from sklearn.metrics import average_precision_score
 
 
 # ===================================================================
@@ -139,6 +141,81 @@ def test_compute_best_pwm_f1_no_signal():
 
 
 # ===================================================================
+# PR-AUC score (Stage 7b refactor — parallel to geometric GBM)
+# ===================================================================
+
+
+def test_compute_pwm_pr_auc_perfect_separation():
+    """When PWM scores perfectly rank activated residues, PR-AUC → 1.0."""
+    scores = np.concatenate([np.full(50, 5.0), np.full(50, -5.0)])
+    acts = np.concatenate([np.full(50, 1.0), np.full(50, 0.0)])
+    result = _compute_pwm_pr_auc(scores, acts, act_quantile=0.5)
+    assert result is not None
+    assert result["pr_auc"] >= 0.99
+    assert result["n_activated"] == 50
+    assert result["n_valid_residues"] == 100
+
+
+def test_compute_pwm_pr_auc_random_signal_is_near_base_rate():
+    """Uncorrelated score/activation → PR-AUC near the positive-rate base."""
+    rng = np.random.default_rng(0)
+    n = 4000
+    scores = rng.standard_normal(n)
+    acts = rng.standard_normal(n)
+    result = _compute_pwm_pr_auc(scores, acts, act_quantile=0.8)
+    assert result is not None
+    base_rate = result["n_activated"] / result["n_valid_residues"]
+    # No signal → AP ≈ base rate. Loose bound to absorb sampling noise.
+    assert abs(result["pr_auc"] - base_rate) < 0.05
+
+
+def test_compute_pwm_pr_auc_excludes_inf_positions():
+    """-inf score positions must be dropped *before* quantile/AP."""
+    # 10 finite residues: first 5 high-score high-act, next 5 low/low.
+    # Then 20 -inf positions with high activation that must be ignored.
+    scores = np.concatenate([
+        np.full(5, 5.0), np.full(5, -5.0), np.full(20, -np.inf),
+    ])
+    acts = np.concatenate([
+        np.full(5, 1.0), np.full(5, 0.0), np.full(20, 10.0),
+    ])
+    result = _compute_pwm_pr_auc(scores, acts, act_quantile=0.5)
+    assert result is not None
+    assert result["n_valid_residues"] == 10
+    # Quantile taken over finite subset only → threshold should be 0.5·(0+1).
+    assert result["pr_auc"] >= 0.99
+
+
+def test_compute_pwm_pr_auc_degenerate_returns_none():
+    """Zero positives or all-positives must return None (symmetric null)."""
+    # All activations zero → quantile = 0, truth all >= 0 → all-positive.
+    scores = np.linspace(-1, 1, 20)
+    acts = np.zeros(20)
+    assert _compute_pwm_pr_auc(scores, acts, act_quantile=0.8) is None
+
+    # All -inf scores → no valid residues.
+    scores_all_inf = np.full(20, -np.inf)
+    acts_any = np.linspace(0, 1, 20)
+    assert _compute_pwm_pr_auc(scores_all_inf, acts_any, act_quantile=0.8) is None
+
+
+def test_compute_pwm_pr_auc_matches_sklearn_directly():
+    """PR-AUC must equal a hand-called sklearn.average_precision_score."""
+    rng = np.random.default_rng(42)
+    n = 500
+    scores = rng.standard_normal(n)
+    # Correlated activations: higher when score is higher.
+    acts = scores + 0.5 * rng.standard_normal(n)
+
+    q = 0.8
+    result = _compute_pwm_pr_auc(scores, acts, act_quantile=q)
+    assert result is not None
+    truth = (acts >= np.quantile(acts, q)).astype(int)
+    expected = float(average_precision_score(truth, scores))
+    assert result["pr_auc"] == pytest.approx(expected, abs=1e-12)
+
+
+# ===================================================================
 # End-to-end (requires MEME)
 # ===================================================================
 
@@ -195,6 +272,10 @@ def test_end_to_end_recovers_implanted_motif(tmp_path: Path):
         motif_pwm_meme_nmotifs=1,
         motif_pwm_min_windows=5,
         motif_pwm_f1_threshold_steps=10,
+        # Synthetic activations are extremely sparse (15/1200 nonzero);
+        # default q=0.8 would binarise every residue as positive. Raise
+        # the quantile so the positive set is the handful of implanted hits.
+        motif_pwm_act_quantile=0.99,
     )
 
     run_motif_pwm_enrichment(config)
@@ -204,8 +285,16 @@ def test_end_to_end_recovers_implanted_motif(tmp_path: Path):
     with open(out) as f:
         result = json.load(f)
     assert result["n_motifs_discovered"] >= 1
+    assert result["primary_score"] == "pr_auc"
     m0 = result["motifs"][0]
     assert m0["best_f1"] > 0.0
+    # PR-AUC wiring is present. With only 15 positives out of ~1140 residues
+    # (base rate ~1.3%) the point estimate is noisy on this synthetic; the
+    # unit tests assert the scoring function's numerical correctness, so here
+    # we only check that the value is computed and non-degenerate.
+    assert m0["pr_auc"] is not None
+    assert 0.0 <= m0["pr_auc"]["pr_auc"] <= 1.0
+    assert m0["pr_auc"]["n_activated"] > 0
     # Consensus should contain at least 3 of the 5 implanted residues
     overlap = sum(1 for ch in implanted if ch in m0["consensus"])
     assert overlap >= 3, f"expected consensus overlap with {implanted}, got {m0['consensus']}"

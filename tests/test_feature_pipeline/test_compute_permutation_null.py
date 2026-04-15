@@ -421,6 +421,7 @@ def test_pwm_null_isolation_preserves_existing_nulls(tmp_path, monkeypatch):
         s = _minimal_shared(interpro_file_set=interpro_file_set)
         s["cath_file_set"] = cath_file_set
         s["include_pwm"] = include_pwm
+        s["pwm_act_quantile"] = 0.80
         return s
 
     result_off = cpn.process_feature(fid=0, data_dir=data_dir,
@@ -493,6 +494,7 @@ def test_pwm_null_recovers_signal(tmp_path):
 
     shared = _minimal_shared(interpro_file_set=set())
     shared["include_pwm"] = True
+    shared["pwm_act_quantile"] = 0.80
     result = cpn.process_feature(fid=0, data_dir=data_dir,
                                   n_permutations=50, seed=3, shared=shared)
 
@@ -565,7 +567,7 @@ def test_pwm_pr_auc_null_recovers_signal(tmp_path):
     assert len(null) == 50
 
 
-def test_pwm_pr_auc_does_not_perturb_pwm_f1_null(tmp_path):
+def test_pwm_pr_auc_does_not_perturb_pwm_f1_null(tmp_path, monkeypatch):
     """Adding the PR-AUC code path must not shift the pwm_f1 null by a draw.
 
     Regression guard: the PR-AUC computation inside the permutation loop
@@ -602,14 +604,10 @@ def test_pwm_pr_auc_does_not_perturb_pwm_f1_null(tmp_path):
     # Second run with the PR-AUC helper stubbed to a constant (still called,
     # but consumes no RNG). If pwm_f1 null differed, it would indicate the
     # PR-AUC path was silently consuming draws.
-    saved = cpn._best_pwm_pr_auc_across
-    try:
-        cpn._best_pwm_pr_auc_across = lambda *a, **kw: 0.0
-        stubbed = cpn.process_feature(fid=0, data_dir=data_dir,
-                                       n_permutations=25, seed=7,
-                                       shared=dict(shared))
-    finally:
-        cpn._best_pwm_pr_auc_across = saved
+    monkeypatch.setattr(cpn, "_best_pwm_pr_auc_across", lambda *a, **kw: 0.0)
+    stubbed = cpn.process_feature(fid=0, data_dir=data_dir,
+                                   n_permutations=25, seed=7,
+                                   shared=dict(shared))
 
     assert (real["null_distributions"]["pwm_f1"]
             == stubbed["null_distributions"]["pwm_f1"]), (

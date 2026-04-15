@@ -207,6 +207,12 @@ def _best_pwm_pr_auc_across(
     treated as 0.0 so the returned float is always well-defined — this is
     required for the Phipson & Smyth p-value to be well-behaved when some
     permutations happen to produce a degenerate split.
+
+    REVIEW: this helper is used for BOTH observed and null in this script,
+    so the None->0.0 fallback is symmetric here. The per-feature Stage 7b
+    JSON (motif_pwm.py) surfaces None instead; callers computing p-values
+    must NOT mix observed values from the Stage 7b JSON with null
+    distributions from this script.
     """
     best = 0.0
     for s in pwm_scores:
@@ -846,8 +852,18 @@ def process_feature(
     # bit-for-bit (Stage 7b rounds the F1 to 4 dp and uses the same sweep).
     pwm_f1_obs = 0.0
     pwm_pr_auc_obs = 0.0
-    pwm_act_quantile = float(shared.get("pwm_act_quantile", 0.80))
+    pwm_act_quantile = 0.0  # only meaningful when the PWM branch runs
     if pwm_motifs and pwm_scores_pooled:
+        # Single source of truth: shared["pwm_act_quantile"] is set from
+        # PipelineConfig.motif_pwm_act_quantile at CLI time. Raise loudly
+        # if absent — defaulting here would silently diverge from Stage 7b
+        # and from Stage 6c's geometry_act_quantile.
+        if "pwm_act_quantile" not in shared:
+            raise KeyError(
+                "shared['pwm_act_quantile'] missing — must be set from "
+                "PipelineConfig.motif_pwm_act_quantile for observed/null parity."
+            )
+        pwm_act_quantile = float(shared["pwm_act_quantile"])
         pwm_f1_obs = _best_pwm_f1_across(
             pwm_scores_pooled, all_activations, feat_max, n_steps,
         )
@@ -1117,13 +1133,17 @@ def main() -> None:
             "free, parallel to geometry_prauc)."
         ),
     )
+    # Default pulled from PipelineConfig so the three touchpoints
+    # (PipelineConfig, this CLI, shared dict) cannot drift apart.
     parser.add_argument(
-        "--pwm-act-quantile", type=float, default=0.80,
+        "--pwm-act-quantile", type=float,
+        default=PipelineConfig.__dataclass_fields__["motif_pwm_act_quantile"].default,
         help=(
             "Activation quantile used to binarise truth for pwm_pr_auc. "
-            "Keep equal to PipelineConfig.motif_pwm_act_quantile "
-            "(= geometry_act_quantile) so pwm_pr_auc is directly comparable "
-            "to geometry_prauc. Default: 0.80."
+            "Default is read from PipelineConfig.motif_pwm_act_quantile "
+            "to keep Stage 7b observed scores and the null in lock-step. "
+            "DEVIATING FROM geometry_act_quantile BREAKS DIRECT "
+            "COMPARABILITY with geometry_prauc — change both or neither."
         ),
     )
     args = parser.parse_args()

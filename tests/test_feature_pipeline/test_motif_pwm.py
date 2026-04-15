@@ -186,6 +186,26 @@ def test_compute_pwm_pr_auc_excludes_inf_positions():
     assert result["pr_auc"] >= 0.99
 
 
+def test_compute_pwm_pr_auc_sparse_fallback_to_nonzero():
+    """Sparse activations: q=0.8 collapses to 0 → fallback to ``a > 0``.
+
+    Regression test for the q==0 degeneracy that would otherwise force
+    every typical SAE feature through the degenerate-None branch and
+    silently yield p=1.0 in the permutation null.
+    """
+    # 5 of 100 residues carry nonzero activation; at q=0.80 the quantile is 0.
+    scores = np.concatenate([np.full(5, 5.0), np.linspace(-5, -1, 95)])
+    acts = np.zeros(100)
+    acts[:5] = 1.0
+    result = _compute_pwm_pr_auc(scores, acts, act_quantile=0.80)
+    assert result is not None
+    assert result["fallback_nonzero"] is True
+    assert result["n_activated"] == 5
+    assert result["activation_threshold"] == 0.0
+    # Perfect ranking: top-5 scores are the 5 nonzero activations.
+    assert result["pr_auc"] >= 0.99
+
+
 def test_compute_pwm_pr_auc_degenerate_returns_none():
     """Zero positives or all-positives must return None (symmetric null)."""
     # All activations zero → quantile = 0, truth all >= 0 → all-positive.
@@ -233,20 +253,35 @@ def test_end_to_end_recovers_implanted_motif(tmp_path: Path):
     features_dir = tmp_path / "features"
     features_dir.mkdir()
 
-    # Build 1 feature with 15 proteins each containing the motif at a random
-    # position, with high activation at the motif centre.
+    # Build 1 feature with 15 proteins, each containing SEVERAL non-overlapping
+    # copies of the motif. Only the motif CENTRE residue is active per copy,
+    # because the PWM scoring peaks at the window whose centre residue is the
+    # middle of the motif — we want the positive class to coincide with the
+    # PWM peaks so the ranking is informative. Spreading activation to other
+    # motif residues would create low-log-odds positives that crater AP.
+    #
+    # 15 proteins × 5 motif copies = 75 centres / 1200 residues ≈ 6% base rate.
+    # At q=0.80 the quantile collapses to 0 and the sparse-feature fallback
+    # (``a > 0``) defines the positive class as exactly these centres.
+    # This exercises the production default q=0.80 AND the q==0 fallback path.
+    n_copies = 5
+    motif_w = len(implanted)
     top_seqs = []
     for i in range(15):
-        seq_list = rng.choice(aa, size=80).tolist()
-        pos = 30 + (i % 20)
-        for j, ch in enumerate(implanted):
-            seq_list[pos + j] = ch
-        seq = "".join(seq_list)
-        acts = [0.0] * len(seq)
-        acts[pos + 2] = 1.0  # centre of the 5-residue motif
+        seq_list = rng.choice(aa, size=120).tolist()
+        acts = [0.0] * len(seq_list)
+        # Non-overlapping motif positions, spaced > motif_w apart.
+        start_offsets = rng.choice(
+            range(5, len(seq_list) - motif_w - 5, motif_w + 3),
+            size=n_copies, replace=False,
+        )
+        for pos in start_offsets:
+            for j, ch in enumerate(implanted):
+                seq_list[pos + j] = ch
+            acts[pos + motif_w // 2] = 1.0  # centre of this motif copy
         top_seqs.append({
             "accession": f"P{i:05d}",
-            "sequence": seq,
+            "sequence": "".join(seq_list),
             "per_residue_activations": acts,
         })
 
@@ -272,10 +307,9 @@ def test_end_to_end_recovers_implanted_motif(tmp_path: Path):
         motif_pwm_meme_nmotifs=1,
         motif_pwm_min_windows=5,
         motif_pwm_f1_threshold_steps=10,
-        # Synthetic activations are extremely sparse (15/1200 nonzero);
-        # default q=0.8 would binarise every residue as positive. Raise
-        # the quantile so the positive set is the handful of implanted hits.
-        motif_pwm_act_quantile=0.99,
+        # Use the production default so this e2e exercises the same
+        # binarisation regime as a real pipeline run.
+        motif_pwm_act_quantile=0.80,
     )
 
     run_motif_pwm_enrichment(config)
@@ -288,12 +322,11 @@ def test_end_to_end_recovers_implanted_motif(tmp_path: Path):
     assert result["primary_score"] == "pr_auc"
     m0 = result["motifs"][0]
     assert m0["best_f1"] > 0.0
-    # PR-AUC wiring is present. With only 15 positives out of ~1140 residues
-    # (base rate ~1.3%) the point estimate is noisy on this synthetic; the
-    # unit tests assert the scoring function's numerical correctness, so here
-    # we only check that the value is computed and non-degenerate.
+    # At q=0.80 with a ~13% base rate the PWM log-odds should clearly
+    # separate motif-neighbourhood residues from the rest. PR-AUC > 0.5
+    # is ~4× the base rate — a real behavioural assertion, not a tautology.
     assert m0["pr_auc"] is not None
-    assert 0.0 <= m0["pr_auc"]["pr_auc"] <= 1.0
+    assert m0["pr_auc"]["pr_auc"] > 0.5
     assert m0["pr_auc"]["n_activated"] > 0
     # Consensus should contain at least 3 of the 5 implanted residues
     overlap = sum(1 for ch in implanted if ch in m0["consensus"])

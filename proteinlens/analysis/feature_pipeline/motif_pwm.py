@@ -402,8 +402,22 @@ def _compute_pwm_pr_auc(
 
     -inf score positions (out-of-bounds / non-standard) are masked *before*
     the quantile is computed so observed and null see the same residue set.
-    Returns None on degenerate binarisation (zero or all positives) or when
-    no finite scores exist.
+
+    **Sparse-feature fallback.** SAE features are typically sparse: if
+    fewer than ``(1 - act_quantile)`` of valid residues carry non-zero
+    activation, ``np.quantile`` collapses to 0 and ``a >= 0`` would flag
+    every residue as positive. We detect this and fall back to ``a > 0``
+    (every non-zero residue is a positive), which matches the natural
+    semantics for a sparse feature. The returned dict records the actual
+    threshold used and a ``fallback_nonzero`` flag so the fallback is
+    never silent.
+
+    **Observed/null asymmetry warning.** This helper returns ``None`` on
+    degenerate binarisation; the null-script helper
+    ``_best_pwm_pr_auc_across`` converts None to 0.0 so the p-value stays
+    well-defined. Per-feature JSON surfaces the raw ``None`` and must not
+    be mixed with the null-script's ``null_distributions.pwm_pr_auc``
+    without explicit handling of the None case.
     """
     valid = np.isfinite(pwm_scores)
     if not valid.any():
@@ -414,11 +428,19 @@ def _compute_pwm_pr_auc(
         return None
 
     q = float(np.quantile(a, act_quantile))
-    truth = (a >= q).astype(np.int8)
+    fallback_nonzero = False
+    if q <= 0.0:
+        # Sparse-feature fallback: quantile is uninformative (every zero
+        # residue would be positive). Use strict non-zero activation as
+        # the positive class instead.
+        truth = (a > 0.0).astype(np.int8)
+        fallback_nonzero = True
+    else:
+        truth = (a >= q).astype(np.int8)
     n_pos = int(truth.sum())
-    # Degenerate: PR-AUC is undefined when there are no positives, and
-    # trivially 1.0 when everything is positive — neither is informative,
-    # so we surface it as "no score" for symmetric observed/null handling.
+    # Still degenerate (e.g. all activations are zero, or all are equal
+    # and above q): PR-AUC is not informative, surface as "no score".
+    # Callers must handle observed and null symmetrically.
     if n_pos == 0 or n_pos == truth.size:
         return None
 
@@ -427,6 +449,7 @@ def _compute_pwm_pr_auc(
         "pr_auc": ap,
         "activation_threshold": q,
         "act_quantile": act_quantile,
+        "fallback_nonzero": fallback_nonzero,
         "n_activated": n_pos,
         "n_valid_residues": int(truth.size),
     }
@@ -548,7 +571,7 @@ def _analyze_feature_pwm(
 
     # Sort by PR-AUC (primary); motifs with no PR-AUC sort last.
     motif_results.sort(
-        key=lambda r: (r["pr_auc"] or {}).get("pr_auc", -1.0),
+        key=lambda r: (r.get("pr_auc") or {}).get("pr_auc", -1.0),
         reverse=True,
     )
 

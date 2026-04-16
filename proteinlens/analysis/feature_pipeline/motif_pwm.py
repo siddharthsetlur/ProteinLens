@@ -208,6 +208,30 @@ def _parse_meme_xml(xml_path: Path) -> List[Dict[str, Any]]:
     return motifs
 
 
+_MEME_SUPPORTS_SEED: Optional[bool] = None
+
+
+def _meme_supports_seed() -> bool:
+    """Return True if the installed MEME accepts ``-seed``.
+
+    MEME 4.11.2 (bioconda) does not have ``-seed``; 5.x does. We probe once
+    and cache the result so per-feature calls don't fork extra processes.
+    """
+    global _MEME_SUPPORTS_SEED
+    if _MEME_SUPPORTS_SEED is not None:
+        return _MEME_SUPPORTS_SEED
+    try:
+        r = subprocess.run(
+            ["meme", "-h"], capture_output=True, text=True, timeout=5,
+        )
+        # MEME prints help to stderr regardless of returncode.
+        help_text = (r.stdout or "") + (r.stderr or "")
+        _MEME_SUPPORTS_SEED = "-seed" in help_text
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        _MEME_SUPPORTS_SEED = False
+    return _MEME_SUPPORTS_SEED
+
+
 def _run_meme(
     windows: List[str],
     minw: int,
@@ -241,9 +265,15 @@ def _run_meme(
             "-minw", str(minw),
             "-maxw", str(maxw),
             "-mod", "zoops",
-            "-seed", str(seed),  # deterministic EM initialisation
             "-nostatus",
         ]
+        # MEME 4.11.2 (bioconda) does not accept -seed; newer builds do.
+        # Probe once and include it only if supported. Determinism across
+        # builds is then best-effort — the permutation null uses its own
+        # RNG so statistical validity does not depend on this flag.
+        if _meme_supports_seed():
+            cmd += ["-seed", str(seed)]
+        _ = seed  # silence unused-arg warning when flag not supported
         try:
             subprocess.run(
                 cmd, check=True, timeout=timeout_s,

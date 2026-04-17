@@ -70,7 +70,7 @@ function renderSummaryCards(container, feat) {
     `));
 
     container.appendChild(createStatCard("Sequence Metrics", `
-        <div class="detail">Motif F1: ${fmtVal(feat.motif_seq_f1)} ${feat.motif_seq_best ? `(${feat.motif_seq_best})` : ""}</div>
+        <div class="detail">Motif PR-AUC: ${fmtVal(feat.motif_seq_pr_auc)} ${feat.motif_seq_best ? `(<span style="font-family:monospace">${feat.motif_seq_best}</span>)` : ""}</div>
         <div class="detail">Position F1: ${fmtVal(feat.position_f1)}</div>
         <div class="detail" style="color:#16a34a">Both below null \u2014 sequence cannot explain</div>
     `));

@@ -316,7 +316,7 @@ function renderCrossFamilyCards(container, features) {
             <div class="detail" style="margin-bottom:0.4rem;">
                 InterPro protein F1: ${fmtVal(f.best_interpro_protein_f1)} \u00b7
                 InterPro residue F1: ${fmtVal(f.best_interpro_residue_f1)} \u00b7
-                Seq motif F1: ${fmtVal(f.motif_seq_f1)}
+                Seq motif PR-AUC: ${fmtVal(f.motif_seq_pr_auc)}
             </div>
             <table role="grid" style="font-size:0.8rem;margin:0;">
                 <thead><tr><th>Family</th><th>F1</th><th>Prec</th><th>Rec</th></tr></thead>
@@ -349,7 +349,7 @@ function renderAllFeaturesTable(container, features) {
             <td>${f.n_families_above_03}</td>
             <td>${fmtVal(f.best_interpro_residue_f1)}</td>
             <td>${fmtVal(f.motif_rmsd_per_pos)}</td>
-            <td>${fmtVal(f.motif_seq_f1)}</td>
+            <td>${fmtVal(f.motif_seq_pr_auc)}</td>
         </tr>`)
         .join("");
 
@@ -359,7 +359,7 @@ function renderAllFeaturesTable(container, features) {
                 <th>ID</th><th>Type</th><th>Composite</th><th>Struct. Cat.</th>
                 <th>Top Geom</th><th>GBM AUC</th><th>Conc F1</th>
                 <th>IP Prot F1</th><th>#Fam</th><th>IP Res F1</th>
-                <th>RMSD/pos</th><th>Motif F1</th>
+                <th>RMSD/pos</th><th>Motif PR-AUC</th>
             </tr></thead>
             <tbody>${rows}</tbody>
         </table>

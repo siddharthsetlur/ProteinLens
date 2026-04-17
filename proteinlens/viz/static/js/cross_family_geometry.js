@@ -73,7 +73,7 @@ function renderGlobalStats(container, stats, features) {
 
     container.appendChild(createStatCard("Null Thresholds (p95)", `
         <div class="detail">InterPro Res F1: ${fmtVal(nt.interpro_res_f1, 4)}</div>
-        <div class="detail">Motif F1: ${fmtVal(nt.motif_f1, 4)}</div>
+        <div class="detail">Motif PR-AUC: ${fmtVal(nt.motif_f1, 4)}</div>
         <div class="detail">Position F1: ${fmtVal(nt.position_f1, 4)}</div>
         <div class="detail">From ${nt.n_sparse_features || "?"} sparse features (&lt;1% activation)</div>
     `));
@@ -114,7 +114,7 @@ function renderMethodology(container, stats) {
                     <thead><tr><th>Metric</th><th>Null p95</th></tr></thead>
                     <tbody>
                         <tr><td>InterPro Residue F1</td><td><strong>${fmtVal(nt.interpro_res_f1, 4)}</strong></td></tr>
-                        <tr><td>Sequence Motif F1</td><td><strong>${fmtVal(nt.motif_f1, 4)}</strong></td></tr>
+                        <tr><td>Sequence Motif PR-AUC</td><td><strong>${fmtVal(nt.motif_f1, 4)}</strong></td></tr>
                         <tr><td>Position F1</td><td><strong>${fmtVal(nt.position_f1, 4)}</strong></td></tr>
                         <tr><td>Geometry PR-AUC</td><td><strong>${fmtVal(stats.geom_pr_auc_threshold, 4)}</strong> (fixed)</td></tr>
                     </tbody>

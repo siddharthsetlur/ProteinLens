@@ -256,19 +256,20 @@ function buildColumnDefs() {
             filter: "agNumberColumnFilter",
         },
         {
-            field: "motif_best_f1",
-            headerName: "Motif F1",
-            width: 110,
+            field: "motif_best_pr_auc",
+            headerName: "Motif PR-AUC",
+            width: 120,
             valueFormatter: nullFormatter(3),
             cellStyle: greenScale(1.0),
             comparator: nullBottomComparator,
             filter: "agNumberColumnFilter",
         },
         {
-            field: "motif_best_name",
+            field: "motif_best_consensus",
             headerName: "Best Motif",
-            width: 110,
+            width: 130,
             filter: "agTextColumnFilter",
+            cellStyle: () => ({ fontFamily: "monospace" }),
         },
         {
             field: "position_best_f1",
@@ -568,10 +569,10 @@ function renderScatterPlots(index) {
         {
             divId: "scatter-motif",
             xField: "geometry_residue_pr_auc",
-            yField: "motif_best_f1",
-            title: "Geometry PR-AUC vs Motif F1",
+            yField: "motif_best_pr_auc",
+            title: "Geometry PR-AUC vs Motif PR-AUC",
             xlabel: "Geometry PR-AUC",
-            ylabel: "Motif F1",
+            ylabel: "Motif PR-AUC",
             colorscale: csViridis,
         },
         {
@@ -605,7 +606,7 @@ function renderScatterPlots(index) {
             const f1s = [
                 r.interpro_protein_best_f1,
                 r.interpro_residue_best_f1,
-                r.motif_best_f1,
+                r.motif_best_pr_auc,
                 r.position_best_f1,
                 r.cath_best_f1,
             ].filter((v) => v != null);
@@ -624,7 +625,7 @@ function renderScatterPlots(index) {
     // --- Geometry-primary plot (custom: gold highlights over grey density) ---
     const gpRows = index
         .map((r) => {
-            const seqF1s = [r.motif_best_f1, r.position_best_f1, r.interpro_residue_best_f1, r.cath_best_f1].filter((v) => v != null);
+            const seqF1s = [r.motif_best_pr_auc, r.position_best_f1, r.interpro_residue_best_f1, r.cath_best_f1].filter((v) => v != null);
             if (r.geometry_residue_pr_auc == null) return null;
             return { ...r, best_seq_f1: seqF1s.length > 0 ? Math.max(...seqF1s) : 0 };
         })

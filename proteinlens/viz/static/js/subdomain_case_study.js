@@ -141,7 +141,7 @@ function renderGroups(container, groups) {
                     <th>Prot. F1</th>
                     <th>Res. F1</th>
                     <th>CATH F1</th>
-                    <th>Motif F1</th>
+                    <th>Motif PR-AUC</th>
                     <th>Score</th>
                 </tr>
             </thead>

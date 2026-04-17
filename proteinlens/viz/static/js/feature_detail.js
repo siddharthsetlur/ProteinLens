@@ -257,7 +257,7 @@ function renderGeometryResidueCard(data, gpInfo) {
                 </div>
                 <div class="detail" style="color:#856404;">
                     All sequence metrics below null p95:
-                    Motif F1=${fmtVal(gpInfo.motif_f1)} \u2264 0.71,
+                    Motif PR-AUC=${fmtVal(gpInfo.motif_f1)} \u2264 0.71,
                     Position F1=${fmtVal(gpInfo.position_f1)} \u2264 0.12,
                     InterPro Res F1=${fmtVal(gpInfo.interpro_res_f1)} \u2264 0.20
                 </div>
@@ -320,36 +320,37 @@ function renderMotifCard(data) {
  * @returns {HTMLElement}
  */
 function renderSequenceMotifCard(data) {
-    if (!data) return pendingCard("Sequence Motif F1");
+    if (!data) return pendingCard("Sequence Motif PR-AUC");
 
-    const motifs = data.top_motifs || [];
+    const motifs = data.motifs || [];
     if (motifs.length === 0) {
-        return createStatCard("Sequence Motif F1",
-            '<div class="detail">No eligible motifs found</div>');
+        return createStatCard("Sequence Motif PR-AUC",
+            '<div class="detail">No motifs discovered by MEME</div>');
     }
 
     const best = motifs[0];
-    const otherMotifs = motifs.slice(1, 5)
-        .map((m) => `<span style="font-family:monospace">${m.motif}</span> F1=${fmtVal(m.best_f1)}`)
+    const prAuc = best.pr_auc || {};
+    const otherMotifs = motifs.slice(1)
+        .map((m) => {
+            const p = m.pr_auc || {};
+            return `<span style="font-family:monospace">${m.consensus}</span> PR-AUC=${fmtVal(p.pr_auc)}`;
+        })
         .join(", ");
 
-    return createStatCard("Sequence Motif F1", `
-        <div class="value">F1 = ${fmtVal(best.best_f1)}</div>
-        <div class="detail"><strong style="font-family:monospace;font-size:1.1rem">${best.motif}</strong></div>
+    return createStatCard("Sequence Motif PR-AUC", `
+        <div class="value">PR-AUC = ${fmtVal(prAuc.pr_auc)}</div>
+        <div class="detail"><strong style="font-family:monospace;font-size:1.1rem">${best.consensus}</strong></div>
         <div class="detail">
-            Threshold: ${fmtVal(best.best_threshold_normalized, 2)} (norm) / ${fmtVal(best.best_threshold, 2)} (abs)
+            Width: ${best.width ?? "—"} · E-value: ${best.e_value != null ? best.e_value.toExponential(1) : "—"}
         </div>
         <div class="detail">
-            Precision: ${fmtVal(best.precision_at_best)} · Recall: ${fmtVal(best.recall_at_best)}
+            Activated: ${prAuc.n_activated ?? "—"} / ${prAuc.n_valid_residues ?? "—"} residues
+            (q=${fmtVal(prAuc.act_quantile, 2)})
+            ${prAuc.fallback_nonzero ? " [sparse fallback]" : ""}
         </div>
-        <div class="detail">
-            Occurrences: ${best.n_occurrences ?? "—"} ·
-            TP: ${best.n_true_positives ?? "—"} · FP: ${best.n_false_positives ?? "—"} · FN: ${best.n_false_negatives ?? "—"}
-        </div>
-        ${best.interpretation ? `<div class="detail" style="margin-top:0.3rem;font-style:italic">${best.interpretation}</div>` : ""}
-        ${otherMotifs ? `<div class="detail" style="margin-top:0.3rem"><strong>Other top motifs:</strong> ${otherMotifs}</div>` : ""}
+        ${otherMotifs ? `<div class="detail" style="margin-top:0.3rem"><strong>Other motifs:</strong> ${otherMotifs}</div>` : ""}
         <div class="detail" style="margin-top:0.3rem">
-            ${data.n_proteins_evaluated ?? "?"} proteins · ${data.n_total_residues ?? "?"} residues · ${data.n_unique_kmers_tested ?? "?"} k-mers tested
+            ${data.n_proteins_evaluated ?? "?"} proteins · ${data.n_windows ?? "?"} windows · ${data.n_motifs_discovered ?? "?"} motifs discovered
         </div>
     `);
 }

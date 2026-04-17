@@ -239,8 +239,8 @@ def test_null_array_shape_and_bounds(tmp_path):
 
 
 def test_output_schema_additive(tmp_path):
-    """I4: all six keys present in each of observed/null_distributions/
-    p_values/null_summary, with the five pre-existing keys still present."""
+    """I4: all seven keys present in each of observed/null_distributions/
+    p_values/null_summary, with the six pre-existing keys still present."""
     rng = np.random.default_rng(3)
     feature_data = _build_feature_data(n_proteins=5, length=25, rng=rng)
     data_dir = _setup_data_dir(tmp_path, feature_data, feat_max=1.0)
@@ -252,6 +252,7 @@ def test_output_schema_additive(tmp_path):
     expected_keys = {
         "motif_f1", "position_f1", "interpro_res_f1",
         "cath_res_f1", "geometry_prauc", "interpro_protein_f1",
+        "cath_protein_f1",
     }
     for section in ("observed", "null_distributions", "p_values", "null_summary"):
         assert set(result[section].keys()) == expected_keys, section

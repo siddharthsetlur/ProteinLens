@@ -93,6 +93,20 @@ _PWM_RNG_OFFSET = 20_000_000
 _PWM_UNIFORM_BG = np.full(20, 1.0 / 20, dtype=np.float64)
 
 
+# RNG offset for the CATH protein-level null. Own stream so the six
+# pre-existing null distributions stay byte-identical.
+_CATH_PROT_RNG_OFFSET = 30_000_000
+
+_CATH_PROTEIN_MIN_PROTEINS = 3
+_CATH_LEVELS = ("C", "CA", "CAT", "CATH")
+
+
+def _cath_label_at_level(cath_id: str, level: str) -> str:
+    parts = cath_id.split(".")
+    n = _CATH_LEVELS.index(level) + 1
+    return ".".join(parts[:n])
+
+
 # ── Data loading helpers ──────────────────────────────────────────────
 
 
@@ -381,6 +395,91 @@ def _compute_interpro_protein_f1(
         top_n=1,
     )
     return float(results[0]["best_f1"]) if results else 0.0
+
+
+def _load_cath_protein_annotations(
+    proteins: list[dict],
+    cath_file_set: set[str],
+    cath_cache_dir: Path,
+) -> dict[str, list[str]]:
+    """Load CATH domain IDs per accession for the protein-level null.
+
+    Sibling of ``_load_cath_labels`` (residue-level boolean labels from the
+    same JSON files). Mirrors the InterPro split at
+    ``_load_interpro_protein_annotations`` so the residue-level path — and
+    its null distribution — stays bit-reproducible.
+    """
+    annotations: dict[str, list[str]] = {}
+    for p in proteins:
+        acc = p["accession"]
+        if acc not in cath_file_set:
+            continue
+        try:
+            hits = json.loads((cath_cache_dir / f"{acc}.json").read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        cath_ids = [
+            h["cath_id"] for h in hits
+            if h.get("cath_id") and len(h["cath_id"].split(".")) >= 4
+        ]
+        if cath_ids:
+            annotations[acc] = cath_ids
+    return annotations
+
+
+def _compute_cath_protein_f1(
+    accessions: list[str],
+    per_protein_max: np.ndarray,
+    cath_annotations: dict[str, list[str]],
+    feat_max: float,
+    n_steps: int,
+    min_proteins: int = _CATH_PROTEIN_MIN_PROTEINS,
+) -> float:
+    """Best protein-level F1 across all CATH labels at all hierarchy levels.
+
+    Pooled scalar analog of ``_compute_interpro_protein_f1`` — returns one
+    number so downstream FDR sees a single CATH-protein null per feature.
+    Labels from all four CATH levels (C, CA, CAT, CATH) compete for the
+    top spot; ties and filtering follow ``compute_cath_enrichment.py``
+    (``min_proteins`` per label, linear threshold sweep over ``feat_max``).
+    """
+    if not cath_annotations or feat_max <= 0 or not accessions:
+        return 0.0
+
+    activations = np.asarray(per_protein_max, dtype=np.float64)
+
+    label_accs: dict[tuple[str, str], set[str]] = {}
+    for acc in accessions:
+        for cath_id in cath_annotations.get(acc, []):
+            for level in _CATH_LEVELS:
+                key = (level, _cath_label_at_level(cath_id, level))
+                label_accs.setdefault(key, set()).add(acc)
+
+    eligible = [accs for accs in label_accs.values() if len(accs) >= min_proteins]
+    if not eligible:
+        return 0.0
+
+    thresholds = np.linspace(0, feat_max, n_steps + 1)
+    y_pred = activations[np.newaxis, :] > thresholds[:, np.newaxis]
+    pred_sums = y_pred.sum(axis=1).astype(np.float64)
+    y_pred_f = y_pred.astype(np.float64)
+
+    y_true = np.array(
+        [[1.0 if acc in accs else 0.0 for acc in accessions] for accs in eligible],
+        dtype=np.float64,
+    )
+    true_sums = y_true.sum(axis=1)
+    tp = y_true @ y_pred_f.T
+    fp = pred_sums[np.newaxis, :] - tp
+    fn = true_sums[:, np.newaxis] - tp
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        precision = np.where(tp + fp > 0, tp / (tp + fp), 0.0)
+        recall = np.where(tp + fn > 0, tp / (tp + fn), 0.0)
+        pr_sum = precision + recall
+        f1 = np.where(pr_sum > 0, 2.0 * precision * recall / pr_sum, 0.0)
+
+    return float(f1.max()) if f1.size else 0.0
 
 
 def _compute_domain_f1(
@@ -788,6 +887,12 @@ def process_feature(
         [float(p["activations"].max()) for p in proteins], dtype=np.float64,
     )
 
+    # 4c. CATH protein-level annotations. Same shuffle unit as 4b (across
+    # proteins), but the F1 is pooled across all four CATH levels.
+    cath_protein_annotations = _load_cath_protein_annotations(
+        proteins, cath_file_set, cath_cache_dir,
+    )
+
     # 5. Geometry PR-AUC (load GBM, get predictions; uses pre-globbed file sets)
     geom_result = _load_gbm_and_predict(fid, proteins, data_dir, shared)
 
@@ -847,6 +952,10 @@ def process_feature(
         accessions, per_protein_max, protein_annotations, feat_max, n_steps,
     )
 
+    cath_protein_f1_obs = _compute_cath_protein_f1(
+        accessions, per_protein_max, cath_protein_annotations, feat_max, n_steps,
+    )
+
     # PWM motif F1 (observed). Recomputed from the pooled per-residue scores
     # rather than read from Stage 7b JSON so the scoring matches the null
     # bit-for-bit (Stage 7b rounds the F1 to 4 dp and uses the same sweep).
@@ -889,12 +998,18 @@ def process_feature(
     null_cath = np.zeros(n_permutations)
     null_geom = np.zeros(n_permutations)
     null_interpro_protein = np.zeros(n_permutations)
+    null_cath_protein = np.zeros(n_permutations)
     null_pwm = np.zeros(n_permutations)
     null_pwm_pr_auc = np.zeros(n_permutations)
 
     # Independent RNG for PWM shuffle so enabling --include-pwm does NOT
     # perturb the six pre-existing null distributions (which share `rng`).
     rng_pwm = np.random.default_rng(seed + fid + _PWM_RNG_OFFSET)
+
+    # Independent RNG for the CATH protein-level across-protein shuffle.
+    # Must not share state with any other rng — preserves byte-identical
+    # output for the pre-existing null distributions.
+    rng_cath_protein = np.random.default_rng(seed + fid + _CATH_PROT_RNG_OFFSET)
 
     for k_perm in range(n_permutations):
         # Shuffle full pooled activations within each protein (for position/InterPro/CATH)
@@ -949,6 +1064,17 @@ def process_feature(
                 accessions, shuffled_max, protein_annotations, feat_max, n_steps,
             )
 
+        # CATH protein-level: same across-protein shuffle unit as InterPro
+        # protein-level, separate RNG stream so adding this null does not
+        # perturb any pre-existing distribution.
+        if cath_protein_annotations:
+            shuffled_max_cath = per_protein_max.copy()
+            rng_cath_protein.shuffle(shuffled_max_cath)
+            null_cath_protein[k_perm] = _compute_cath_protein_f1(
+                accessions, shuffled_max_cath, cath_protein_annotations,
+                feat_max, n_steps,
+            )
+
         # PWM motif F1 with shuffled activations. PWMs + per-residue scores
         # stay fixed; only activations are permuted within protein. Uses its
         # own RNG stream (rng_pwm) — see _PWM_RNG_OFFSET rationale above.
@@ -995,6 +1121,7 @@ def process_feature(
             # New protein-level InterPro entry — appended last so existing
             # keys keep their order/position and diff cleanly.
             "interpro_protein_f1": round(interpro_protein_f1_obs, 6),
+            "cath_protein_f1": round(cath_protein_f1_obs, 6),
         },
         "null_distributions": {
             "motif_f1": [round(float(v), 6) for v in null_motif],
@@ -1003,6 +1130,7 @@ def process_feature(
             "cath_res_f1": [round(float(v), 6) for v in null_cath],
             "geometry_prauc": [round(float(v), 6) for v in null_geom],
             "interpro_protein_f1": [round(float(v), 6) for v in null_interpro_protein],
+            "cath_protein_f1": [round(float(v), 6) for v in null_cath_protein],
         },
         "p_values": {
             "motif_f1": round(_pvalue(motif_f1_obs, null_motif), 6),
@@ -1013,6 +1141,9 @@ def process_feature(
             "interpro_protein_f1": round(
                 _pvalue(interpro_protein_f1_obs, null_interpro_protein), 6,
             ),
+            "cath_protein_f1": round(
+                _pvalue(cath_protein_f1_obs, null_cath_protein), 6,
+            ),
         },
         "null_summary": {
             "motif_f1": _null_summary(null_motif),
@@ -1021,6 +1152,7 @@ def process_feature(
             "cath_res_f1": _null_summary(null_cath),
             "geometry_prauc": _null_summary(null_geom),
             "interpro_protein_f1": _null_summary(null_interpro_protein),
+            "cath_protein_f1": _null_summary(null_cath_protein),
         },
     }
 

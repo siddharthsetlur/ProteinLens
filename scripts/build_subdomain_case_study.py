@@ -137,7 +137,7 @@ def main() -> None:
             "interpro_residue_f1": gp["interpro_res_f1"],
             "cath_residue_f1": round(best_cath_f1, 4),
             "cath_best_label": best_cath_label,
-            "motif_f1": gp["motif_f1"],
+            "motif_pr_auc": gp["motif_pr_auc"],
             "position_f1": gp["position_f1"],
             "seq_feature_fraction": gp["seq_feature_fraction"],
             "top_importances": sorted_imps,

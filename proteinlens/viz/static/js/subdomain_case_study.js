@@ -155,7 +155,7 @@ function renderGroups(container, groups) {
                         <td>${fmtVal(f.interpro_protein_f1)}</td>
                         <td>${fmtVal(f.interpro_residue_f1)}</td>
                         <td>${fmtVal(f.cath_residue_f1)}</td>
-                        <td>${fmtVal(f.motif_f1)}</td>
+                        <td>${fmtVal(f.motif_pr_auc)}</td>
                         <td>${fmtVal(f.composite_score)}</td>
                     </tr>
                 `).join("")}

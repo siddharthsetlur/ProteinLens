@@ -107,15 +107,18 @@ def _load_enrichment_scores(data_dir: Path) -> dict:
                     "rules": res.get("rules", ""),
                 }
 
-    motif_dir = data_dir / "motif_enrichment"
+    motif_dir = data_dir / "motif_pwm_enrichment"
     if motif_dir.is_dir():
         for fpath in motif_dir.iterdir():
             if fpath.name == "summary.json" or fpath.suffix != ".json":
                 continue
             d = json.loads(fpath.read_text())
-            tops = d.get("top_motifs", [])
+            tops = d.get("motifs", [])
             if tops:
-                motif[d["feature_id"]] = tops[0]["best_f1"]
+                pr_auc_dict = tops[0].get("pr_auc") or {}
+                val = pr_auc_dict.get("pr_auc")
+                if val is not None:
+                    motif[d["feature_id"]] = val
 
     pos_dir = data_dir / "position_enrichment"
     if pos_dir.is_dir():
@@ -185,7 +188,7 @@ def _load_permutation_pvalues(data_dir: Path) -> dict | None:
     if not perm_dir.is_dir():
         return None
 
-    metrics = ["motif_f1", "position_f1", "interpro_res_f1", "cath_res_f1", "geometry_prauc"]
+    metrics = ["pwm_pr_auc", "position_f1", "interpro_res_f1", "cath_res_f1", "geometry_prauc"]
     raw: dict[str, dict[int, float]] = {m: {} for m in metrics}
 
     n_loaded = 0
@@ -227,7 +230,7 @@ def _compute_null_thresholds(
     """Compute p95 null thresholds from features with sparse activation."""
     cov_path = data_dir / "survey_coverage.json"
     if not cov_path.exists():
-        return {"motif_f1": 0.71, "position_f1": 0.12, "interpro_res_f1": 0.20, "cath_res_f1": 0.20}
+        return {"motif_pr_auc": 0.20, "position_f1": 0.12, "interpro_res_f1": 0.20, "cath_res_f1": 0.20}
 
     cov = json.loads(cov_path.read_text())
     sparse_fids = set()
@@ -242,7 +245,7 @@ def _compute_null_thresholds(
         return float(np.percentile(vals, 95))
 
     return {
-        "motif_f1": _null_p95(scores["motif"], sparse_fids),
+        "motif_pr_auc": _null_p95(scores["motif"], sparse_fids),
         "position_f1": _null_p95(scores["pos"], sparse_fids),
         "interpro_res_f1": _null_p95(scores["ipro_res"], sparse_fids),
         "cath_res_f1": _null_p95(scores["cath_res"], sparse_fids),
@@ -258,7 +261,7 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
     ipro_res = scores["ipro_res"]
     cath_res = scores["cath_res"]
 
-    motif_null = null_thresholds["motif_f1"]
+    motif_null = null_thresholds["motif_pr_auc"]
     pos_null = null_thresholds["position_f1"]
     ipro_null = null_thresholds["interpro_res_f1"]
     cath_null = null_thresholds["cath_res_f1"]
@@ -298,7 +301,7 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
             fdr_threshold = 0.05
             is_primary = (
                 perm_pvalues["geometry_prauc"].get(fid, 1.0) < fdr_threshold
-                and perm_pvalues["motif_f1"].get(fid, 0.0) >= fdr_threshold
+                and perm_pvalues["pwm_pr_auc"].get(fid, 0.0) >= fdr_threshold
                 and perm_pvalues["position_f1"].get(fid, 0.0) >= fdr_threshold
                 and perm_pvalues["interpro_res_f1"].get(fid, 0.0) >= fdr_threshold
                 and perm_pvalues["cath_res_f1"].get(fid, 0.0) >= fdr_threshold
@@ -326,7 +329,7 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
             "concordance_iou": round(g["iou"], 4),
             "concordance_precision": round(g["precision"], 4),
             "concordance_recall": round(g["recall"], 4),
-            "motif_f1": round(m, 4),
+            "motif_pr_auc": round(m, 4),
             "position_f1": round(p, 4),
             "interpro_res_f1": round(ir, 4),
             "cath_res_f1": round(cr, 4),
@@ -337,7 +340,7 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
             "is_geometry_primary": is_primary,
             # Permutation p-values (None if not available)
             "geometry_prauc_padj": perm_pvalues["geometry_prauc"].get(fid) if perm_pvalues else None,
-            "motif_f1_padj": perm_pvalues["motif_f1"].get(fid) if perm_pvalues else None,
+            "motif_pr_auc_padj": perm_pvalues["pwm_pr_auc"].get(fid) if perm_pvalues else None,
             "position_f1_padj": perm_pvalues["position_f1"].get(fid) if perm_pvalues else None,
             "interpro_res_f1_padj": perm_pvalues["interpro_res_f1"].get(fid) if perm_pvalues else None,
             "cath_res_f1_padj": perm_pvalues["cath_res_f1"].get(fid) if perm_pvalues else None,
@@ -364,7 +367,7 @@ def _write_case_studies(
         "",
         "A feature is **geometry-primary** if:",
         f"- Geometry PR-AUC > {GEOM_PR_AUC_THRESHOLD} (random baseline ~0.038)",
-        f"- Motif F1 <= {null_thresholds['motif_f1']:.3f} (null p95)",
+        f"- Motif PR-AUC <= {null_thresholds['motif_pr_auc']:.3f} (null p95)",
         f"- Position F1 <= {null_thresholds['position_f1']:.3f} (null p95)",
         f"- InterPro Residue F1 <= {null_thresholds['interpro_res_f1']:.3f} (null p95)",
         f"- CATH Residue F1 <= {null_thresholds['cath_res_f1']:.3f} (null p95)",
@@ -408,7 +411,7 @@ def _write_case_studies(
             f"| Concordance F1 | {f['concordance_f1']:.3f} |",
             f"| Concordance IoU | {f['concordance_iou']:.3f} |",
             f"| Concordance P / R | {f['concordance_precision']:.3f} / {f['concordance_recall']:.3f} |",
-            f"| Motif F1 | {f['motif_f1']:.3f} (null p95: {null_thresholds['motif_f1']:.3f}) |",
+            f"| Motif PR-AUC | {f['motif_pr_auc']:.3f} (null p95: {null_thresholds['motif_pr_auc']:.3f}) |",
             f"| Position F1 | {f['position_f1']:.3f} (null p95: {null_thresholds['position_f1']:.3f}) |",
             f"| InterPro Res F1 | {f['interpro_res_f1']:.3f} (null p95: {null_thresholds['interpro_res_f1']:.3f}) |",
             f"| CATH Res F1 | {f['cath_res_f1']:.3f} (null p95: {null_thresholds['cath_res_f1']:.3f}) |",
@@ -448,7 +451,7 @@ def main() -> None:
 
     print("Computing null thresholds from sparse features ...")
     null_thresholds = _compute_null_thresholds(data_dir, scores)
-    print(f"  Motif F1 null p95: {null_thresholds['motif_f1']:.3f}")
+    print(f"  Motif PR-AUC null p95: {null_thresholds['motif_pr_auc']:.3f}")
     print(f"  Position F1 null p95: {null_thresholds['position_f1']:.3f}")
     print(f"  InterPro Res F1 null p95: {null_thresholds['interpro_res_f1']:.3f}")
     print(f"  CATH Res F1 null p95: {null_thresholds['cath_res_f1']:.3f}")

@@ -27,7 +27,7 @@ def main() -> None:
     gp_path = data_dir / "geometry_primary_analysis.json"
     ip_dir = data_dir / "interpro_enrichment"
     geo_dir = data_dir / "geometry_enrichment"
-    motif_dir = data_dir / "motif_enrichment"
+    motif_dir = data_dir / "motif_pwm_enrichment"
     pos_dir = data_dir / "position_enrichment"
 
     gp = json.loads(gp_path.read_text())
@@ -63,16 +63,17 @@ def main() -> None:
         ms = rl.get("motif_superposition", {})
         motif_len = len(ms.get("per_position_flexibility", []))
 
-        # Motif enrichment
-        motif_f1 = 0.0
+        # MEME/PWM motif enrichment
+        motif_pr_auc = 0.0
         motif_best = None
         motif_path = motif_dir / f"{fid_padded}.json"
         if motif_path.exists():
             mdata = json.loads(motif_path.read_text())
-            top_motifs = mdata.get("top_motifs", [])
+            top_motifs = mdata.get("motifs", [])
             if top_motifs:
-                motif_f1 = top_motifs[0].get("best_f1", 0)
-                motif_best = top_motifs[0].get("motif", "")
+                pr_auc_dict = top_motifs[0].get("pr_auc") or {}
+                motif_pr_auc = pr_auc_dict.get("pr_auc", 0)
+                motif_best = top_motifs[0].get("consensus", "")
 
         # Position enrichment
         pos_f1 = 0.0
@@ -125,7 +126,7 @@ def main() -> None:
             "n_families_above_05": n_families_above_05,
             "interpro_families": ip_families,
             # Sequence metrics
-            "motif_seq_f1": motif_f1,
+            "motif_seq_pr_auc": motif_pr_auc,
             "motif_seq_best": motif_best,
             "position_f1": pos_f1,
         }
@@ -168,7 +169,7 @@ def main() -> None:
         "interpro_residue_f1_median": round(sorted(res_f1s)[len(res_f1s) // 2], 3) if res_f1s else 0,
         "null_thresholds": {
             "interpro_res_f1": null_t.get("interpro_res_f1", 0.20),
-            "motif_f1": null_t.get("motif_f1", 0.71),
+            "motif_pr_auc": null_t.get("motif_pr_auc", 0.20),
             "position_f1": null_t.get("position_f1", 0.12),
             "n_sparse_features": null_t.get("n_sparse_features", 0),
         },
@@ -176,7 +177,7 @@ def main() -> None:
         "methodology": {
             "classification_criteria": [
                 f"Geometry PR-AUC > {geom_pr_auc_threshold} (random baseline ~0.038)",
-                f"Motif F1 <= {null_t.get('motif_f1', 0.71):.4f} (null p95)",
+                f"Motif PR-AUC <= {null_t.get('motif_pr_auc', 0.20):.4f} (null p95)",
                 f"Position F1 <= {null_t.get('position_f1', 0.12):.4f} (null p95)",
                 f"InterPro Residue F1 <= {null_t.get('interpro_res_f1', 0.20):.4f} (null p95)",
             ],

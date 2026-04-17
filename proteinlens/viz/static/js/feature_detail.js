@@ -257,7 +257,7 @@ function renderGeometryResidueCard(data, gpInfo) {
                 </div>
                 <div class="detail" style="color:#856404;">
                     All sequence metrics below null p95:
-                    Motif PR-AUC=${fmtVal(gpInfo.motif_f1)} \u2264 0.71,
+                    Motif PR-AUC=${fmtVal(gpInfo.motif_pr_auc)},
                     Position F1=${fmtVal(gpInfo.position_f1)} \u2264 0.12,
                     InterPro Res F1=${fmtVal(gpInfo.interpro_res_f1)} \u2264 0.20
                 </div>

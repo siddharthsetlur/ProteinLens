@@ -93,7 +93,7 @@ def _geom_primary_scatter(
             continue
         seq_f1s = [
             v for v in [
-                r.get("motif_best_f1"),
+                r.get("motif_best_pr_auc"),
                 r.get("position_best_f1"),
                 r.get("interpro_residue_best_f1"),
             ] if v is not None
@@ -202,10 +202,10 @@ def main():
         {
             "filename": "geom_vs_motif.png",
             "xfield": "geometry_residue_pr_auc",
-            "yfield": "motif_best_f1",
+            "yfield": "motif_best_pr_auc",
             "xlabel": "Geometry PR-AUC",
-            "ylabel": "Motif F1",
-            "title": "Geometry PR-AUC vs Motif F1",
+            "ylabel": "Motif PR-AUC",
+            "title": "Geometry PR-AUC vs Motif PR-AUC",
             "cmap": "viridis",
         },
         {
@@ -245,7 +245,7 @@ def main():
             v for v in [
                 r.get("interpro_protein_best_f1"),
                 r.get("interpro_residue_best_f1"),
-                r.get("motif_best_f1"),
+                r.get("motif_best_pr_auc"),
                 r.get("position_best_f1"),
             ] if v is not None
         ]

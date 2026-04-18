@@ -65,6 +65,7 @@ from proteinlens.analysis.feature_pipeline.motif_pwm import (
 from proteinlens.analysis.feature_pipeline.position_enrichment import (
     _build_predicate_indices,
 )
+from proteinlens.analysis.feature_pipeline.config import PipelineConfig
 from proteinlens.analysis.feature_pipeline.interpro_api import _load_cached
 from proteinlens.analysis.feature_pipeline.interpro_enrichment import (
     InterProDomain,
@@ -324,8 +325,12 @@ def _load_cath_labels(
             try:
                 hits = json.loads(cache_path.read_text())
                 for h in hits:
-                    start = max(0, h.get("query_start", 1) - 1)
-                    end = min(n, h.get("query_end", 0))
+                    qs = h.get("query_start")
+                    qe = h.get("query_end")
+                    if qs is None or qe is None:
+                        continue
+                    start = max(0, qs - 1)
+                    end = min(n, qe)
                     if start < end:
                         res_labels[start:end] = True
                         any_domains = True

@@ -236,6 +236,19 @@ def get_case_study_families() -> dict[str, Any]:
         return json.load(f)
 
 
+@router.get("/meme-case-study-families")
+def get_meme_case_study_families() -> dict[str, Any]:
+    """Return pre-computed MEME/PWM case study families (404 if not built)."""
+    fpath = _data_dir / "meme_case_study_families.json"
+    if not fpath.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="MEME case study families not built. Run scripts/build_meme_case_studies.py",
+        )
+    with open(fpath) as f:
+        return json.load(f)
+
+
 @router.get("/subdomain-case-study")
 def get_subdomain_case_study() -> dict[str, Any]:
     """Return sub-domain geometric decomposition case study (404 if not built)."""

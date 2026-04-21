@@ -90,6 +90,16 @@ def create_app(data_dir: Path) -> FastAPI:
         """Serve the case study detail page. JS reads annotation code from URL."""
         return FileResponse(STATIC_DIR / "case_study_detail.html")
 
+    @app.get("/meme-case-studies", response_class=FileResponse)
+    def meme_case_studies_page():
+        """Serve the MEME case studies list page."""
+        return FileResponse(STATIC_DIR / "meme_case_studies.html")
+
+    @app.get("/meme-case-studies/{consensus}", response_class=FileResponse)
+    def meme_case_study_detail_page(consensus: str):
+        """Serve the MEME case study detail page. JS reads consensus from URL."""
+        return FileResponse(STATIC_DIR / "meme_case_study_detail.html")
+
     @app.get("/subdomain-decomposition", response_class=FileResponse)
     def subdomain_case_study_page():
         """Serve the sub-domain geometric decomposition case study."""

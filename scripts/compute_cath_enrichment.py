@@ -39,9 +39,7 @@ from tqdm import tqdm
 # CATH API
 # ===================================================================
 
-CATH_SUBMIT_URL = "https://www.cathdb.info/search/by_funfhmmer"
-CATH_CHECK_URL = "https://www.cathdb.info/search/by_funfhmmer/check/{task_id}"
-CATH_RESULTS_URL = "https://www.cathdb.info/search/by_funfhmmer/results/{task_id}"
+CATH_REST_URL = "https://www.cathdb.info/version/v4_3_0/api/rest/uniprot/{accession}"
 
 CATH_LEVELS = ("C", "CA", "CAT", "CATH")
 
@@ -58,16 +56,15 @@ def _cath_label_at_level(cath_id: str, level: str) -> str:
 
 def fetch_cath_for_protein(
     accession: str,
-    sequence: str,
     cache_dir: Path,
     session,
     max_retries: int = 3,
 ) -> List[Dict[str, Any]]:
-    """Submit a sequence to CATH FunFHMMer and return slim hit list.
+    """Look up CATH domains for a UniProt accession via the REST API.
 
     Returns cached result if available.  Each hit is:
-        {"cath_id": "3.90.1150.10", "query_start": 36, "query_end": 90,
-         "evalue": 9.1e-37, "description": "..."}
+        {"cath_id": "1.10.630.10", "query_start": 24, "query_end": 515,
+         "description": "Cytochrome P450"}
     """
     import requests
 
@@ -76,88 +73,63 @@ def fetch_cath_for_protein(
         with open(cache_path) as f:
             return json.load(f)
 
-    fasta = f">{accession}\n{sequence}\n"
-
-    # ── Submit ──
-    task_id = None
+    hits: List[Dict[str, Any]] = []
+    definitive = False
     for attempt in range(max_retries):
         try:
-            resp = session.post(
-                CATH_SUBMIT_URL,
-                data={"fasta": fasta},
+            resp = session.get(
+                CATH_REST_URL.format(accession=accession),
                 headers={"Accept": "application/json"},
-                timeout=30,
+                timeout=15,
             )
-            if resp.status_code in (200, 202):
-                task_id = resp.json().get("task_id")
+            if resp.status_code == 200:
+                try:
+                    hits = _parse_rest_response(resp.json())
+                    definitive = True
+                    break
+                except ValueError:
+                    # HTML/error page served with 200 — treat as transient
+                    pass
+            elif resp.status_code == 404:
+                definitive = True
                 break
         except (requests.Timeout, requests.ConnectionError):
             pass
         time.sleep(2 ** attempt)
 
-    if not task_id:
-        _save_cache(cache_path, [])
-        return []
-
-    # ── Poll with exponential backoff (0.5s → 1s → 2s → 4s, cap 4s) ──
-    hits: List[Dict[str, Any]] = []
-    poll_delay = 0.5
-    elapsed = 0.0
-    while elapsed < 120:  # up to 2 min total
-        time.sleep(poll_delay)
-        elapsed += poll_delay
-        try:
-            check = session.get(
-                CATH_CHECK_URL.format(task_id=task_id),
-                headers={"Accept": "application/json"},
-                timeout=15,
-            )
-            if check.status_code == 200:
-                data = check.json()
-                if data.get("message") == "done":
-                    hits = _fetch_results(session, task_id)
-                    break
-                if data.get("message") == "error":
-                    break
-        except (requests.Timeout, requests.ConnectionError):
-            pass
-        poll_delay = min(poll_delay * 2, 4.0)
-
-    _save_cache(cache_path, hits)
+    if definitive:
+        _save_cache(cache_path, hits)
     return hits
 
 
-def _fetch_results(session, task_id: str) -> List[Dict[str, Any]]:
-    """Fetch and parse FunFHMMer results into slim hit dicts."""
-    try:
-        resp = session.get(
-            CATH_RESULTS_URL.format(task_id=task_id),
-            headers={"Accept": "application/json"},
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            return []
-    except Exception:
+def _parse_rest_response(data) -> List[Dict[str, Any]]:
+    """Parse the CATH REST /uniprot/ response into slim hit dicts."""
+    if not isinstance(data, list):
         return []
-
-    data = resp.json()
     hits = []
-
-    scan = data.get("funfam_resolved_scan", {})
-    for result in scan.get("results", []):
-        for hit in result.get("hits", []):
-            cath_id = hit.get("match_cath_id", {}).get("id", "")
-            if not cath_id:
+    for block in data:
+        if not isinstance(block, dict) or block.get("abbr") != "CATHHMM":
+            continue
+        for entry in block.get("entries", []):
+            cath_id = entry.get("resource_id", "")
+            if not cath_id or len(cath_id.split(".")) < 4:
                 continue
-            desc = hit.get("match_description", "")
-            for hsp in hit.get("hsps", []):
-                hits.append({
-                    "cath_id": cath_id,
-                    "query_start": hsp.get("query_start"),
-                    "query_end": hsp.get("query_end"),
-                    "evalue": hsp.get("evalue"),
-                    "description": desc,
-                })
+            desc = entry.get("option3", "")
+            range_str = entry.get("option1", "")
+            query_start, query_end = None, None
+            if range_str and "-" in range_str:
+                parts = range_str.split("-", 1)
+                try:
+                    query_start = int(parts[0])
+                    query_end = int(parts[1])
+                except ValueError:
+                    pass
+            hits.append({
+                "cath_id": cath_id,
+                "query_start": query_start,
+                "query_end": query_end,
+                "description": desc,
+            })
     return hits
 
 
@@ -172,12 +144,11 @@ def _save_cache(cache_path: Path, hits: List[Dict[str, Any]]) -> None:
 
 
 def run_cath_fetch(
-    sequences: Dict[str, str],
     accessions: List[str],
     cache_dir: Path,
     n_workers: int = 4,
 ) -> None:
-    """Fetch CATH annotations for all accessions, streaming via API.
+    """Fetch CATH annotations for all accessions via REST API.
 
     Results go straight to cache files — no bulk dict returned.
     """
@@ -192,24 +163,19 @@ def run_cath_fetch(
     if not todo:
         return
 
-    # Progress bar that updates per-protein across all workers
     pbar = tqdm(total=len(todo), desc="Fetching CATH")
 
     def _worker(accs: List[str]) -> None:
         s = requests.Session()
         for acc in accs:
-            seq = sequences.get(acc)
-            if not seq:
-                _save_cache(cache_dir / f"{acc}.json", [])
-            else:
-                fetch_cath_for_protein(acc, seq, cache_dir, s)
+            fetch_cath_for_protein(acc, cache_dir, s)
             pbar.update(1)
 
     chunks = [todo[i::n_workers] for i in range(n_workers)]
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
         futs = [pool.submit(_worker, chunk) for chunk in chunks]
         for fut in as_completed(futs):
-            fut.result()  # raise any exceptions
+            fut.result()
     pbar.close()
 
 
@@ -340,148 +306,177 @@ def compute_residue_level_f1(
     feat_idx: int,
     feat_max: float,
     npz_dir_map: Dict[str, Path],
-    npz_cache: Dict[str, Optional[np.ndarray]],
-    max_npz_cache: int = 500,
     n_threshold_steps: int = 50,
     top_n_per_level: int = 5,
+    io_executor: Optional[ThreadPoolExecutor] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Compute residue-level F1 for top CATH labels at each hierarchy level."""
-    results_by_level: Dict[str, List[Dict[str, Any]]] = {}
+    """Compute residue-level F1 for top CATH labels at each hierarchy level.
+
+    Numerical equivalence is preserved vs. the prior serial implementation:
+      * Per-target protein order follows ``protein_cath.items()`` insertion
+        order (same as the original inner loop), so ``all_acts`` /
+        ``all_labels`` concatenations are identical element-by-element.
+      * Threshold grid (``pct`` + ``lin``, then ``np.unique``) and the
+        TP/FP/FN formulas are unchanged.
+      * Matching-range collection is identical: a hit contributes its
+        ``(qs, qe)`` to ``(level, label)`` iff
+        ``_cath_label_at_level(cath_id, level) == label``.
+
+    Speedups vs. the original:
+      * Each needed ``.npz`` is loaded at most once per feature (was once
+        per matching (level, label) per protein).
+      * Only the ``feat_idx`` column is retained (was a full
+        ``seq_len × num_features`` array held in a cross-feature cache).
+      * Loads run in parallel via ``io_executor`` (cephfs benefits a lot).
+    """
+    # Collect targets in original iteration order: (level, label) × top-N.
+    targets: List[Tuple[str, str, str]] = []
+    for level in CATH_LEVELS:
+        for r in protein_level_results.get(level, [])[:top_n_per_level]:
+            targets.append((level, r["cath_label"], r.get("description", "")))
+
+    results_by_level: Dict[str, List[Dict[str, Any]]] = {level: [] for level in CATH_LEVELS}
+    if not targets:
+        return results_by_level
+
+    target_keys: Set[Tuple[str, str]] = {(lvl, lbl) for (lvl, lbl, _) in targets}
+
+    # Single pass over protein_cath: bucket matching ranges per target,
+    # preserving protein_cath insertion order within each bucket.
+    target_to_accs: Dict[Tuple[str, str], List[Tuple[str, List[Tuple[int, int]]]]] = {
+        key: [] for key in target_keys
+    }
+    for acc, hits in protein_cath.items():
+        per_key: Dict[Tuple[str, str], List[Tuple[int, int]]] = {}
+        for hit in hits:
+            cath_id = hit.get("cath_id", "")
+            if not cath_id or len(cath_id.split(".")) < 4:
+                continue
+            qs = hit.get("query_start")
+            qe = hit.get("query_end")
+            if qs is None or qe is None:
+                continue
+            qs_i, qe_i = int(qs), int(qe)
+            for level in CATH_LEVELS:
+                key = (level, _cath_label_at_level(cath_id, level))
+                if key in target_keys:
+                    per_key.setdefault(key, []).append((qs_i, qe_i))
+        for key, ranges in per_key.items():
+            target_to_accs[key].append((acc, ranges))
+
+    # Gather unique accessions needed and load only column feat_idx, in parallel.
+    needed_accs: Set[str] = set()
+    for lst in target_to_accs.values():
+        for acc, _ in lst:
+            needed_accs.add(acc)
+
+    def _load_col(acc: str) -> Tuple[str, Optional[np.ndarray]]:
+        if acc not in npz_dir_map:
+            return acc, None
+        try:
+            with np.load(npz_dir_map[acc] / f"{acc}.npz") as npz:
+                arr = npz["activations"]
+                if feat_idx >= arr.shape[1]:
+                    return acc, None
+                col = arr[:, feat_idx].copy()
+        except (EOFError, OSError, KeyError):
+            return acc, None
+        return acc, col
+
+    residue_cols: Dict[str, Optional[np.ndarray]] = {}
+    if needed_accs:
+        if io_executor is not None:
+            for acc, col in io_executor.map(_load_col, needed_accs):
+                residue_cols[acc] = col
+        else:
+            for acc in needed_accs:
+                a, col = _load_col(acc)
+                residue_cols[a] = col
+
+    # Compute F1 per target with identical math to the original.
+    for (level, target_label, description) in targets:
+        prot_list = target_to_accs.get((level, target_label), [])
+
+        all_acts: List[np.ndarray] = []
+        all_labels: List[np.ndarray] = []
+        n_proteins_used = 0
+
+        for acc, matching_ranges in prot_list:
+            residue_acts = residue_cols.get(acc)
+            if residue_acts is None:
+                continue
+
+            seq_len = len(residue_acts)
+            labels = np.zeros(seq_len, dtype=np.int32)
+            for start, end in matching_ranges:
+                s0 = max(0, start - 1)
+                e0 = min(seq_len - 1, end - 1)
+                labels[s0 : e0 + 1] = 1
+
+            all_acts.append(residue_acts)
+            all_labels.append(labels)
+            n_proteins_used += 1
+
+        if n_proteins_used == 0:
+            continue
+
+        all_activations = np.concatenate(all_acts)
+        all_label_arr = np.concatenate(all_labels)
+        n_in_domain = int(all_label_arr.sum())
+        n_total = len(all_label_arr)
+
+        if n_in_domain == 0 or n_in_domain == n_total:
+            continue
+
+        nonzero = all_activations[all_activations > 0]
+        if len(nonzero) == 0:
+            continue
+
+        pct_thresholds = np.percentile(nonzero, np.linspace(0, 100, n_threshold_steps))
+        lin_thresholds = np.linspace(0, feat_max, n_threshold_steps)
+        thresholds = np.unique(np.concatenate([pct_thresholds, lin_thresholds]))
+
+        y_pred_all = all_activations[np.newaxis, :] > thresholds[:, np.newaxis]
+        y_true = all_label_arr.astype(np.float64)
+        y_true_neg = 1.0 - y_true
+
+        tp = y_pred_all.astype(np.float64) @ y_true
+        fp = y_pred_all.astype(np.float64) @ y_true_neg
+        fn = float(n_in_domain) - tp
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            precision = np.where(tp + fp > 0, tp / (tp + fp), 0.0)
+            recall = np.where(tp + fn > 0, tp / (tp + fn), 0.0)
+            pr_sum = precision + recall
+            f1 = np.where(pr_sum > 0, 2.0 * precision * recall / pr_sum, 0.0)
+
+        best_idx = int(f1.argmax())
+        best_f1 = float(f1[best_idx])
+        if best_f1 == 0.0:
+            continue
+
+        t = float(thresholds[best_idx])
+        results_by_level[level].append({
+            "cath_label": target_label,
+            "cath_level": level,
+            "description": description,
+            "best_f1": round(best_f1, 4),
+            "best_threshold": round(t, 4),
+            "best_threshold_normalized": round(t / feat_max if feat_max > 0 else 0.0, 4),
+            "precision_at_best": round(float(precision[best_idx]), 4),
+            "recall_at_best": round(float(recall[best_idx]), 4),
+            "n_proteins_used": n_proteins_used,
+            "n_total_residues": n_total,
+            "n_residues_in_domain": n_in_domain,
+            "n_true_positives": int(tp[best_idx]),
+            "n_false_positives": int(fp[best_idx]),
+            "n_false_negatives": int(fn[best_idx]),
+        })
 
     for level in CATH_LEVELS:
-        prot_results = protein_level_results.get(level, [])
-        level_results = []
-
-        for prot_result in prot_results[:top_n_per_level]:
-            target_label = prot_result["cath_label"]
-
-            all_acts: List[np.ndarray] = []
-            all_labels: List[np.ndarray] = []
-            n_proteins_used = 0
-
-            for acc, hits in protein_cath.items():
-                matching_ranges = []
-                for hit in hits:
-                    cath_id = hit.get("cath_id", "")
-                    if not cath_id or len(cath_id.split(".")) < 4:
-                        continue
-                    if _cath_label_at_level(cath_id, level) == target_label:
-                        qs = hit.get("query_start")
-                        qe = hit.get("query_end")
-                        if qs is not None and qe is not None:
-                            matching_ranges.append((int(qs), int(qe)))
-
-                if not matching_ranges:
-                    continue
-
-                residue_acts = _load_npz_cached(acc, feat_idx, npz_dir_map, npz_cache, max_npz_cache)
-                if residue_acts is None:
-                    continue
-
-                seq_len = len(residue_acts)
-                labels = np.zeros(seq_len, dtype=np.int32)
-                for start, end in matching_ranges:
-                    s0 = max(0, start - 1)
-                    e0 = min(seq_len - 1, end - 1)
-                    labels[s0 : e0 + 1] = 1
-
-                all_acts.append(residue_acts)
-                all_labels.append(labels)
-                n_proteins_used += 1
-
-            if n_proteins_used == 0:
-                continue
-
-            all_activations = np.concatenate(all_acts)
-            all_label_arr = np.concatenate(all_labels)
-            n_in_domain = int(all_label_arr.sum())
-            n_total = len(all_label_arr)
-
-            if n_in_domain == 0 or n_in_domain == n_total:
-                continue
-
-            nonzero = all_activations[all_activations > 0]
-            if len(nonzero) == 0:
-                continue
-
-            pct_thresholds = np.percentile(nonzero, np.linspace(0, 100, n_threshold_steps))
-            lin_thresholds = np.linspace(0, feat_max, n_threshold_steps)
-            thresholds = np.unique(np.concatenate([pct_thresholds, lin_thresholds]))
-
-            y_pred_all = all_activations[np.newaxis, :] > thresholds[:, np.newaxis]
-            y_true = all_label_arr.astype(np.float64)
-            y_true_neg = 1.0 - y_true
-
-            tp = y_pred_all.astype(np.float64) @ y_true
-            fp = y_pred_all.astype(np.float64) @ y_true_neg
-            fn = float(n_in_domain) - tp
-
-            with np.errstate(divide="ignore", invalid="ignore"):
-                precision = np.where(tp + fp > 0, tp / (tp + fp), 0.0)
-                recall = np.where(tp + fn > 0, tp / (tp + fn), 0.0)
-                pr_sum = precision + recall
-                f1 = np.where(pr_sum > 0, 2.0 * precision * recall / pr_sum, 0.0)
-
-            best_idx = int(f1.argmax())
-            best_f1 = float(f1[best_idx])
-            if best_f1 == 0.0:
-                continue
-
-            t = float(thresholds[best_idx])
-            level_results.append({
-                "cath_label": target_label,
-                "cath_level": level,
-                "description": prot_result.get("description", ""),
-                "best_f1": round(best_f1, 4),
-                "best_threshold": round(t, 4),
-                "best_threshold_normalized": round(t / feat_max if feat_max > 0 else 0.0, 4),
-                "precision_at_best": round(float(precision[best_idx]), 4),
-                "recall_at_best": round(float(recall[best_idx]), 4),
-                "n_proteins_used": n_proteins_used,
-                "n_total_residues": n_total,
-                "n_residues_in_domain": n_in_domain,
-                "n_true_positives": int(tp[best_idx]),
-                "n_false_positives": int(fp[best_idx]),
-                "n_false_negatives": int(fn[best_idx]),
-            })
-
-        level_results.sort(key=lambda r: r["best_f1"], reverse=True)
-        results_by_level[level] = level_results
+        results_by_level[level].sort(key=lambda r: r["best_f1"], reverse=True)
 
     return results_by_level
-
-
-def _load_npz_cached(
-    accession: str,
-    feat_idx: int,
-    npz_dir_map: Dict[str, Path],
-    npz_cache: Dict[str, Optional[np.ndarray]],
-    max_npz_cache: int,
-) -> Optional[np.ndarray]:
-    """Load per-residue activations for a single feature column, with cache."""
-    if accession not in npz_dir_map:
-        return None
-
-    if accession in npz_cache:
-        arr = npz_cache[accession]
-        if arr is None:
-            return None
-        return arr[:, feat_idx] if feat_idx < arr.shape[1] else None
-
-    npz_path = npz_dir_map[accession] / f"{accession}.npz"
-    try:
-        arr = np.load(npz_path)["activations"]
-    except (EOFError, OSError, KeyError):
-        arr = None
-
-    if len(npz_cache) >= max_npz_cache:
-        oldest = next(iter(npz_cache))
-        del npz_cache[oldest]
-    npz_cache[accession] = arr
-
-    if arr is None or feat_idx >= arr.shape[1]:
-        return None
-    return arr[:, feat_idx]
 
 
 # ===================================================================
@@ -493,6 +488,12 @@ def main():
     parser = argparse.ArgumentParser(description="CATH enrichment for SAE features")
     parser.add_argument("data_dir", type=Path, help="Feature data directory")
     parser.add_argument("--workers", type=int, default=4, help="Parallel CATH API workers")
+    parser.add_argument(
+        "--residue-workers",
+        type=int,
+        default=16,
+        help="Parallel threads for residue-level .npz loads (cephfs benefits from high parallelism).",
+    )
     parser.add_argument("--threshold-steps", type=int, default=50)
     parser.add_argument("--min-proteins", type=int, default=3)
     parser.add_argument("--wandb", action="store_true", help="Log metrics to W&B")
@@ -511,8 +512,6 @@ def main():
 
     # ── Load upstream data ──
     print("[cath] Loading data...")
-    with open(data_dir / "sequences.json") as f:
-        sequences = json.load(f)
 
     with open(data_dir / "selection.json") as f:
         selection = json.load(f)
@@ -543,7 +542,7 @@ def main():
     print(f"[cath] {len(all_top_accessions)} unique proteins across all feature top lists.")
 
     # ── Fetch CATH only for top proteins ──
-    run_cath_fetch(sequences, sorted(all_top_accessions), cache_dir, n_workers=args.workers)
+    run_cath_fetch(sorted(all_top_accessions), cache_dir, n_workers=args.workers)
 
     # ── Preload all CATH cache into memory ──
     print("[cath] Preloading CATH cache into memory...")
@@ -594,7 +593,6 @@ def main():
     print(f"[cath] {len(already_computed)} features already computed, resuming.")
 
     # ── Load existing summaries for resumed features ──
-    npz_cache: Dict[str, Optional[np.ndarray]] = {}
     summary: Dict[str, Dict[str, Any]] = {}
     n_analyzed = 0
     n_skipped = 0
@@ -607,6 +605,9 @@ def main():
             summary[str(feat_idx)] = existing.get("summary", {})
         except (json.JSONDecodeError, OSError):
             already_computed.discard(feat_idx)
+
+    # ── Shared thread pool for parallel residue-level .npz loads ──
+    io_executor = ThreadPoolExecutor(max_workers=args.residue_workers)
 
     # ── Process each feature ──
     for feat_idx in tqdm(range(num_features), desc="CATH enrichment"):
@@ -675,8 +676,7 @@ def main():
             feat_idx=feat_idx,
             feat_max=feat_max,
             npz_dir_map=npz_dir_map,
-            npz_cache=npz_cache,
-            max_npz_cache=5000,
+            io_executor=io_executor,
         )
 
         # ── Summary ──
@@ -706,6 +706,8 @@ def main():
 
         summary[feat_key] = feat_summary
         n_analyzed += 1
+
+    io_executor.shutdown(wait=True)
 
     # ── Write summary ──
     summary_data = {

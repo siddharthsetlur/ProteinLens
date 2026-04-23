@@ -338,8 +338,8 @@ document.addEventListener("DOMContentLoaded", async () => {
             Mean geometry cosine similarity: <strong>${fmtVal(family.mean_cosine_similarity, 3)}</strong>
             (lower = more diverse geometry).
             ${family.geom_diverse
-                ? "Nodes use <strong>different</strong> top geometric features."
-                : "Nodes share the <strong>same</strong> top geometric feature."}
+                ? "Geometry-diverse (mean pairwise cosine &lt; 0.5): members encode <strong>distinct</strong> geometric roles despite sharing the MEME motif."
+                : "Not geometry-diverse (mean pairwise cosine &ge; 0.5): importance profiles are broadly aligned."}
         `;
 
         renderConsensusTable(document.getElementById("consensus-container"), family);

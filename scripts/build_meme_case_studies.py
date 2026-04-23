@@ -26,6 +26,11 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 Q_SIG = 0.05
+# A family is "geometry-diverse" when the mean pairwise cosine similarity of
+# its members' 44-d geometric feature-importance vectors is below this.
+# Matches the threshold used by the subdomain case study (proteinlens/viz/
+# static/js/subdomain_detail.js:14).
+GEOM_COS_THRESHOLD = 0.5
 
 
 def _is_sig(info: dict, padj_key: str) -> bool:
@@ -208,7 +213,10 @@ def build_meme_case_studies(data_dir: Path, max_edit: int = 2) -> dict:
             mean_cos_sim = 1.0
 
         top_geoms = set(r["top_geometric_feature"] for r in rows)
-        geom_diverse = len(top_geoms) > 1
+        # Cosine-gated diversity to stay consistent with the subdomain case study.
+        # Label-based diversity was too permissive: two nodes with cos 0.7 (very
+        # similar importance profiles) could still differ on the argmax label.
+        geom_diverse = mean_cos_sim < GEOM_COS_THRESHOLD
 
         # Cluster label: pick the consensus of the member with highest motif PR-AUC
         rep = max(rows, key=lambda r: r["motif_pr_auc"])

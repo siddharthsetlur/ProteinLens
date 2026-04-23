@@ -29,8 +29,8 @@ function renderFamilyCard(family) {
     });
 
     const diverseBadge = family.geom_diverse
-        ? '<span class="badge badge-done">Geometry-diverse</span>'
-        : '<span class="badge badge-pending">Same top feature</span>';
+        ? '<span class="badge badge-done">Geometry-diverse (cos &lt; 0.5)</span>'
+        : '<span class="badge badge-pending">Not geometry-diverse (cos &ge; 0.5)</span>';
 
     const memberRows = family.members.map(m =>
         `<tr>

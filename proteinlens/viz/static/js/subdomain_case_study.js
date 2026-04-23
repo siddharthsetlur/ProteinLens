@@ -6,8 +6,9 @@
  * geometry does not" counter-example table spanning both DB sources.
  *
  * Per group, we compute three orthogonal distinguishability flags:
- *   geom-distinguishable     = >=2 distinct top structural_category
- *                              OR >=2 distinct top_geometric_feature
+ *   geom-distinguishable     = mean pairwise cosine similarity of the members' 44-d
+ *                              geometric importance vectors < GEOM_COS_THRESHOLD (0.5).
+ *                              Fallback if cosine missing: >=2 distinct top_geometric_feature.
  *   meme-distinguishable     = among features with m6_q<0.05, >=2 distinct m6 consensus
  *   position-distinguishable = among features with m5_q<0.05, >=2 distinct m5 label
  */

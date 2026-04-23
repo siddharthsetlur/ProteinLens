@@ -42,12 +42,15 @@ function findGroup(sc, source, code) {
     return list.find((g) => String(g.annotation_code) === String(code));
 }
 
-async function fetchGeometryVector(fid) {
+async function fetchGeometryDetail(fid) {
     const res = await fetch(`/api/feature/${fid}/geometry`).catch(() => null);
-    if (!res || !res.ok) return {};
+    if (!res || !res.ok) return { importances: {}, topProteins: [] };
     const geo = await res.json();
     const rl = (geo.geometric_residue_level) || {};
-    return rl.feature_importances || {};
+    return {
+        importances: rl.feature_importances || {},
+        topProteins: (geo.plot_data && geo.plot_data.top_proteins) || [],
+    };
 }
 
 function renderSummary(group, source, feats) {
@@ -156,6 +159,144 @@ function renderCosineHeatmap(container, feats, matrix) {
     }, { responsive: true, displayModeBar: false });
 }
 
+// Palette for overlaying features on a shared protein. Consistent across
+// SAE/Geom traces so readers can pair the solid and dashed lines by color.
+const OVERLAY_PALETTE = [
+    "#dc2626", "#2563eb", "#16a34a", "#d97706", "#7c3aed",
+    "#db2777", "#0891b2", "#65a30d", "#9333ea", "#ea580c",
+];
+
+function collectSharedProteins(feats, geomDetails) {
+    // Group plot_data.top_proteins across features by accession. Keep only
+    // accessions that appear in >=2 features — those are the overlay targets.
+    const byAcc = new Map();
+    for (let i = 0; i < feats.length; i++) {
+        const fid = feats[i].feature_id;
+        for (const prot of geomDetails[i].topProteins || []) {
+            if (!prot.accession) continue;
+            const sae = prot.sae_activation_profile || [];
+            const geom = prot.geom_prob_profile || [];
+            if (sae.length === 0 && geom.length === 0) continue;
+            if (!byAcc.has(prot.accession)) byAcc.set(prot.accession, []);
+            byAcc.get(prot.accession).push({
+                feature_id: fid,
+                sae,
+                geom,
+                sequence_length: prot.sequence?.length || sae.length || geom.length,
+            });
+        }
+    }
+    const shared = [];
+    for (const [accession, entries] of byAcc.entries()) {
+        if (entries.length >= 2) shared.push({ accession, entries });
+    }
+    // Sort: more features first, then alphabetical accession.
+    shared.sort((a, b) => b.entries.length - a.entries.length || a.accession.localeCompare(b.accession));
+    return shared;
+}
+
+function renderSharedOverlayPlot(div, accession, entries) {
+    const seqLen = Math.max(...entries.map((e) => Math.max(e.sae.length, e.geom.length, e.sequence_length || 0)));
+    const xs = Array.from({ length: seqLen }, (_, i) => i + 1);
+    const traces = [];
+    for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        const color = OVERLAY_PALETTE[i % OVERLAY_PALETTE.length];
+        if (e.sae.length) {
+            traces.push({
+                x: xs.slice(0, e.sae.length),
+                y: e.sae,
+                name: `f/${e.feature_id} · SAE`,
+                type: "scatter",
+                mode: "lines",
+                line: { color, width: 1.6 },
+                yaxis: "y",
+                legendgroup: `f${e.feature_id}`,
+            });
+        }
+        if (e.geom.length) {
+            traces.push({
+                x: xs.slice(0, e.geom.length),
+                y: e.geom,
+                name: `f/${e.feature_id} · Geom`,
+                type: "scatter",
+                mode: "lines",
+                line: { color, width: 1.2, dash: "dot" },
+                yaxis: "y2",
+                legendgroup: `f${e.feature_id}`,
+            });
+        }
+    }
+    Plotly.newPlot(div, traces, {
+        title: { text: `${accession} — shared by ${entries.length} features`, font: { size: 13 } },
+        xaxis: { title: "Residue Position" },
+        yaxis: {
+            title: { text: "SAE Activation (solid)", font: { color: "#374151" } },
+            side: "left",
+        },
+        yaxis2: {
+            title: { text: "Geom. Probability (dashed)", font: { color: "#374151" } },
+            side: "right",
+            overlaying: "y",
+            range: [0, 1],
+        },
+        height: 320,
+        margin: { t: 40, b: 40, l: 60, r: 60 },
+        legend: { orientation: "h", y: -0.25, font: { size: 10 } },
+        paper_bgcolor: "#fff",
+        plot_bgcolor: "#fff",
+    }, { responsive: true, displayModeBar: false });
+}
+
+function renderSharedProteins(container, feats, geomDetails) {
+    container.innerHTML = "";
+    const shared = collectSharedProteins(feats, geomDetails);
+    if (shared.length === 0) {
+        container.innerHTML = '<p class="secondary">No protein appears in the top-activating sample of ≥2 features in this family.</p>';
+        return;
+    }
+
+    const summary = document.createElement("p");
+    summary.className = "secondary";
+    summary.style.fontSize = ".85rem";
+    summary.innerHTML = `<strong>${shared.length}</strong> proteins are shared by ≥2 features in this family. Pick one to overlay the feature traces.`;
+    container.appendChild(summary);
+
+    const controls = document.createElement("div");
+    controls.style.margin = ".5rem 0 .75rem";
+    controls.style.display = "flex";
+    controls.style.gap = ".5rem";
+    controls.style.alignItems = "center";
+    controls.style.flexWrap = "wrap";
+
+    const label = document.createElement("label");
+    label.textContent = "Shared protein:";
+    label.style.fontSize = ".85rem";
+    label.style.fontWeight = "600";
+    controls.appendChild(label);
+
+    const select = document.createElement("select");
+    select.style.maxWidth = "420px";
+    select.style.margin = "0";
+    for (const { accession, entries } of shared) {
+        const opt = document.createElement("option");
+        opt.value = accession;
+        opt.textContent = `${accession} — ${entries.length} features (${entries.map((e) => e.feature_id).join(", ")})`;
+        select.appendChild(opt);
+    }
+    controls.appendChild(select);
+    container.appendChild(controls);
+
+    const plotDiv = document.createElement("div");
+    plotDiv.className = "plot-container";
+    container.appendChild(plotDiv);
+
+    const byAcc = new Map(shared.map((s) => [s.accession, s.entries]));
+    const show = (acc) => renderSharedOverlayPlot(plotDiv, acc, byAcc.get(acc));
+    select.addEventListener("change", () => show(select.value));
+    show(shared[0].accession);
+}
+
 function renderFeatureList(container, feats, importanceVectors) {
     const rows = feats.map((f, i) => {
         const vec = importanceVectors[i] || {};
@@ -207,12 +348,14 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
         const feats = group.features || [];
 
-        // Fetch 44-d importance vectors per feature in parallel.
-        const vectors = await Promise.all(feats.map((f) => fetchGeometryVector(f.feature_id)));
+        // Fetch 44-d importance vectors + sampled top_proteins per feature in parallel.
+        const geomDetails = await Promise.all(feats.map((f) => fetchGeometryDetail(f.feature_id)));
+        const vectors = geomDetails.map((g) => g.importances);
 
         renderSummary(group, source, feats);
         renderImportanceHeatmap(document.getElementById("heatmap-container"), feats, vectors);
         renderCosineHeatmap(document.getElementById("cosine-container"), feats, group.cosine_matrix);
+        renderSharedProteins(document.getElementById("shared-protein-container"), feats, geomDetails);
         renderFeatureList(document.getElementById("feature-list-container"), feats, vectors);
     } catch (err) {
         console.error("subdomain detail load failed:", err);

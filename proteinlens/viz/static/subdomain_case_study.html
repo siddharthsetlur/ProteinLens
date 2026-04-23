@@ -33,8 +33,10 @@
                 AND (for each DB source) the matching residue-level method is also
                 q&nbsp;&lt;&nbsp;0.05 (InterPro-res for the InterPro groups, CATH-res for the CATH
                 groups). Other methods may also be significant — the axes below separate them.
-                <strong>Geometry-distinguishable</strong> = members show ≥2 distinct top structural
-                categories (or top geometric features).
+                <strong>Geometry-distinguishable</strong> = mean pairwise cosine similarity of the
+                members' 44-d geometric feature-importance vectors is &lt;&nbsp;0.5 (values near 1 mean
+                near-identical profiles; &lt;&nbsp;0.5 means genuinely divergent geometric roles).
+                Fallback when the cosine isn't available: ≥2 distinct top geometric features.
                 <strong>MEME-distinguishable</strong> = among features with m6&nbsp;q&nbsp;&lt;&nbsp;0.05,
                 ≥2 distinct top MEME consensus strings.
                 <strong>Position-distinguishable</strong> = among features with m5&nbsp;q&nbsp;&lt;&nbsp;0.05,

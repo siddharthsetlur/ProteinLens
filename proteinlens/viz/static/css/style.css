@@ -339,6 +339,473 @@
     color: #721c24;
 }
 
+/* ===================================================================
+   Paper-companion rewrite — significance styling, method grids, radar
+   =================================================================== */
+
+/* --- Paper banner (top of homepage) --- */
+.paper-banner {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr auto;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #fafaff 0%, #eef2ff 100%);
+    border: 1px solid #c7d2fe;
+    margin-bottom: 1.25rem;
+}
+
+.paper-banner h2 {
+    margin: 0 0 .25rem 0;
+    font-size: 1.05rem;
+}
+
+.paper-banner .thesis {
+    font-size: .9rem;
+    color: #374151;
+    line-height: 1.4;
+    margin: 0;
+}
+
+.paper-banner dl.config-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: .15rem .75rem;
+    margin: 0;
+    font-size: .78rem;
+}
+
+.paper-banner dl.config-grid dt {
+    font-weight: 600;
+    color: #6b7280;
+}
+
+.paper-banner dl.config-grid dd {
+    margin: 0;
+    color: #1f2937;
+}
+
+.paper-banner .read-paper {
+    align-self: start;
+}
+
+/* --- Layer-wise table (Table 1 preview) --- */
+.layer-table-section {
+    margin-bottom: 1rem;
+}
+
+.layer-table-section h3 {
+    font-size: .9rem;
+    margin: 0 0 .35rem 0;
+    color: #374151;
+}
+
+.layer-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .82rem;
+}
+
+.layer-table th,
+.layer-table td {
+    padding: .35rem .6rem;
+    border: 1px solid #e5e7eb;
+    text-align: center;
+}
+
+.layer-table thead {
+    background: #f9fafb;
+}
+
+.layer-table tbody tr.current-layer {
+    background: #eef2ff;
+    font-weight: 600;
+}
+
+.layer-table .footnote {
+    font-size: .72rem;
+    color: #6b7280;
+    margin-top: .25rem;
+}
+
+/* --- Method coverage strip --- */
+.method-strip {
+    display: flex;
+    gap: .5rem;
+    flex-wrap: wrap;
+    margin: .75rem 0 1.25rem;
+    align-items: center;
+}
+
+.method-badge {
+    display: inline-flex;
+    align-items: baseline;
+    gap: .35rem;
+    padding: .4rem .8rem;
+    border-radius: 8px;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    font-size: .85rem;
+    cursor: pointer;
+    transition: background .12s ease, border-color .12s ease;
+}
+
+.method-badge:hover {
+    background: #eef2ff;
+    border-color: #c7d2fe;
+}
+
+.method-badge .name {
+    font-weight: 600;
+}
+
+.method-badge .pct {
+    font-variant-numeric: tabular-nums;
+    color: #6b7280;
+}
+
+.method-badge.geometry-highlight {
+    background: #fef3c7;
+    border-color: #f59e0b;
+    font-weight: 700;
+}
+
+.method-badge.geometry-highlight .pct {
+    color: #7c2d12;
+}
+
+.total-badge {
+    display: inline-flex;
+    align-items: baseline;
+    gap: .35rem;
+    padding: .4rem .8rem;
+    border-radius: 8px;
+    background: #dcfce7;
+    border: 1px solid #86efac;
+    font-size: .9rem;
+    font-weight: 700;
+    margin-left: auto;
+}
+
+/* Method-info dialog popup */
+dialog.method-info {
+    max-width: 540px;
+    border-radius: 10px;
+    border: 1px solid #e5e7eb;
+    padding: 1rem 1.25rem;
+}
+
+dialog.method-info h3 {
+    margin: 0 0 .5rem 0;
+}
+
+dialog.method-info p {
+    font-size: .9rem;
+    line-height: 1.5;
+}
+
+/* --- Mini case-study tiles --- */
+.case-study-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: .75rem;
+    margin: 1rem 0 1.25rem;
+}
+
+.case-study-tile {
+    padding: .75rem 1rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #ffffff;
+    text-decoration: none;
+    color: inherit;
+    display: block;
+    transition: border-color .12s ease, box-shadow .12s ease;
+}
+
+.case-study-tile:hover {
+    border-color: #6366f1;
+    box-shadow: 0 1px 4px rgba(99, 102, 241, .15);
+}
+
+.case-study-tile h4 {
+    margin: 0 0 .25rem;
+    font-size: .95rem;
+    color: #1f2937;
+}
+
+.case-study-tile p {
+    margin: 0;
+    font-size: .82rem;
+    color: #6b7280;
+    line-height: 1.35;
+}
+
+/* --- Grid controls (significance filter) --- */
+.grid-controls {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: .5rem;
+    font-size: .85rem;
+    flex-wrap: wrap;
+}
+
+.grid-controls label {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    color: #374151;
+}
+
+/* --- AG Grid significance cell colouring --- */
+.ag-theme-alpine .ag-cell.sig-cell {
+    background: #d1fae5 !important;
+    color: #065f46 !important;
+    font-weight: 600;
+}
+
+.ag-theme-alpine .ag-cell.not-sig-cell {
+    color: #9ca3af !important;
+}
+
+.ag-theme-alpine .ag-cell.null-cell {
+    color: #9ca3af !important;
+    font-style: italic;
+}
+
+/* Highlight the geometry columns */
+.ag-theme-alpine .ag-header-cell.geometry-col,
+.ag-theme-alpine .ag-cell.geometry-col {
+    border-left: 2px solid #f59e0b !important;
+}
+
+/* --- Scatter + UpSet section --- */
+.scatter-two-up {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+@media (max-width: 960px) {
+    .scatter-two-up { grid-template-columns: 1fr; }
+}
+
+/* --- Feature detail method grid --- */
+.method-detail-section {
+    display: grid;
+    grid-template-columns: 1fr 220px;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.method-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: .75rem;
+    align-content: start;
+}
+
+.method-card {
+    padding: .65rem .8rem;
+    border: 1px solid #e5e7eb;
+    border-left-width: 3px;
+    border-left-color: transparent;
+    border-radius: 8px;
+    background: #ffffff;
+    cursor: pointer;
+    transition: border-color .12s ease, box-shadow .12s ease;
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+}
+
+.method-card:hover {
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .08);
+}
+
+.method-card.is-significant {
+    background: #ecfdf5;
+    border-color: #10b981;
+    border-left-color: #10b981;
+}
+
+.method-card.not-significant {
+    color: #6b7280;
+}
+
+.method-card .mc-name {
+    font-weight: 700;
+    font-size: .88rem;
+}
+
+.method-card .mc-metric {
+    font-size: .72rem;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+}
+
+.method-card .mc-score {
+    font-size: 1.2rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.method-card.is-significant .mc-score {
+    color: #065f46;
+}
+
+.method-card .mc-label {
+    font-size: .82rem;
+    color: #374151;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.method-card .mc-q {
+    display: inline-block;
+    align-self: flex-start;
+    font-size: .72rem;
+    padding: .1rem .45rem;
+    border-radius: 4px;
+    background: #f3f4f6;
+    color: #4b5563;
+    font-variant-numeric: tabular-nums;
+}
+
+.method-card.is-significant .mc-q {
+    background: #10b981;
+    color: #ffffff;
+    font-weight: 700;
+}
+
+.radar-slot {
+    position: sticky;
+    top: 1rem;
+    width: 220px;
+    align-self: start;
+}
+
+.radar-slot h4 {
+    margin: 0 0 .35rem 0;
+    font-size: .85rem;
+    color: #374151;
+    text-align: center;
+}
+
+@media (max-width: 900px) {
+    .method-detail-section {
+        grid-template-columns: 1fr;
+    }
+    .radar-slot {
+        position: static;
+        width: 100%;
+        max-width: 260px;
+        margin: 0 auto;
+    }
+}
+
+/* --- Case-study stat cards --- */
+.stat-callout-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: .75rem;
+    margin-bottom: 1.25rem;
+}
+
+.stat-callout {
+    padding: .75rem 1rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.stat-callout .label {
+    font-size: .78rem;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    margin-bottom: .2rem;
+}
+
+.stat-callout .value {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #1f2937;
+    font-variant-numeric: tabular-nums;
+}
+
+.stat-callout .sub {
+    font-size: .78rem;
+    color: #6b7280;
+    margin-top: .1rem;
+}
+
+.stat-callout.flag-green {
+    background: #ecfdf5;
+    border-color: #10b981;
+    border-left: 3px solid #10b981;
+}
+
+.stat-callout.flag-green .value { color: #065f46; }
+
+.stat-callout.flag-yellow {
+    background: #fefce8;
+    border-color: #eab308;
+    border-left: 3px solid #eab308;
+}
+
+.stat-callout.flag-yellow .value { color: #713f12; }
+
+/* Q-chip used in tables/cards */
+.q-chip {
+    display: inline-block;
+    padding: .05rem .35rem;
+    border-radius: 3px;
+    font-size: .7rem;
+    font-variant-numeric: tabular-nums;
+    background: #f3f4f6;
+    color: #4b5563;
+    font-weight: 600;
+}
+
+.q-chip.sig {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.q-chip.null {
+    background: #f3f4f6;
+    color: #9ca3af;
+    font-style: italic;
+}
+
+/* Section dividers on case-study pages */
+.cs-section-header {
+    margin: 2rem 0 .5rem 0;
+    padding-bottom: .25rem;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.cs-section-header h3 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.cs-section-header p {
+    margin: .25rem 0 0 0;
+    font-size: .82rem;
+    color: #6b7280;
+}
+
+/* Quick inline "read the paper" link */
+.read-paper-nav {
+    margin-left: auto;
+    font-size: .85rem;
+}
+
 /* --- Responsive adjustments --- */
 @media (max-width: 768px) {
     .cards-row {
@@ -349,5 +816,8 @@
     }
     .viewer-container {
         width: 100%;
+    }
+    .paper-banner {
+        grid-template-columns: 1fr;
     }
 }

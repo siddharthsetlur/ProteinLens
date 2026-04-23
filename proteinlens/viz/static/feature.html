@@ -25,19 +25,19 @@
             </nav>
         </header>
 
-        <!-- Section 1: Summary Stats -->
+        <!-- Annotation methods (7-card grid) + geometric radar -->
         <section id="summary-section">
-            <h2>Summary</h2>
-            <div id="summary-cards" class="stats-grid">
-                <div class="loading-spinner"></div> Loading...
+            <h2>Annotation methods</h2>
+            <p class="secondary">Each card reports the best score, top label, and BH-corrected q-value for one method. Cards are highlighted when q&nbsp;&lt;&nbsp;0.05. Click a card to jump to its detail section.</p>
+            <div class="method-detail-section">
+                <div id="method-grid" class="method-grid">
+                    <div class="loading-spinner"></div> Loading methods…
+                </div>
+                <aside class="radar-slot" id="radar-slot" style="display:none;">
+                    <h4>Geometric profile</h4>
+                    <div id="radar-container"></div>
+                </aside>
             </div>
-        </section>
-
-        <!-- Geometry Radar Profile (shown only if geometry data exists) -->
-        <section id="radar-section" style="display:none;">
-            <h2>Geometric Profile</h2>
-            <p class="secondary">Category-level summary of which geometric properties drive this feature's activation. Hover over vertices for values.</p>
-            <div id="radar-container" style="display:flex; justify-content:center; padding:0.5rem 0;"></div>
         </section>
 
         <!-- Section 1b: Top 3 Sequence Alignment -->

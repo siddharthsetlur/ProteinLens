@@ -1,758 +1,486 @@
 /**
- * homepage.js — AG Grid setup, stats rendering, and row-click navigation.
+ * homepage.js
  *
- * On page load:
- *   1. Fetches /api/stats and /api/index in parallel
- *   2. Renders model card, dataset card, and pipeline status badges
- *   3. Initializes AG Grid with sortable/filterable columns and color-coded cells
- *   4. Row click navigates to /feature/{feature_id}
- *
- * External dependencies (loaded via CDN in index.html):
- *   - AG Grid Community (agGrid global)
+ * Wires the paper-companion homepage:
+ *  - paper banner with SAE config
+ *  - Table 1 row (method coverage by q<0.05)
+ *  - 7-method coverage strip with click-to-learn dialogs
+ *  - significance-aware AG Grid (21 method columns) with combo filter
+ *  - Figure-2-style scatter coloured by significance tuple
+ *  - UpSet-style bar of most common significance combinations
  */
 
-// ============================================================
-// Utility: format a number for display, handling null
-// ============================================================
+const METHOD_DEFS = [
+    {
+        id: 1, name: "InterPro Protein", short: "IPR Prot", metric: "F1",
+        summary: "Does a known InterPro family label predict which proteins the feature fires on?",
+        detail: "At the protein level, we ask whether any single InterPro code is a significant predictor of which proteins carry the feature. We BH-correct the raw permutation p-values across all features.",
+    },
+    {
+        id: 2, name: "InterPro Residue", short: "IPR Res", metric: "F1",
+        summary: "Do InterPro domain fragments align with the residues the feature fires on?",
+        detail: "At the residue level, we test whether the annotation's reported fragments coincide with the feature's activating residues. Uses BH q-values from the residue-level permutation null.",
+    },
+    {
+        id: 3, name: "CATH Protein", short: "CATH Prot", metric: "F1",
+        summary: "Does a CATH structural class explain which proteins the feature fires on?",
+        detail: "CATH hierarchy labels (C / CA / CAT / CATH) are tested for protein-level predictivity; the highest-F1 level is reported. Raw p-values come from the permutation null; q is BH-corrected at viz startup.",
+    },
+    {
+        id: 4, name: "CATH Residue", short: "CATH Res", metric: "F1",
+        summary: "Do CATH domain boundaries align with the activating residues?",
+        detail: "Residue-level test for CATH, analogous to InterPro residue. The highest-F1 CATH level is reported with its BH q-value.",
+    },
+    {
+        id: 5, name: "Sequence Position", short: "Position", metric: "F1",
+        summary: "Does the feature fire at a consistent position (e.g. N-terminus, interior 80%)?",
+        detail: "We sweep 21 position predicates that encode only the residue's position along the sequence (not amino-acid identity). The best F1 is BH-corrected against a permutation null.",
+    },
+    {
+        id: 6, name: "Sequence MEME Motif", short: "Motif", metric: "PR-AUC",
+        summary: "Does the feature fire around a discoverable sequence motif?",
+        detail: "MEME derives PWMs from windows around top-activating residues; we score each PWM via PR-AUC against the feature's activation label and take the best. Significance is the BH q-value on the PR-AUC against a permutation null.",
+    },
+    {
+        id: 7, name: "Geometric", short: "Geom", metric: "PR-AUC",
+        summary: "Can local Cα backbone geometry predict which residues the feature fires on?",
+        detail: "A GBM is trained on a 44-dim local geometric feature vector (curvature, torsion, planarity, compactness, contacts, composition) and evaluated via PR-AUC on activation. This is the paper's novel annotation method.",
+    },
+];
 
-/**
- * Format a numeric value for display in the table or cards.
- *
- * @param {number|null} val   - The value to format.
- * @param {number} decimals   - Decimal places to show (default 3).
- * @returns {string}          - Formatted string, or "—" for null/undefined.
- */
+const SCORE_FIELD = k => `m${k}_score`;
+const LABEL_FIELD = k => `m${k}_label`;
+const Q_FIELD     = k => `m${k}_q`;
+
+const isSig = (q) => q != null && q < 0.05;
+
 function fmt(val, decimals = 3) {
-    if (val === null || val === undefined) return "—";
+    if (val == null) return "—";
     return Number(val).toFixed(decimals);
 }
 
-// ============================================================
-// Card rendering
-// ============================================================
-
-/**
- * Render the SAE model card from /api/stats response.
- *
- * Displays architecture, dictionary size, expansion factor, activation dim,
- * L1 penalty, learning rate, training steps, and wandb name.
- *
- * @param {Object} sae - The stats.sae object from the API.
- */
-function renderSaeCard(sae) {
-    const body = document.getElementById("sae-card-body");
-    if (!sae || Object.keys(sae).length === 0) {
-        body.textContent = "SAE config not found";
-        return;
-    }
-    body.innerHTML = `<dl>
-        <dt>Architecture</dt><dd>${sae.architecture || "—"}</dd>
-        <dt>Dict Size</dt><dd>${sae.dictionary_size ?? "—"}</dd>
-        <dt>Expansion</dt><dd>${sae.expansion_factor ?? "—"}x</dd>
-        <dt>Activation Dim</dt><dd>${sae.activation_dim ?? "—"}</dd>
-        <dt>L1 Penalty</dt><dd>${fmt(sae.l1_penalty, 5)}</dd>
-        <dt>Learning Rate</dt><dd>${fmt(sae.lr, 7)}</dd>
-        <dt>Steps</dt><dd>${sae.steps?.toLocaleString() ?? "—"}</dd>
-        <dt>Wandb</dt><dd>${sae.wandb_name || "—"}</dd>
-    </dl>`;
+function fmtQ(q) {
+    if (q == null) return "—";
+    if (q < 1e-3) return q.toExponential(1);
+    return q.toFixed(3);
 }
 
-/**
- * Render the dataset card from /api/stats response.
- *
- * Shows ESM model, layer, organism, protein/cluster counts, and threshold.
- *
- * @param {Object} dataset - The stats.dataset object from the API.
- */
-function renderDatasetCard(dataset) {
-    const body = document.getElementById("dataset-card-body");
-    if (!dataset || Object.keys(dataset).length === 0) {
-        body.textContent = "Dataset stats not found";
-        return;
-    }
-    body.innerHTML = `<dl>
-        <dt>ESM Model</dt><dd>${dataset.esm_model || "—"}</dd>
-        <dt>Layer</dt><dd>${dataset.esm_layer ?? "—"}</dd>
-        <dt>Organism</dt><dd>Taxon ${dataset.organism_taxid ?? "—"}</dd>
-        <dt>Proteins</dt><dd>${dataset.total_proteins?.toLocaleString() ?? "—"}</dd>
-        <dt>Clusters</dt><dd>${dataset.total_clusters?.toLocaleString() ?? "—"}</dd>
-        <dt>Threshold</dt><dd>${dataset.activation_threshold ?? "—"}</dd>
-        <dt>Features</dt><dd>${dataset.num_features?.toLocaleString() ?? "—"}</dd>
-    </dl>`;
-}
+// ============================================================
+// Paper banner + Table 1 row + method-coverage strip
+// ============================================================
 
-/**
- * Render pipeline status badges showing completion counts.
- *
- * Displays feature/interpro/geometry file counts as badges, plus a list
- * of completed pipeline stages.
- *
- * @param {Object} pipeline - The stats.pipeline object from the API.
- * @param {number} numFeatures - Total number of features (for X/total display).
- */
-function renderPipelineCard(pipeline, numFeatures) {
-    const body = document.getElementById("pipeline-card-body");
-    if (!pipeline) {
-        body.textContent = "Pipeline status not available";
-        return;
-    }
-
-    const total = numFeatures || "?";
-
-    // Build count badges
-    const counts = [
-        { label: "Features", count: pipeline.feature_count },
-        { label: "InterPro", count: pipeline.interpro_count },
-        { label: "Geometry", count: pipeline.geometry_count },
-        { label: "Motif", count: pipeline.motif_count },
+function renderPaperBanner(stats) {
+    const grid = document.getElementById("sae-config-grid");
+    if (!grid) return;
+    const sae = stats.sae || {};
+    const ds = stats.dataset || {};
+    const parts = [
+        ["Model", ds.esm_model || "—"],
+        ["Layer", ds.esm_layer ?? "—"],
+        ["Architecture", sae.architecture || "—"],
+        ["Dict size", sae.dictionary_size != null ? sae.dictionary_size.toLocaleString() : (ds.num_features?.toLocaleString() ?? "—")],
+        ["Expansion", sae.expansion_factor != null ? `${sae.expansion_factor}×` : "—"],
+        ["Activation dim", sae.activation_dim ?? "—"],
+        ["L1 penalty", sae.l1_penalty != null ? sae.l1_penalty.toFixed(4) : "—"],
+        ["Learning rate", sae.lr != null ? sae.lr.toExponential(2) : "—"],
+        ["Steps", sae.steps != null ? sae.steps.toLocaleString() : "—"],
+        ["Run", sae.wandb_name || "—"],
+        ["Proteins", ds.total_proteins?.toLocaleString() ?? "—"],
+        ["Clusters", ds.total_clusters?.toLocaleString() ?? "—"],
     ];
+    grid.innerHTML = parts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
 
-    const badgeHtml = counts
-        .map((c) => {
-            const isDone = c.count >= total;
-            const cls = isDone ? "badge badge-done" : "badge badge-count";
-            return `<span class="${cls}">${c.label}: ${c.count}/${total}</span>`;
-        })
-        .join(" ");
+function renderLayerTable(coverage, stats) {
+    const container = document.getElementById("layer-table-container");
+    if (!container) return;
+    const layer = stats.dataset?.esm_layer;
+    const rows = [1, 2, 3, 4, 5, 6].map((L) => {
+        const current = L === layer;
+        const cells = current
+            ? coverage.methods.map((m) => `<td><strong>${m.pct.toFixed(2)}%</strong></td>`).join("")
+            : coverage.methods.map(() => `<td>—</td>`).join("");
+        const total = current ? `<td><strong>${coverage.total_annotated_pct.toFixed(2)}%</strong></td>` : `<td>—</td>`;
+        return `<tr class="${current ? "current-layer" : ""}"><td>Layer ${L}</td>${total}${cells}</tr>`;
+    }).join("");
+    const headers = `<th>Layer</th><th>Total</th>${coverage.methods.map((m) => `<th title="${m.name} (${m.metric})">${METHOD_DEFS[m.id - 1].short}</th>`).join("")}`;
+    container.innerHTML = `<table class="layer-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
+}
 
-    // Build completed stages list
-    const stages = pipeline.completed_stages || [];
-    const stageHtml = stages
-        .map((s) => `<span class="badge badge-done">${s}</span>`)
-        .join(" ");
+function renderMethodStrip(coverage) {
+    const strip = document.getElementById("method-coverage-strip");
+    if (!strip) return;
+    strip.innerHTML = "";
+    for (const m of coverage.methods) {
+        const def = METHOD_DEFS[m.id - 1];
+        const badge = document.createElement("span");
+        badge.className = "method-badge" + (m.id === 7 ? " geometry-highlight" : "");
+        badge.title = def.summary;
+        badge.innerHTML = `<span class="name">${def.name}</span><span class="pct">${m.pct.toFixed(1)}%</span>`;
+        badge.addEventListener("click", () => openMethodDialog(def, m));
+        strip.appendChild(badge);
+    }
+    const tot = document.createElement("span");
+    tot.className = "total-badge";
+    tot.title = "Features where at least one method has q < 0.05";
+    tot.innerHTML = `<span>Any method</span><span>${coverage.total_annotated_pct.toFixed(1)}%</span>`;
+    strip.appendChild(tot);
+}
 
-    body.innerHTML = `
-        <div style="margin-bottom:0.5rem">${badgeHtml}</div>
-        <div style="font-size:0.8rem; line-height:1.8">${stageHtml}</div>
+function openMethodDialog(def, coverageEntry) {
+    const dlg = document.getElementById("method-info-dialog");
+    if (!dlg) return;
+    document.getElementById("method-info-title").textContent = `${def.name}  ·  ${def.metric}`;
+    document.getElementById("method-info-body").innerHTML = `
+        <p>${def.detail}</p>
+        <p><strong>${coverageEntry.n_significant.toLocaleString()} / ${coverageEntry.total.toLocaleString()}</strong>
+        features have q&nbsp;&lt;&nbsp;0.05 for this method (${coverageEntry.pct.toFixed(2)}%).</p>
     `;
+    if (typeof dlg.showModal === "function") {
+        dlg.showModal();
+    } else {
+        dlg.setAttribute("open", "open");
+    }
 }
 
 // ============================================================
-// AG Grid setup
+// AG Grid
 // ============================================================
 
-/**
- * Return a cellStyle function that applies green intensity proportional
- * to a value between 0 and maxVal.
- *
- * Null/undefined values get no special styling; they're handled by the
- * valueFormatter which shows "—".
- *
- * @param {number} maxVal - The value at which color is fully saturated green.
- * @returns {Function} AG Grid cellStyle callback.
- */
-function greenScale(maxVal) {
-    return (params) => {
-        const v = params.value;
-        if (v === null || v === undefined) return null;
-        // Clamp between 0 and 1
-        const intensity = Math.min(Math.max(v / maxVal, 0), 1);
-        // Interpolate: white (255,255,255) -> green (40,167,69)
-        const r = Math.round(255 - intensity * (255 - 40));
-        const g = Math.round(255 - intensity * (255 - 167));
-        const b = Math.round(255 - intensity * (255 - 69));
-        return { backgroundColor: `rgb(${r},${g},${b})` };
-    };
-}
-
-/**
- * Null-safe value formatter: shows "—" for null, otherwise fixed decimals.
- *
- * @param {number} decimals - Number of decimal places.
- * @returns {Function} AG Grid valueFormatter callback.
- */
-function nullFormatter(decimals = 3) {
-    return (params) => {
-        if (params.value === null || params.value === undefined) return "—";
-        return Number(params.value).toFixed(decimals);
-    };
-}
-
-/**
- * Custom comparator that sorts null values to the bottom regardless
- * of sort direction.
- *
- * AG Grid v32 passes (valueA, valueB, nodeA, nodeB, isDescending) to
- * custom comparators. We flip the null-handling when descending so that
- * nulls always stay at the bottom of the table.
- *
- * @param {*} a - First value.
- * @param {*} b - Second value.
- * @param {*} _nodeA - AG Grid row node (unused).
- * @param {*} _nodeB - AG Grid row node (unused).
- * @param {boolean} isDescending - Whether the column is sorted descending.
- * @returns {number} Comparison result.
- */
-function nullBottomComparator(a, b, _nodeA, _nodeB, isDescending) {
-    if (a === null && b === null) return 0;
-    if (a === null) return isDescending ? -1 : 1;
-    if (b === null) return isDescending ? 1 : -1;
+function nullBottomComparator(a, b, _nA, _nB, desc) {
+    if (a == null && b == null) return 0;
+    if (a == null) return desc ? -1 : 1;
+    if (b == null) return desc ? 1 : -1;
+    if (typeof a === "string" || typeof b === "string") return String(a).localeCompare(String(b));
     return a - b;
 }
 
-/**
- * Build AG Grid column definitions for the feature table.
- *
- * All columns are sortable and filterable. Numeric columns use null-safe
- * formatters and green color scales. Row click navigates to the feature page.
- *
- * @returns {Array} AG Grid column definitions.
- */
+function significanceCellClass(k) {
+    return (params) => {
+        const q = params.data?.[Q_FIELD(k)];
+        if (q == null) return "null-cell";
+        return q < 0.05 ? "sig-cell" : "not-sig-cell";
+    };
+}
+
+function geometryHeaderClass(k) {
+    return k === 7 ? "geometry-col" : undefined;
+}
+
+function scoreFormatter(params) {
+    const v = params.value;
+    if (v == null) return "—";
+    return Number(v).toFixed(3);
+}
+
+function labelFormatter(params) {
+    return params.value || "—";
+}
+
 function buildColumnDefs() {
-    return [
+    const cols = [
         {
-            field: "feature_id",
-            headerName: "ID",
-            width: 80,
+            field: "feature_id", headerName: "ID", width: 80, pinned: "left",
             filter: "agNumberColumnFilter",
         },
         {
-            field: "max_activation",
-            headerName: "Max Act.",
-            width: 110,
-            valueFormatter: nullFormatter(4),
-            comparator: nullBottomComparator,
-            filter: "agNumberColumnFilter",
-        },
-        {
-            field: "pct_proteins_activated",
-            headerName: "% Proteins",
-            width: 115,
-            valueFormatter: nullFormatter(1),
-            comparator: nullBottomComparator,
-            filter: "agNumberColumnFilter",
-        },
-        {
-            field: "pct_clusters_activated",
-            headerName: "% Clusters",
-            width: 115,
-            valueFormatter: nullFormatter(1),
-            comparator: nullBottomComparator,
-            filter: "agNumberColumnFilter",
-        },
-        {
-            field: "interpro_protein_best_f1",
-            headerName: "InterPro Prot. F1",
-            width: 140,
-            valueFormatter: nullFormatter(3),
-            cellStyle: greenScale(1.0),
-            comparator: nullBottomComparator,
-            filter: "agNumberColumnFilter",
-        },
-        {
-            field: "interpro_protein_best_name",
-            headerName: "InterPro Annotation",
-            width: 200,
-            valueFormatter: (params) => params.value || "—",
-            filter: "agTextColumnFilter",
-        },
-        {
-            field: "interpro_residue_best_f1",
-            headerName: "InterPro Res. F1",
-            width: 140,
-            valueFormatter: nullFormatter(3),
-            cellStyle: greenScale(1.0),
-            comparator: nullBottomComparator,
-            filter: "agNumberColumnFilter",
-        },
-        {
-            field: "motif_best_pr_auc",
-            headerName: "Motif PR-AUC",
-            width: 120,
-            valueFormatter: nullFormatter(3),
-            cellStyle: greenScale(1.0),
-            comparator: nullBottomComparator,
-            filter: "agNumberColumnFilter",
-        },
-        {
-            field: "motif_best_consensus",
-            headerName: "Best Motif",
-            width: 130,
-            filter: "agTextColumnFilter",
-            cellStyle: () => ({ fontFamily: "monospace" }),
-        },
-        {
-            field: "position_best_f1",
-            headerName: "Position F1",
-            width: 110,
-            valueFormatter: nullFormatter(3),
-            cellStyle: greenScale(1.0),
-            comparator: nullBottomComparator,
-            filter: "agNumberColumnFilter",
-        },
-        {
-            field: "position_best_name",
-            headerName: "Best Position",
-            width: 130,
-            valueFormatter: (params) => params.value || "\u2014",
-            filter: "agTextColumnFilter",
-        },
-        {
-            field: "cath_best_f1",
-            headerName: "CATH F1",
-            width: 110,
-            valueFormatter: nullFormatter(3),
-            cellStyle: greenScale(1.0),
-            comparator: nullBottomComparator,
-            filter: "agNumberColumnFilter",
-        },
-        {
-            field: "geometry_radar",
-            headerName: "Geom. Profile",
-            width: 80,
-            sortable: false,
-            filter: false,
+            field: "geometry_radar", headerName: "Profile", width: 66, pinned: "left",
+            sortable: false, filter: false,
             cellRenderer: (params) => {
                 const radar = params.value;
                 if (!radar) return "";
                 const div = document.createElement("div");
-                div.style.cssText = "display:flex;align-items:center;justify-content:center;height:100%;";
+                div.style.cssText = "display:flex;align-items:center;justify-content:center;height:100%";
                 const scores = [
-                    radar.curvature || 0, radar.torsion || 0,
-                    radar.planarity || 0, radar.compactness || 0,
-                    radar.contacts || 0, radar.composition || 0,
+                    radar.curvature || 0, radar.torsion || 0, radar.planarity || 0,
+                    radar.compactness || 0, radar.contacts || 0, radar.composition || 0,
                 ];
                 renderRadarGlyph(div, scores, { size: 48, showLabels: false });
                 return div;
             },
         },
         {
-            field: "geometry_protein_r2_cv",
-            headerName: "Geom. R2 CV",
-            width: 130,
-            valueFormatter: nullFormatter(3),
-            cellStyle: greenScale(1.0),
-            comparator: nullBottomComparator,
-            filter: "agNumberColumnFilter",
+            field: "pct_proteins_activated", headerName: "% Prot.", width: 90,
+            valueFormatter: (p) => p.value == null ? "—" : Number(p.value).toFixed(1),
+            comparator: nullBottomComparator, filter: "agNumberColumnFilter",
         },
         {
-            field: "geometry_residue_pr_auc",
-            headerName: "Geom. PR-AUC",
-            width: 140,
-            valueFormatter: nullFormatter(3),
-            cellStyle: greenScale(1.0),
-            comparator: nullBottomComparator,
-            filter: "agNumberColumnFilter",
-        },
-        {
-            field: "is_geometry_primary",
-            headerName: "Geom. Primary",
-            width: 80,
-            valueFormatter: (params) => params.value === true ? "\u2713" : "",
-            cellStyle: (params) => params.value === true ? { color: "#28a745", fontWeight: "bold", textAlign: "center" } : { textAlign: "center" },
-            filter: "agTextColumnFilter",
-        },
-        {
-            field: "geometry_primary_score",
-            headerName: "Geom. Score",
-            width: 110,
-            valueFormatter: nullFormatter(3),
-            cellStyle: greenScale(1.0),
-            comparator: nullBottomComparator,
-            filter: "agNumberColumnFilter",
+            field: "max_activation", headerName: "Max act.", width: 95,
+            valueFormatter: (p) => p.value == null ? "—" : Number(p.value).toFixed(3),
+            comparator: nullBottomComparator, filter: "agNumberColumnFilter",
         },
     ];
+    for (const def of METHOD_DEFS) {
+        const k = def.id;
+        cols.push({
+            field: SCORE_FIELD(k),
+            headerName: `${def.short}`,
+            headerTooltip: `${def.name} — ${def.metric}`,
+            width: 95,
+            valueFormatter: scoreFormatter,
+            cellClass: significanceCellClass(k),
+            headerClass: geometryHeaderClass(k),
+            comparator: nullBottomComparator,
+            filter: "agNumberColumnFilter",
+        });
+        cols.push({
+            field: LABEL_FIELD(k),
+            headerName: `${def.short} label`,
+            headerTooltip: `Top label under ${def.name}`,
+            width: 170,
+            valueFormatter: labelFormatter,
+            cellClass: significanceCellClass(k),
+            headerClass: geometryHeaderClass(k),
+            filter: "agTextColumnFilter",
+        });
+    }
+    return cols;
 }
 
-/**
- * Initialize the AG Grid with feature index data.
- *
- * Sets up row virtualization, sorting, filtering, and row-click navigation.
- *
- * @param {Array} rowData - Array of feature row objects from /api/index.
- */
+let _gridApi = null;
+let _currentSigFilter = "all";
+let _currentHideZeroSig = false;
+
+function rowSignificanceFlags(row) {
+    const sigKs = [];
+    for (let k = 1; k <= 7; k++) {
+        if (isSig(row[Q_FIELD(k)])) sigKs.push(k);
+    }
+    const bioSig = sigKs.some((k) => k <= 6);
+    const geomSig = sigKs.includes(7);
+    return { sigKs, bioSig, geomSig, nSig: sigKs.length };
+}
+
+function matchesSigFilter(row) {
+    const { bioSig, geomSig, nSig } = rowSignificanceFlags(row);
+    if (_currentHideZeroSig && nSig === 0) return false;
+    switch (_currentSigFilter) {
+        case "geom_only": return geomSig && !bioSig;
+        case "bio_only":  return bioSig && !geomSig;
+        case "both":      return geomSig && bioSig;
+        case "none":      return nSig === 0;
+        default:          return true;
+    }
+}
+
+function refreshRowCount() {
+    if (!_gridApi) return;
+    const total = _gridApi.getDisplayedRowCount();
+    const el = document.getElementById("row-count");
+    if (el) el.textContent = `${total.toLocaleString()} row${total === 1 ? "" : "s"} shown`;
+}
+
 function initGrid(rowData) {
     const gridDiv = document.getElementById("feature-grid");
-
     const gridOptions = {
         columnDefs: buildColumnDefs(),
         rowData: rowData,
-        defaultColDef: {
-            sortable: true,
-            resizable: true,
-        },
-        // Row click -> navigate to feature detail page
-        onRowClicked: (event) => {
-            const featureId = event.data.feature_id;
-            window.location.href = `/feature/${featureId}`;
-        },
-        // Taller rows to fit radar glyphs
+        defaultColDef: { sortable: true, resizable: true },
         rowHeight: 56,
-        // Performance: row virtualization is on by default in AG Grid
         animateRows: false,
         suppressCellFocus: true,
+        isExternalFilterPresent: () => _currentSigFilter !== "all" || _currentHideZeroSig,
+        doesExternalFilterPass: (node) => matchesSigFilter(node.data),
+        onRowClicked: (event) => {
+            const fid = event.data.feature_id;
+            window.location.href = `/feature/${fid}`;
+        },
+        onGridReady: (event) => {
+            _gridApi = event.api;
+            refreshRowCount();
+        },
+        onFilterChanged: refreshRowCount,
+        onSortChanged: refreshRowCount,
+        onModelUpdated: refreshRowCount,
     };
-
-    // AG Grid Community v32 uses createGrid
     agGrid.createGrid(gridDiv, gridOptions);
 }
 
 // ============================================================
-// Scatter plots: density-colored, seaborn-styled Plotly plots
+// Figure-2 style significance scatter
 // ============================================================
 
-/**
- * Estimate per-point density via fast 2D grid binning.
- * Returns an array of density values (one per point), normalised to [0, 1].
- */
-function estimateDensity(xs, ys, nBins = 40) {
-    const n = xs.length;
-    if (n === 0) return [];
-
-    const xMin = Math.min(...xs), xMax = Math.max(...xs);
-    const yMin = Math.min(...ys), yMax = Math.max(...ys);
-    const xRange = xMax - xMin || 1;
-    const yRange = yMax - yMin || 1;
-
-    // Count points per bin
-    const grid = Array.from({ length: nBins }, () => new Float32Array(nBins));
-    const binXs = new Int32Array(n);
-    const binYs = new Int32Array(n);
-    for (let i = 0; i < n; i++) {
-        const bx = Math.min(Math.floor((xs[i] - xMin) / xRange * nBins), nBins - 1);
-        const by = Math.min(Math.floor((ys[i] - yMin) / yRange * nBins), nBins - 1);
-        binXs[i] = bx;
-        binYs[i] = by;
-        grid[bx][by]++;
+function renderFig2Scatter(index) {
+    const div = document.getElementById("fig2-scatter");
+    if (!div) return;
+    const classify = (row) => {
+        const { bioSig, geomSig } = rowSignificanceFlags(row);
+        if (geomSig && !bioSig) return "geom_only";
+        if (bioSig && !geomSig) return "bio_only";
+        if (bioSig && geomSig)  return "both";
+        return "none";
+    };
+    const tint = {
+        geom_only: "#f59e0b",
+        bio_only:  "#2563eb",
+        both:      "#7c3aed",
+        none:      "#9ca3af",
+    };
+    const groupLabels = {
+        geom_only: "Geometry only",
+        bio_only:  "Bio only",
+        both:      "Both",
+        none:      "Neither",
+    };
+    const groups = { geom_only: [], bio_only: [], both: [], none: [] };
+    for (const row of index) {
+        if (row.m7_score == null) continue;
+        const bestBio = [row.m1_score, row.m2_score, row.m3_score, row.m4_score, row.m5_score, row.m6_score]
+            .filter((v) => v != null);
+        if (bestBio.length === 0) continue;
+        groups[classify(row)].push({
+            x: row.m7_score, y: Math.max(...bestBio), fid: row.feature_id,
+        });
     }
-
-    // Gaussian blur (3x3 kernel) for smoothing
-    const smoothed = Array.from({ length: nBins }, () => new Float32Array(nBins));
-    const k = [0.0625, 0.125, 0.0625, 0.125, 0.25, 0.125, 0.0625, 0.125, 0.0625];
-    for (let i = 0; i < nBins; i++) {
-        for (let j = 0; j < nBins; j++) {
-            let val = 0;
-            let ki = 0;
-            for (let di = -1; di <= 1; di++) {
-                for (let dj = -1; dj <= 1; dj++) {
-                    const ni = i + di, nj = j + dj;
-                    if (ni >= 0 && ni < nBins && nj >= 0 && nj < nBins) {
-                        val += grid[ni][nj] * k[ki];
-                    }
-                    ki++;
-                }
-            }
-            smoothed[i][j] = val;
-        }
-    }
-
-    // Look up each point's density
-    const densities = new Float64Array(n);
-    let maxD = 0;
-    for (let i = 0; i < n; i++) {
-        densities[i] = smoothed[binXs[i]][binYs[i]];
-        if (densities[i] > maxD) maxD = densities[i];
-    }
-    // Normalise to [0, 1]
-    if (maxD > 0) {
-        for (let i = 0; i < n; i++) densities[i] /= maxD;
-    }
-    return Array.from(densities);
-}
-
-/**
- * Create a density-colored scatter plot with seaborn-like styling.
- *
- * @param {string} divId     - Target div id.
- * @param {Array}  rows      - Data rows (each must have x, y, feature_id fields).
- * @param {string} xField    - Key for x values.
- * @param {string} yField    - Key for y values.
- * @param {string} title     - Plot title.
- * @param {string} xlabel    - X-axis label.
- * @param {string} ylabel    - Y-axis label.
- * @param {Array}  colorscale - Plotly colorscale (seaborn-like).
- */
-function densityScatter(divId, rows, xField, yField, title, xlabel, ylabel, colorscale) {
-    const xs = rows.map((r) => r[xField]);
-    const ys = rows.map((r) => r[yField]);
-    const ids = rows.map((r) => r.feature_id);
-    const density = estimateDensity(xs, ys);
-
-    // Sort by density ascending so dense points render on top
-    const indices = density.map((_, i) => i).sort((a, b) => density[a] - density[b]);
-
-    const traces = [
-        // Background contour for filled density regions
-        {
-            x: xs,
-            y: ys,
-            type: "histogram2dcontour",
-            colorscale: colorscale,
-            showscale: false,
-            contours: { coloring: "fill", showlines: false },
-            ncontours: 15,
-            opacity: 0.35,
-            hoverinfo: "skip",
-        },
-        // Scatter points colored by density
-        {
-            x: indices.map((i) => xs[i]),
-            y: indices.map((i) => ys[i]),
-            text: indices.map((i) => `Feature ${ids[i]}`),
-            customdata: indices.map((i) => ids[i]),
+    const traces = Object.entries(groups)
+        .filter(([, rows]) => rows.length > 0)
+        .map(([k, rows]) => ({
+            x: rows.map(r => r.x),
+            y: rows.map(r => r.y),
+            customdata: rows.map(r => r.fid),
+            text: rows.map(r => `Feature ${r.fid}`),
             mode: "markers",
             type: "scatter",
+            name: `${groupLabels[k]} (${rows.length.toLocaleString()})`,
             marker: {
-                size: 4.5,
-                color: indices.map((i) => density[i]),
-                colorscale: colorscale,
-                showscale: true,
-                colorbar: { title: "Density", thickness: 12, len: 0.6, tickfont: { size: 9 } },
-                opacity: 0.8,
+                size: k === "none" ? 3 : 5,
+                color: tint[k],
+                opacity: k === "none" ? 0.3 : 0.75,
                 line: { width: 0 },
             },
-            hovertemplate: "%{text}<br>x: %{x:.3f}<br>y: %{y:.3f}<extra></extra>",
-        },
-    ];
-
-    const layout = {
-        title: { text: title, font: { size: 13, family: "sans-serif" } },
-        xaxis: {
-            title: { text: xlabel, font: { size: 11 } },
-            tickfont: { size: 10 },
-            gridcolor: "#e9ecef",
-            gridwidth: 1,
-            zeroline: false,
-        },
-        yaxis: {
-            title: { text: ylabel, font: { size: 11 } },
-            tickfont: { size: 10 },
-            gridcolor: "#e9ecef",
-            gridwidth: 1,
-            zeroline: false,
-        },
-        margin: { t: 45, r: 60, b: 50, l: 55 },
+            hovertemplate: "%{text}<br>Geom PR-AUC: %{x:.3f}<br>Best bio F1: %{y:.3f}<extra></extra>",
+        }));
+    Plotly.newPlot(div, traces, {
+        title: { text: "Figure 2 — Geometry vs best biological annotation", font: { size: 13 } },
+        xaxis: { title: "Geometry PR-AUC (method 7)", gridcolor: "#e9ecef", zeroline: false },
+        yaxis: { title: "max F1 across methods 1–6", gridcolor: "#e9ecef", zeroline: false },
+        margin: { t: 45, r: 20, b: 50, l: 55 },
         hovermode: "closest",
         paper_bgcolor: "#fff",
         plot_bgcolor: "#f8f9fa",
-        showlegend: false,
+        legend: { x: 0.02, y: 0.98, bgcolor: "rgba(255,255,255,0.85)", font: { size: 10 } },
         font: { family: "sans-serif" },
-    };
+    }, { responsive: true, displayModeBar: false });
 
-    Plotly.newPlot(divId, traces, layout, { responsive: true, displayModeBar: false });
-}
-
-/**
- * Render all scatter plots from the feature index data.
- * Uses density-colored scatter with contour backgrounds.
- *
- * @param {Array} index - Feature index rows from /api/index.
- */
-function renderScatterPlots(index) {
-    // Seaborn-inspired colorscales
-    const csMako    = [[0,"#0b0405"],[0.25,"#35628b"],[0.5,"#3d8e8a"],[0.75,"#8fd0a3"],[1,"#dff8d2"]];
-    const csRocket  = [[0,"#03051a"],[0.25,"#6b1d5e"],[0.5,"#cb3b47"],[0.75,"#f0944d"],[1,"#faebdd"]];
-    const csViridis = [[0,"#440154"],[0.25,"#3b528b"],[0.5,"#21918c"],[0.75,"#5ec962"],[1,"#fde725"]];
-    const csFlare   = [[0,"#e98d6b"],[0.25,"#cc5b6a"],[0.5,"#8f3a84"],[0.75,"#4c2c7a"],[1,"#180e4a"]];
-    const csCrest   = [[0,"#1a1530"],[0.25,"#1b6b72"],[0.5,"#36a66d"],[0.75,"#a0d55e"],[1,"#f0f921"]];
-    const csIce     = [[0,"#0b0405"],[0.25,"#2a4858"],[0.5,"#4e8a7e"],[0.75,"#8ec8a5"],[1,"#d6f5d6"]];
-
-    const plots = [
-        {
-            divId: "scatter-protein",
-            xField: "geometry_residue_pr_auc",
-            yField: "interpro_protein_best_f1",
-            title: "Geometry PR-AUC vs InterPro Protein F1",
-            xlabel: "Geometry PR-AUC",
-            ylabel: "InterPro Protein F1",
-            colorscale: csMako,
-        },
-        {
-            divId: "scatter-residue",
-            xField: "geometry_residue_pr_auc",
-            yField: "interpro_residue_best_f1",
-            title: "Geometry PR-AUC vs InterPro Residue F1",
-            xlabel: "Geometry PR-AUC",
-            ylabel: "InterPro Residue F1",
-            colorscale: csRocket,
-        },
-        {
-            divId: "scatter-motif",
-            xField: "geometry_residue_pr_auc",
-            yField: "motif_best_pr_auc",
-            title: "Geometry PR-AUC vs Motif PR-AUC",
-            xlabel: "Geometry PR-AUC",
-            ylabel: "Motif PR-AUC",
-            colorscale: csViridis,
-        },
-        {
-            divId: "scatter-position",
-            xField: "geometry_residue_pr_auc",
-            yField: "position_best_f1",
-            title: "Geometry PR-AUC vs Position F1",
-            xlabel: "Geometry PR-AUC",
-            ylabel: "Position F1",
-            colorscale: csFlare,
-        },
-        {
-            divId: "scatter-cath",
-            xField: "geometry_residue_pr_auc",
-            yField: "cath_best_f1",
-            title: "Geometry PR-AUC vs CATH F1",
-            xlabel: "Geometry PR-AUC",
-            ylabel: "CATH F1",
-            colorscale: csIce,
-        },
-    ];
-
-    for (const p of plots) {
-        const rows = index.filter((r) => r[p.xField] != null && r[p.yField] != null);
-        densityScatter(p.divId, rows, p.xField, p.yField, p.title, p.xlabel, p.ylabel, p.colorscale);
-    }
-
-    // --- Best F1 plot ---
-    const bestRows = index
-        .map((r) => {
-            const f1s = [
-                r.interpro_protein_best_f1,
-                r.interpro_residue_best_f1,
-                r.motif_best_pr_auc,
-                r.position_best_f1,
-                r.cath_best_f1,
-            ].filter((v) => v != null);
-            if (f1s.length === 0 || r.geometry_residue_pr_auc == null) return null;
-            return { ...r, best_f1: Math.max(...f1s) };
-        })
-        .filter((r) => r != null);
-    densityScatter(
-        "scatter-best-f1", bestRows,
-        "geometry_residue_pr_auc", "best_f1",
-        "Geometry PR-AUC vs Best F1",
-        "Geometry PR-AUC", "Best F1 (max of all metrics)",
-        csCrest
-    );
-
-    // --- Geometry-primary plot (custom: gold highlights over grey density) ---
-    const gpRows = index
-        .map((r) => {
-            const seqF1s = [r.motif_best_pr_auc, r.position_best_f1, r.interpro_residue_best_f1, r.cath_best_f1].filter((v) => v != null);
-            if (r.geometry_residue_pr_auc == null) return null;
-            return { ...r, best_seq_f1: seqF1s.length > 0 ? Math.max(...seqF1s) : 0 };
-        })
-        .filter((r) => r != null);
-
-    const gpPrimary = gpRows.filter((r) => r.is_geometry_primary === true);
-    const gpOther = gpRows.filter((r) => r.is_geometry_primary !== true);
-
-    const otherXs = gpOther.map((r) => r.geometry_residue_pr_auc);
-    const otherYs = gpOther.map((r) => r.best_seq_f1);
-    const otherDens = estimateDensity(otherXs, otherYs);
-    const otherIdx = otherDens.map((_, i) => i).sort((a, b) => otherDens[a] - otherDens[b]);
-
-    const csGrey = [[0, "#f8f9fa"], [0.5, "#adb5bd"], [1, "#495057"]];
-
-    Plotly.newPlot(
-        "scatter-geom-primary",
-        [
-            {
-                x: otherXs,
-                y: otherYs,
-                type: "histogram2dcontour",
-                colorscale: csGrey,
-                showscale: false,
-                contours: { coloring: "fill", showlines: false },
-                ncontours: 12,
-                opacity: 0.3,
-                hoverinfo: "skip",
-            },
-            {
-                x: otherIdx.map((i) => otherXs[i]),
-                y: otherIdx.map((i) => otherYs[i]),
-                text: otherIdx.map((i) => `Feature ${gpOther[i].feature_id}`),
-                customdata: otherIdx.map((i) => gpOther[i].feature_id),
-                mode: "markers",
-                type: "scatter",
-                marker: {
-                    size: 3.5,
-                    color: otherIdx.map((i) => otherDens[i]),
-                    colorscale: csGrey,
-                    showscale: false,
-                    opacity: 0.5,
-                    line: { width: 0 },
-                },
-                name: "Other",
-                hovertemplate: "%{text}<br>x: %{x:.3f}<br>y: %{y:.3f}<extra></extra>",
-            },
-            {
-                x: gpPrimary.map((r) => r.geometry_residue_pr_auc),
-                y: gpPrimary.map((r) => r.best_seq_f1),
-                text: gpPrimary.map((r) => `Feature ${r.feature_id}`),
-                customdata: gpPrimary.map((r) => r.feature_id),
-                mode: "markers",
-                type: "scatter",
-                marker: {
-                    size: 7,
-                    color: "#f59f00",
-                    opacity: 0.9,
-                    line: { color: "#c77c00", width: 0.5 },
-                },
-                name: `Geometry-primary (${gpPrimary.length})`,
-                hovertemplate: "%{text}<br>x: %{x:.3f}<br>y: %{y:.3f}<extra></extra>",
-            },
-        ],
-        {
-            title: { text: `Geometry PR-AUC vs Best Sequence F1 (${gpPrimary.length} geometry-primary)`, font: { size: 13, family: "sans-serif" } },
-            xaxis: { title: { text: "Geometry PR-AUC", font: { size: 11 } }, tickfont: { size: 10 }, gridcolor: "#e9ecef", zeroline: false },
-            yaxis: { title: { text: "Best Sequence F1", font: { size: 11 } }, tickfont: { size: 10 }, gridcolor: "#e9ecef", zeroline: false },
-            margin: { t: 45, r: 20, b: 50, l: 55 },
-            hovermode: "closest",
-            paper_bgcolor: "#fff",
-            plot_bgcolor: "#f8f9fa",
-            showlegend: true,
-            legend: { x: 0.02, y: 0.98, font: { size: 10 }, bgcolor: "rgba(255,255,255,0.85)" },
-            font: { family: "sans-serif" },
-            shapes: [
-                { type: "line", x0: 0.3, x1: 0.3, y0: 0, y1: 1, line: { color: "#868e96", width: 1, dash: "dash" } },
-            ],
-        },
-        { responsive: true, displayModeBar: false }
-    );
-
-    // Click on any point -> navigate to feature page
-    const allScatterDivs = ["scatter-protein", "scatter-residue", "scatter-motif", "scatter-position", "scatter-cath", "scatter-best-f1", "scatter-geom-primary"];
-    for (const divId of allScatterDivs) {
-        document.getElementById(divId).on("plotly_click", (data) => {
-            const fid = data.points[0].customdata;
-            if (fid != null) window.location.href = `/feature/${fid}`;
-        });
-    }
+    div.on("plotly_click", (data) => {
+        const fid = data.points[0]?.customdata;
+        if (fid != null) window.location.href = `/feature/${fid}`;
+    });
 }
 
 // ============================================================
-// Main: fetch data and render
+// UpSet-style combination bar
+// ============================================================
+
+function renderUpsetBar(index) {
+    const div = document.getElementById("upset-chart");
+    if (!div) return;
+    const counts = new Map();
+    for (const row of index) {
+        const key = rowSignificanceFlags(row).sigKs.join("·") || "none";
+        counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    const entries = [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 20)
+        .reverse();
+    const labels = entries.map(([key]) => key === "none" ? "(none)" : key);
+    const values = entries.map(([, n]) => n);
+    const hovertext = entries.map(([key, n]) => {
+        if (key === "none") return `No significant methods · ${n.toLocaleString()} features`;
+        const names = key.split("·").map((k) => METHOD_DEFS[parseInt(k, 10) - 1].short).join(" + ");
+        return `${names}<br>${n.toLocaleString()} features`;
+    });
+    Plotly.newPlot(div, [{
+        y: labels,
+        x: values,
+        type: "bar",
+        orientation: "h",
+        customdata: entries.map(([key]) => key),
+        text: hovertext,
+        hovertemplate: "%{text}<extra></extra>",
+        marker: {
+            color: entries.map(([key]) => {
+                if (key === "none") return "#9ca3af";
+                const ks = key.split("·").map(Number);
+                const geom = ks.includes(7);
+                const bio = ks.some((k) => k <= 6);
+                if (geom && bio)  return "#7c3aed";
+                if (geom)         return "#f59e0b";
+                return "#2563eb";
+            }),
+        },
+    }], {
+        title: { text: "Top 20 significance combinations", font: { size: 13 } },
+        xaxis: { title: "Features", gridcolor: "#e9ecef" },
+        yaxis: { tickfont: { size: 10 } },
+        margin: { t: 45, r: 20, b: 50, l: 100 },
+        paper_bgcolor: "#fff",
+        plot_bgcolor: "#f8f9fa",
+        font: { family: "sans-serif" },
+    }, { responsive: true, displayModeBar: false });
+
+    div.on("plotly_click", (data) => {
+        const key = data.points[0]?.customdata;
+        if (key == null) return;
+        const sel = document.getElementById("sig-filter");
+        if (key === "none") {
+            sel.value = "none";
+        } else {
+            const ks = key.split("·").map(Number);
+            const geom = ks.includes(7);
+            const bio = ks.some((k) => k <= 6);
+            sel.value = geom && bio ? "both" : geom ? "geom_only" : "bio_only";
+        }
+        sel.dispatchEvent(new Event("change"));
+        document.getElementById("table-section").scrollIntoView({ behavior: "smooth" });
+    });
+}
+
+// ============================================================
+// Main
 // ============================================================
 
 document.addEventListener("DOMContentLoaded", async () => {
     try {
-        // Fetch stats and index in parallel
-        const [statsRes, indexRes] = await Promise.all([
+        const [statsRes, idxRes, covRes] = await Promise.all([
             fetch("/api/stats"),
             fetch("/api/index"),
+            fetch("/api/method-coverage"),
         ]);
-
-        if (!statsRes.ok) throw new Error(`Stats fetch failed: ${statsRes.status}`);
-        if (!indexRes.ok) throw new Error(`Index fetch failed: ${indexRes.status}`);
+        if (!statsRes.ok) throw new Error(`/api/stats: ${statsRes.status}`);
+        if (!idxRes.ok)   throw new Error(`/api/index: ${idxRes.status}`);
+        if (!covRes.ok)   throw new Error(`/api/method-coverage: ${covRes.status}`);
 
         const stats = await statsRes.json();
-        const index = await indexRes.json();
+        const index = await idxRes.json();
+        const coverage = await covRes.json();
 
-        // Update subtitle
-        const subtitle = document.getElementById("subtitle");
         const ds = stats.dataset || {};
-        subtitle.textContent = `${ds.esm_model || "ESM"} layer ${ds.esm_layer ?? "?"} · ${ds.num_features?.toLocaleString() ?? "?"} features · ${ds.total_proteins?.toLocaleString() ?? "?"} proteins`;
+        document.getElementById("subtitle").textContent =
+            `${ds.esm_model || "ESM"} layer ${ds.esm_layer ?? "?"} · ` +
+            `${index.length.toLocaleString()} features · ` +
+            `${coverage.total_annotated_n.toLocaleString()} (${coverage.total_annotated_pct.toFixed(1)}%) annotated by ≥1 method`;
 
-        // Render info cards
-        renderSaeCard(stats.sae || {});
-        renderDatasetCard(stats.dataset || {});
-        renderPipelineCard(stats.pipeline || {}, ds.num_features);
-
-        // Initialize feature table
+        renderPaperBanner(stats);
+        renderLayerTable(coverage, stats);
+        renderMethodStrip(coverage);
         initGrid(index);
+        renderFig2Scatter(index);
+        renderUpsetBar(index);
 
-        // Render scatter plots
-        renderScatterPlots(index);
+        // Filter controls
+        document.getElementById("sig-filter").addEventListener("change", (e) => {
+            _currentSigFilter = e.target.value;
+            if (_gridApi) _gridApi.onFilterChanged();
+        });
+        document.getElementById("show-only-significant").addEventListener("change", (e) => {
+            _currentHideZeroSig = e.target.checked;
+            if (_gridApi) _gridApi.onFilterChanged();
+        });
     } catch (err) {
-        console.error("Failed to load homepage data:", err);
-        document.getElementById("subtitle").textContent = `Error: ${err.message}`;
+        console.error("homepage load failed:", err);
+        const sub = document.getElementById("subtitle");
+        if (sub) sub.textContent = `Error: ${err.message}`;
     }
 });

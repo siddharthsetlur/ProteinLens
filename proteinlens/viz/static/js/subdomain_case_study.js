@@ -1,237 +1,281 @@
 /**
- * subdomain_case_study.js — Sub-domain geometric decomposition case study.
+ * subdomain_case_study.js — "Geometry is more granular than biology"
  *
- * Shows how multiple geometry-primary SAE features decompose a single
- * InterPro annotation into distinct geometric sub-structures.
+ * Renders the InterPro-grouped and CATH-grouped lists emitted by
+ * build_subdomain_case_study.py, plus a "MEME / position distinguishes,
+ * geometry does not" counter-example table spanning both DB sources.
+ *
+ * Per group, we compute three orthogonal distinguishability flags:
+ *   geom-distinguishable     = >=2 distinct top structural_category
+ *                              OR >=2 distinct top_geometric_feature
+ *   meme-distinguishable     = among features with m6_q<0.05, >=2 distinct m6 consensus
+ *   position-distinguishable = among features with m5_q<0.05, >=2 distinct m5 label
  */
 
-function fmtVal(v, decimals = 3) {
-    return v === null || v === undefined ? "\u2014" : Number(v).toFixed(decimals);
+function fmt(v, d = 3) { return v == null ? "—" : Number(v).toFixed(d); }
+function fmtQ(q) {
+    if (q == null) return "—";
+    if (q < 1e-3) return q.toExponential(1);
+    return q.toFixed(3);
 }
 
-function createStatCard(title, bodyHtml) {
-    const card = document.createElement("article");
-    card.className = "stat-card";
-    card.innerHTML = `<header><strong>${title}</strong></header>${bodyHtml}`;
-    return card;
+const sig = (row, k) => row[`m${k}_q`] != null && row[`m${k}_q`] < 0.05;
+
+// A group is geometry-distinguishable when the mean pairwise cosine similarity
+// of its 44-d geometric feature-importance vectors is below this threshold.
+// Strict cut: ≥0.5 means the importance vectors point in broadly the same
+// direction, so we only call "distinguishable" when profiles are genuinely
+// divergent. In 44-d space, <0.5 corresponds to clearly distinct geometric
+// roles (near-identical profiles sit at 0.9+).
+const GEOM_COS_THRESHOLD = 0.5;
+
+function distinguishable(values) {
+    const seen = new Set();
+    for (const v of values) {
+        if (v == null) continue;
+        seen.add(v);
+        if (seen.size > 1) return true;
+    }
+    return false;
 }
 
-// ── Global stats cards ──
-
-function renderGlobalStats(container, stats) {
-    container.innerHTML = "";
-
-    container.appendChild(createStatCard("Geometry-Primary Features",
-        `<div class="value">${stats.total_geometry_primary}</div>
-         <div class="detail">Features whose activation is best explained by 3D structure</div>`
-    ));
-
-    container.appendChild(createStatCard("With High InterPro Protein F1",
-        `<div class="value">${stats.n_with_high_interpro_protein_f1} / ${stats.total_geometry_primary}</div>
-         <div class="detail">${stats.pct_with_high_interpro_protein_f1}% have protein F1 &ge; ${stats.min_protein_f1_threshold}</div>
-         <div class="detail">Fire on known protein families, but domain boundaries don't explain residue-level activation</div>`
-    ));
-
-    container.appendChild(createStatCard("Multi-Feature Annotations",
-        `<div class="value">${stats.n_annotations_with_multiple_features}</div>
-         <div class="detail">${stats.n_features_in_groups} GP features across ${stats.n_annotations_with_multiple_features} annotations</div>
-         <div class="detail">Each decomposed into distinct geometric sub-structures</div>`
-    ));
+function slugify(s) {
+    return String(s).replace(/[^a-zA-Z0-9_.-]+/g, "_");
 }
 
-// ── Scatter: protein F1 vs residue F1 ──
-
-function renderScatter(div, groups) {
-    // Flatten all features from all groups
-    const allFeats = groups.flatMap((g) =>
-        g.features.map((f) => ({ ...f, annotation_name: g.annotation_name, annotation_code: g.annotation_code }))
-    );
-
-    // Color by structural category
-    const categories = [...new Set(allFeats.map((f) => f.structural_category))];
-    const colors = [
-        "#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4",
-        "#42d4f4", "#f032e6", "#bfef45", "#fabed4", "#469990",
-        "#dcbeff", "#9A6324", "#800000", "#aaffc3", "#808000",
-        "#ffd8b1", "#000075", "#a9a9a9",
-    ];
-    const catColor = {};
-    categories.forEach((c, i) => { catColor[c] = colors[i % colors.length]; });
-
-    const traces = categories.map((cat) => {
-        const feats = allFeats.filter((f) => f.structural_category === cat);
+function enrichFeatures(group, indexById) {
+    // Join group features with /api/index rows so we have m5_label/q, m6_label/q etc.
+    return group.features.map((f) => {
+        const idxRow = indexById.get(f.feature_id) || {};
         return {
-            x: feats.map((f) => f.interpro_protein_f1),
-            y: feats.map((f) => f.interpro_residue_f1),
-            text: feats.map((f) => `Feature ${f.feature_id}<br>${f.annotation_name}<br>Geom PR-AUC: ${fmtVal(f.geom_pr_auc)}<br>Top: ${f.top_geometric_feature}`),
-            customdata: feats.map((f) => f.feature_id),
-            mode: "markers",
-            type: "scatter",
-            name: cat.length > 30 ? cat.slice(0, 28) + "\u2026" : cat,
-            marker: { size: 8, color: catColor[cat], opacity: 0.8, line: { width: 0.5, color: "#333" } },
-            hovertemplate: "%{text}<extra></extra>",
+            ...f,
+            m5_label: idxRow.m5_label,
+            m5_score: idxRow.m5_score,
+            m5_q: idxRow.m5_q,
+            m6_label: idxRow.m6_label,
+            m6_score: idxRow.m6_score,
+            m6_q: idxRow.m6_q,
+            m7_q: idxRow.m7_q,
         };
     });
+}
 
-    Plotly.newPlot(div, traces, {
-        title: { text: "InterPro Protein F1 vs Residue F1 (geometry-primary features)", font: { size: 13 } },
-        xaxis: { title: { text: "InterPro Protein F1", font: { size: 11 } }, range: [0.5, 1.05], gridcolor: "#e9ecef" },
-        yaxis: { title: { text: "InterPro Residue F1", font: { size: 11 } }, range: [-0.01, 0.25], gridcolor: "#e9ecef" },
-        margin: { t: 45, r: 20, b: 50, l: 55 },
-        hovermode: "closest",
-        paper_bgcolor: "#fff",
-        plot_bgcolor: "#f8f9fa",
-        showlegend: true,
-        legend: { font: { size: 9 }, bgcolor: "rgba(255,255,255,0.85)" },
-        annotations: [{
-            x: 0.85, y: 0.22, xref: "x", yref: "y",
-            text: "High protein F1, low residue F1:<br>domain predicts <em>which proteins</em>,<br>not <em>which residues</em>",
-            showarrow: false, font: { size: 10, color: "#666" },
-            bgcolor: "rgba(255,255,255,0.8)", borderpad: 4,
-        }],
-    }, { responsive: true, displayModeBar: false });
+function groupMetrics(group, indexById) {
+    const feats = enrichFeatures(group, indexById);
+    // Primary signal: mean pairwise cosine of 44-d importance vectors (from script).
+    // Fallback when cosine isn't available: distinct top-geom-feature labels.
+    const geomDist = group.mean_cosine_similarity != null
+        ? group.mean_cosine_similarity < GEOM_COS_THRESHOLD
+        : distinguishable(feats.map((f) => f.top_geometric_feature));
+    const memeDist = distinguishable(
+        feats.filter((f) => sig(f, 6)).map((f) => f.m6_label)
+    );
+    const posDist = distinguishable(
+        feats.filter((f) => sig(f, 5)).map((f) => f.m5_label)
+    );
+    return { g: group, feats, geomDist, memeDist, posDist };
+}
 
-    document.getElementById(div.id || div).on("plotly_click", (data) => {
-        const fid = data.points[0].customdata;
-        if (fid != null) window.location.href = `/feature/${fid}`;
+function renderGlobalStats(interproMetrics, cathMetrics, globalStats) {
+    const all = interproMetrics.concat(cathMetrics);
+    const total = all.length;
+    const geomD = all.filter((m) => m.geomDist).length;
+    const memeD = all.filter((m) => m.memeDist).length;
+    const posD  = all.filter((m) => m.posDist).length;
+    const geomNotSeq = all.filter((m) => m.geomDist && !(m.memeDist || m.posDist)).length;
+    const seqNotGeom = all.filter((m) => (m.memeDist || m.posDist) && !m.geomDist).length;
+    const container = document.getElementById("global-stats");
+    const maxPct = globalStats.max_pct_activated;
+    const totalSparse = globalStats.total_after_sparsity_filter;
+    container.innerHTML = `
+        <article class="stat-callout">
+            <div class="label">Geometry-significant, sparse</div>
+            <div class="value">${(totalSparse || globalStats.total_geometry_significant || 0).toLocaleString()}</div>
+            <div class="sub">q&nbsp;&lt;&nbsp;0.05 on geometry${maxPct != null ? ` · ≤${maxPct}% protein coverage` : ""}</div>
+        </article>
+        <article class="stat-callout">
+            <div class="label">Groups (InterPro + CATH)</div>
+            <div class="value">${total}</div>
+            <div class="sub">${interproMetrics.length} InterPro · ${cathMetrics.length} CATH</div>
+        </article>
+        <article class="stat-callout">
+            <div class="label">Geometry-distinguishable</div>
+            <div class="value">${geomD}</div>
+            <div class="sub">Different top structural category or geometric feature across members</div>
+        </article>
+        <article class="stat-callout">
+            <div class="label">MEME-distinguishable</div>
+            <div class="value">${memeD}</div>
+            <div class="sub">Different top MEME consensus among members with q&lt;0.05</div>
+        </article>
+        <article class="stat-callout">
+            <div class="label">Position-distinguishable</div>
+            <div class="value">${posD}</div>
+            <div class="sub">Different top position predicate among members with q&lt;0.05</div>
+        </article>
+        <article class="stat-callout flag-yellow">
+            <div class="label">MEME / position distinguish, geometry does not</div>
+            <div class="value">${seqNotGeom}</div>
+            <div class="sub">Counter-examples to the paper's main claim</div>
+        </article>
+        <article class="stat-callout flag-green">
+            <div class="label">Geometry distinguishes, MEME / position do not</div>
+            <div class="value">${geomNotSeq}</div>
+            <div class="sub">Core claim: geometry pulls information the sequence-based methods miss</div>
+        </article>
+    `;
+}
+
+function featureRow(f) {
+    const chip = (k, value) => {
+        const q = f[`m${k}_q`];
+        const cls = q == null ? "null" : q < 0.05 ? "sig" : "";
+        return `<td><span class="q-chip ${cls}">${value}</span><div style="font-size:.7rem;color:#6b7280">q=${fmtQ(q)}</div></td>`;
+    };
+    const rmsd = f.motif_rmsd_per_pos != null
+        ? `${fmt(f.motif_rmsd_per_pos, 2)} Å/pos`
+        : (f.motif_rmsd != null ? `${fmt(f.motif_rmsd, 2)} Å` : "—");
+    return `<tr onclick="location.href='/feature/${f.feature_id}'" style="cursor:pointer">
+        <td>${f.feature_id}</td>
+        <td>${f.structural_category || "—"}</td>
+        <td style="font-family:monospace;font-size:.78rem">${f.top_geometric_feature || "—"}</td>
+        <td>${fmt(f.geom_pr_auc)}</td>
+        <td style="font-size:.78rem">${rmsd}</td>
+        <td style="font-size:.78rem">${fmtPct(f.pct_proteins_activated)}</td>
+        ${chip(6, f.m6_label || "—")}
+        ${chip(5, f.m5_label || "—")}
+    </tr>`;
+}
+
+function fmtPct(v) {
+    if (v == null) return "—";
+    return `${Number(v).toFixed(1)}%`;
+}
+
+function renderGroupBlock(m, source, sectionPrefix) {
+    const { g, feats, geomDist, memeDist, posDist } = m;
+    const flag = (label, on, color) =>
+        `<span class="q-chip ${on ? "sig" : ""}" style="${on ? `background:${color};color:#fff;` : ""}">${label}</span>`;
+    const shown = g.n_features_shown != null && g.n_features_shown < g.n_features
+        ? ` (showing ${g.n_features_shown})`
+        : "";
+    const cos = g.mean_cosine_similarity != null ? ` · mean cos ${fmt(g.mean_cosine_similarity)}` : "";
+    const slug = `${sectionPrefix}-${slugify(g.annotation_code)}`;
+    const sourceKey = source === "CATH" ? "cath" : "interpro";
+    const detailHref = `/subdomain-decomposition/${sourceKey}/${encodeURIComponent(g.annotation_code)}`;
+
+    const summary = `<summary style="cursor:pointer;padding:.55rem .8rem;list-style:none;display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+        <span style="font-weight:700;font-size:.95rem">${g.annotation_name || g.annotation_code}</span>
+        <code style="font-size:.75rem;color:#6b7280">${g.annotation_code}</code>
+        <span style="color:#6b7280;font-size:.78rem">${g.n_features} feats${shown} · ${source}-res F1 ${fmt(g.mean_residue_f1)}${cos}</span>
+        <span style="margin-left:auto;display:flex;gap:.3rem;align-items:center">
+            ${flag("Geom", geomDist, "#10b981")}
+            ${flag("MEME", memeDist, "#6366f1")}
+            ${flag("Pos", posDist, "#eab308")}
+            <a href="${detailHref}" onclick="event.stopPropagation()"
+               style="margin-left:.3rem;padding:.15rem .55rem;border:1px solid #6366f1;border-radius:6px;color:#4338ca;text-decoration:none;font-size:.75rem;font-weight:600"
+               title="Open deep-dive page">Open ↗</a>
+        </span>
+    </summary>`;
+
+    const body = `<div style="padding:.6rem .8rem">
+        <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+            <thead style="background:#f9fafb">
+                <tr><th>Feature</th><th>Structural category</th><th>Top geom feature</th><th>Geom PR-AUC</th><th>Motif RMSD</th><th>% prot.</th><th>Top MEME</th><th>Top position</th></tr>
+            </thead>
+            <tbody>${feats.map(featureRow).join("")}</tbody>
+        </table>
+        <p style="margin-top:.4rem;font-size:.78rem;color:#6b7280">
+            For importance vectors and the full cosine similarity heatmap, open the
+            <a href="${detailHref}">deep-dive page</a>.
+        </p>
+    </div>`;
+
+    return `<details id="${slug}" class="group-block" style="margin-bottom:.5rem;border:1px solid #e5e7eb;border-radius:8px;background:#ffffff">
+        ${summary}${body}
+    </details>`;
+}
+
+function renderJumpStrip(container, metrics, sectionPrefix) {
+    if (!metrics.length) return;
+    const strip = document.createElement("div");
+    strip.style.cssText = "display:flex;flex-wrap:wrap;gap:.3rem;margin:.3rem 0 1rem;font-size:.78rem";
+    strip.innerHTML = metrics.map((m) => {
+        const slug = `${sectionPrefix}-${slugify(m.g.annotation_code)}`;
+        const label = (m.g.annotation_name || m.g.annotation_code).slice(0, 44);
+        const cosStr = m.g.mean_cosine_similarity != null ? ` · ${fmt(m.g.mean_cosine_similarity)}` : "";
+        return `<a class="jump-chip" data-target="${slug}" href="#${slug}"
+                   title="${m.g.annotation_code} · ${m.g.n_features} features${cosStr}"
+                   style="padding:.2rem .55rem;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;text-decoration:none;color:#374151">
+                    ${label} <span style="color:#9ca3af">(${m.g.n_features})</span>
+                </a>`;
+    }).join("");
+    container.prepend(strip);
+
+    strip.querySelectorAll(".jump-chip").forEach((anchor) => {
+        anchor.addEventListener("click", (e) => {
+            e.preventDefault();
+            const el = document.getElementById(anchor.dataset.target);
+            if (el) {
+                el.open = true;
+                el.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+        });
     });
 }
 
-// ── Annotation group cards ──
-
-function renderGroups(container, groups) {
-    container.innerHTML = "";
-
-    for (const group of groups) {
-        const card = document.createElement("article");
-        card.style.marginBottom = "1.5rem";
-
-        // Header with annotation info
-        const header = document.createElement("header");
-        header.innerHTML = `
-            <strong>${group.annotation_code}</strong> &mdash; ${group.annotation_name}
-            <span class="badge badge-count" style="margin-left:0.5rem">${group.n_features} features</span>
-            <span class="badge badge-done" style="margin-left:0.3rem">${group.n_distinct_categories} geometric categories</span>
-        `;
-        card.appendChild(header);
-
-        // Summary line
-        const summary = document.createElement("p");
-        summary.className = "secondary";
-        summary.style.fontSize = "0.85rem";
-        summary.innerHTML = `
-            Mean protein F1: ${fmtVal(group.mean_interpro_protein_f1)} &middot;
-            Max residue F1: ${fmtVal(group.max_interpro_residue_f1)} &middot;
-            Mean geom PR-AUC: ${fmtVal(group.mean_geom_pr_auc)} &middot;
-            Categories: ${group.distinct_categories.join(", ")}
-        `;
-        card.appendChild(summary);
-
-        // Feature table
-        const table = document.createElement("table");
-        table.style.fontSize = "0.8rem";
-        table.style.width = "100%";
-        table.innerHTML = `
-            <thead>
-                <tr>
-                    <th>Feature</th>
-                    <th>Structural Category</th>
-                    <th>Top Geom. Feature</th>
-                    <th>Geom PR-AUC</th>
-                    <th>Prot. F1</th>
-                    <th>Res. F1</th>
-                    <th>CATH F1</th>
-                    <th>Motif PR-AUC</th>
-                    <th>Score</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${group.features.map((f) => `
-                    <tr style="cursor:pointer" onclick="window.location.href='/feature/${f.feature_id}'">
-                        <td><strong>${f.feature_id}</strong></td>
-                        <td>${f.structural_category}</td>
-                        <td style="font-family:monospace;font-size:0.75rem">${f.top_geometric_feature}</td>
-                        <td>${fmtVal(f.geom_pr_auc)}</td>
-                        <td>${fmtVal(f.interpro_protein_f1)}</td>
-                        <td>${fmtVal(f.interpro_residue_f1)}</td>
-                        <td>${fmtVal(f.cath_residue_f1)}</td>
-                        <td>${fmtVal(f.motif_pr_auc)}</td>
-                        <td>${fmtVal(f.composite_score)}</td>
-                    </tr>
-                `).join("")}
-            </tbody>
-        `;
-        card.appendChild(table);
-
-        // Feature importance comparison (mini bar chart per feature)
-        const impDiv = document.createElement("details");
-        impDiv.style.marginTop = "0.5rem";
-        impDiv.innerHTML = `<summary style="font-size:0.85rem;cursor:pointer">Feature importance breakdown</summary>`;
-        const impTable = document.createElement("table");
-        impTable.style.fontSize = "0.75rem";
-        impTable.style.width = "100%";
-        impTable.style.marginTop = "0.3rem";
-
-        // Collect all unique importance keys across features in this group
-        const allKeys = new Set();
-        for (const f of group.features) {
-            for (const [k] of f.top_importances || []) {
-                allKeys.add(k);
-            }
-        }
-        const sortedKeys = [...allKeys].slice(0, 8);
-
-        impTable.innerHTML = `
-            <thead>
-                <tr>
-                    <th>Feature</th>
-                    ${sortedKeys.map((k) => `<th style="font-family:monospace;font-size:0.65rem">${k.replace(/_/g, " ")}</th>`).join("")}
-                </tr>
-            </thead>
-            <tbody>
-                ${group.features.map((f) => {
-                    const impMap = {};
-                    for (const [k, v] of f.top_importances || []) {
-                        impMap[k] = v;
-                    }
-                    return `<tr>
-                        <td><strong>${f.feature_id}</strong></td>
-                        ${sortedKeys.map((k) => {
-                            const v = impMap[k] || 0;
-                            const pct = Math.min(v * 100 / 0.3, 100);
-                            return `<td>
-                                <div style="background:linear-gradient(90deg, #4363d8 ${pct}%, transparent ${pct}%);padding:1px 3px;border-radius:2px;color:${pct > 40 ? '#fff' : '#333'}">${v > 0 ? v.toFixed(3) : ""}</div>
-                            </td>`;
-                        }).join("")}
-                    </tr>`;
-                }).join("")}
-            </tbody>
-        `;
-        impDiv.appendChild(impTable);
-        card.appendChild(impDiv);
-
-        container.appendChild(card);
+function renderGroups(container, metrics, source) {
+    const prefix = source === "InterPro" ? "ipro" : "cath";
+    if (!metrics.length) {
+        container.innerHTML = `<p class="secondary">No ${source} groups with ≥2 features.</p>`;
+        return;
     }
+    container.innerHTML = metrics.map((m) => renderGroupBlock(m, source, prefix)).join("");
+    renderJumpStrip(container, metrics, prefix);
 }
 
-// ── Main ──
+function renderMemeNotGeom(container, interproMetrics, cathMetrics) {
+    const rows = [];
+    for (const m of interproMetrics) {
+        if ((m.memeDist || m.posDist) && !m.geomDist) rows.push({ m, source: "InterPro", prefix: "mng-ipro" });
+    }
+    for (const m of cathMetrics) {
+        if ((m.memeDist || m.posDist) && !m.geomDist) rows.push({ m, source: "CATH", prefix: "mng-cath" });
+    }
+    if (!rows.length) {
+        container.innerHTML = '<p class="secondary">No groups fall in this category for the current analysis dir. That is consistent with the paper\'s claim that geometry carries the orthogonal signal here.</p>';
+        return;
+    }
+    container.innerHTML = rows.map(({ m, source, prefix }) => renderGroupBlock(m, source, prefix)).join("");
+    renderJumpStrip(container, rows.map((r) => r.m), "mng");
+}
 
 document.addEventListener("DOMContentLoaded", async () => {
     try {
-        const res = await fetch("/api/subdomain-case-study");
-        if (!res.ok) {
-            document.getElementById("global-stats").innerHTML =
-                `<p style="color:red">Case study not built yet. Run: <code>python scripts/build_subdomain_case_study.py --data-dir feature_data_cluster</code></p>`;
-            return;
-        }
-        const data = await res.json();
+        const [scRes, idxRes] = await Promise.all([
+            fetch("/api/subdomain-case-study"),
+            fetch("/api/index"),
+        ]);
+        if (!scRes.ok)  throw new Error(`/api/subdomain-case-study: ${scRes.status}`);
+        if (!idxRes.ok) throw new Error(`/api/index: ${idxRes.status}`);
+        const sc = await scRes.json();
+        const idx = await idxRes.json();
+        const indexById = new Map(idx.map((r) => [r.feature_id, r]));
 
-        renderGlobalStats(document.getElementById("global-stats"), data.global_stats);
-        renderScatter("scatter-chart", data.groups);
-        renderGroups(document.getElementById("groups-container"), data.groups);
+        const interproGroups = sc.interpro_groups || sc.groups || [];
+        const cathGroups = sc.cath_groups || [];
 
+        const interproMetrics = interproGroups.map((g) => groupMetrics(g, indexById));
+        const cathMetrics     = cathGroups.map((g) => groupMetrics(g, indexById));
+
+        renderGlobalStats(interproMetrics, cathMetrics, sc.global_stats || {});
+        interproMetrics.sort((a, b) => b.g.n_features - a.g.n_features);
+        cathMetrics.sort((a, b) => b.g.n_features - a.g.n_features);
+        renderGroups(document.getElementById("interpro-groups-container"), interproMetrics, "InterPro");
+        renderGroups(document.getElementById("cath-groups-container"), cathMetrics, "CATH");
+        renderMemeNotGeom(document.getElementById("meme-not-geom-container"), interproMetrics, cathMetrics);
     } catch (err) {
-        console.error("Failed to load sub-domain case study:", err);
+        console.error("subdomain load failed:", err);
         document.getElementById("global-stats").innerHTML =
             `<p style="color:red">Error: ${err.message}</p>`;
     }

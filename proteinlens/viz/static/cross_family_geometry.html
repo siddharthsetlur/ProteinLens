@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cross-Family Geometry — SAE Visualizer</title>
+    <title>Geometry annotates features with missing DB annotations — SAE Visualizer</title>
 
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
@@ -14,76 +14,57 @@
         <header>
             <nav>
                 <ul><li><a href="/">&larr; Back to features</a></li></ul>
-                <ul><li><strong>Cross-Family Geometry Case Study</strong></li></ul>
+                <ul><li><strong>Geometry annotates features with missing DB annotations</strong></li></ul>
             </nav>
         </header>
 
-        <!-- Thesis -->
         <section id="thesis">
-            <h2>Geometry Transcends Family Identity</h2>
+            <h2>DB-silent features that geometry annotates</h2>
             <p>
-                Some SAE latents encode <strong>local 3D geometric motifs</strong> that are shared
-                across evolutionarily unrelated protein families. InterPro partially matches
-                because each family happens to contain the geometry, but no single family
-                explains the feature. The residue-level InterPro F1 is near zero &mdash; the
-                family label is useless for predicting <em>which residues</em> activate.
+                Each row in the main table is a feature. A feature is <em>DB-silent</em> when all four
+                database methods — InterPro protein, InterPro residue, CATH protein, CATH residue —
+                return q&nbsp;&ge;&nbsp;0.05. It becomes <em>DB-silent geometry-annotatable</em> when the
+                geometric method (method&nbsp;7) has q&nbsp;&lt;&nbsp;0.05 on top of that. A tighter subset
+                is <em>purely geometric</em>: only geometry is significant among the seven methods
+                (position and MEME motif are also not significant).
             </p>
         </section>
 
-        <!-- Methodology -->
-        <section id="methodology-section">
-            <h2>Methodology</h2>
-            <div id="methodology-container">
-                <div class="loading-spinner"></div> Loading...
-            </div>
-        </section>
-
-        <!-- Global stats -->
         <section id="global-stats-section">
-            <h2>Global Statistics</h2>
-            <div id="global-stats" class="stats-grid">
-                <div class="loading-spinner"></div> Loading...
+            <h2>Global statistics</h2>
+            <div id="global-stats" class="stat-callout-grid">
+                <div class="loading-spinner"></div> Loading…
             </div>
         </section>
 
-        <!-- Structural category breakdown -->
         <section id="struct-cat-section">
-            <h2>Structural Categories</h2>
-            <p class="secondary">Distribution of geometric property types across all geometry-primary features vs the cross-family subset.</p>
-            <div id="struct-cat-chart" style="width:100%;min-height:400px;"></div>
+            <h2>Structural categories</h2>
+            <p class="secondary">Top structural category (from the radar aggregation) for geometry-significant features vs the DB-silent subset.</p>
+            <div id="struct-cat-chart" style="width:100%;min-height:380px;"></div>
         </section>
 
-        <!-- Scatter: composite score vs interpro F1 -->
-        <section id="scatter-section">
-            <h2>Geometry Composite Score vs InterPro Protein F1</h2>
-            <p class="secondary">Cross-family features (orange) cluster in the high-geometry / mid-InterPro zone. InterPro cannot fully explain them.</p>
-            <div id="scatter-chart" style="width:100%;min-height:450px;"></div>
-        </section>
-
-        <!-- Residue F1 distribution -->
         <section id="residue-f1-section">
-            <h2>Residue-Level InterPro F1 Distribution</h2>
-            <p class="secondary">All geometry-primary features have residue-level InterPro F1 below the null threshold. Family labels fail at the residue level.</p>
-            <div id="residue-f1-chart" style="width:100%;min-height:350px;"></div>
+            <h2>Residue-level bio F1 distribution</h2>
+            <p class="secondary">Histogram of the best residue-level biological F1 (max of InterPro residue, CATH residue, position, MEME) for each subset. For the DB-silent geometry-annotatable cohort these scores are, by construction, below the q&nbsp;&lt;&nbsp;0.05 gate.</p>
+            <div id="residue-f1-chart" style="width:100%;min-height:340px;"></div>
         </section>
 
-        <!-- Cross-family feature cards -->
         <section id="cross-family-section">
-            <h2>Cross-Family Features</h2>
-            <p class="secondary">These 14 features fire across multiple unrelated families (InterPro protein F1 0.3&ndash;0.7). Click to see the deep dive.</p>
+            <h2>Example features</h2>
+            <p class="secondary">Up to the first 24 DB-silent geometry-annotatable features (purely geometric ones highlighted). Click a card to open the feature page.</p>
             <div id="cross-family-container">
-                <div class="loading-spinner"></div> Loading...
+                <div class="loading-spinner"></div> Loading…
             </div>
         </section>
 
-        <!-- All geometry-primary features table -->
         <section id="all-features-section">
-            <h2>All Geometry-Primary Features</h2>
-            <p class="secondary">Full table of 89 geometry-primary features. Every one has multiple InterPro families with F1 &gt; 0.5.</p>
+            <h2>Full table</h2>
+            <p class="secondary">All DB-silent geometry-annotatable features. The "Purely geom" column marks the subset where position and motif are also non-significant.</p>
             <div id="all-features-table" style="overflow-x:auto;"></div>
         </section>
     </main>
 
+    <script src="/static/js/radar_glyph.js"></script>
     <script src="/static/js/cross_family_geometry.js"></script>
 </body>
 </html>

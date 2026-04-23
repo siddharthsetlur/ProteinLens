@@ -17,6 +17,24 @@ import json
 import os
 from pathlib import Path
 
+Q_SIG = 0.05
+
+
+def _is_sig(info: dict, padj_key: str) -> bool:
+    q = info.get(padj_key)
+    return q is not None and q < Q_SIG
+
+
+def _is_q_geometry_primary(info: dict) -> bool:
+    """q-value analogue: geometry significant and residue/motif/position methods are not."""
+    if not _is_sig(info, "geometry_prauc_padj"):
+        return False
+    for other in ("interpro_res_f1_padj", "cath_res_f1_padj",
+                  "motif_pr_auc_padj", "position_f1_padj"):
+        if _is_sig(info, other):
+            return False
+    return True
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build cross-family geometry case study")
@@ -31,7 +49,7 @@ def main() -> None:
     pos_dir = data_dir / "position_enrichment"
 
     gp = json.loads(gp_path.read_text())
-    gp_features = {k: v for k, v in gp["features"].items() if v.get("is_geometry_primary")}
+    gp_features = {k: v for k, v in gp["features"].items() if _is_q_geometry_primary(v)}
 
     # ── Per-feature deep dive data ──────────────────────────────────
 
@@ -151,9 +169,6 @@ def main() -> None:
     # Residue-level stats
     res_f1s = [f["best_interpro_residue_f1"] for f in features_detail]
 
-    # Pull full methodology info from geometry_primary_analysis
-    null_t = gp.get("null_thresholds", {})
-    geom_pr_auc_threshold = gp.get("geom_pr_auc_threshold", 0.3)
     n_features_with_geometry = gp.get("n_features_with_geometry", 0)
 
     global_stats = {
@@ -167,26 +182,15 @@ def main() -> None:
         "interpro_residue_f1_max": round(max(res_f1s), 3) if res_f1s else 0,
         "interpro_residue_f1_mean": round(sum(res_f1s) / len(res_f1s), 3) if res_f1s else 0,
         "interpro_residue_f1_median": round(sorted(res_f1s)[len(res_f1s) // 2], 3) if res_f1s else 0,
-        "null_thresholds": {
-            "interpro_res_f1": null_t.get("interpro_res_f1", 0.20),
-            "motif_pr_auc": null_t.get("motif_pr_auc", 0.20),
-            "position_f1": null_t.get("position_f1", 0.12),
-            "n_sparse_features": null_t.get("n_sparse_features", 0),
-        },
-        "geom_pr_auc_threshold": geom_pr_auc_threshold,
+        "q_gate": Q_SIG,
         "methodology": {
             "classification_criteria": [
-                f"Geometry PR-AUC > {geom_pr_auc_threshold} (random baseline ~0.038)",
-                f"Motif PR-AUC <= {null_t.get('motif_pr_auc', 0.20):.4f} (null p95)",
-                f"Position F1 <= {null_t.get('position_f1', 0.12):.4f} (null p95)",
-                f"InterPro Residue F1 <= {null_t.get('interpro_res_f1', 0.20):.4f} (null p95)",
+                "geometry_prauc_padj < 0.05 (geometric method is significant)",
+                "interpro_res_f1_padj >= 0.05 (InterPro residue is not significant)",
+                "cath_res_f1_padj >= 0.05 (CATH residue is not significant)",
+                "motif_pr_auc_padj >= 0.05 (MEME motif is not significant)",
+                "position_f1_padj >= 0.05 (sequence position is not significant)",
             ],
-            "null_distribution_method": (
-                "Null thresholds are the 95th percentile of each metric "
-                f"computed from {null_t.get('n_sparse_features', '?')} features "
-                "with <1% protein activation (noise floor)."
-            ),
-            "composite_score_formula": "PR-AUC * (1 - seq_feature_fraction) * sqrt(concordance_F1)",
             "cross_family_criteria": (
                 "InterPro best protein-level F1 in [0.3, 0.7] "
                 "AND >=2 families with F1 > 0.3"

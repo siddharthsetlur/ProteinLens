@@ -1,12 +1,13 @@
 /**
- * case_study_detail.js — Renders the case study detail page for a single family.
+ * meme_case_study_detail.js — Renders the MEME case study detail page.
  *
- * URL: /case-studies/{annotation_code}
+ * URL: /meme-case-studies/{representative_consensus}
  *
  * Shows:
- *   1. Geometry feature importance heatmap across nodes
- *   2. Per-node top protein with activation profile + InterPro overlay
- *   3. Cross-node activation overlay on shared proteins
+ *   1. Best MEME consensus per node
+ *   2. Geometry feature importance heatmap across nodes
+ *   3. Per-node top proteins with activation profiles
+ *   4. Cross-node activation overlay on shared proteins
  */
 
 function fmtVal(v, decimals = 3) {
@@ -14,28 +15,63 @@ function fmtVal(v, decimals = 3) {
     return Number(v).toFixed(decimals);
 }
 
-function getAnnotationCodeFromUrl() {
+function getConsensusFromUrl() {
     const parts = window.location.pathname.split("/");
     return decodeURIComponent(parts[parts.length - 1]);
 }
 
 // ============================================================
-// 1. Geometry Feature Importance Heatmap
+// Consensus table
+// ============================================================
+
+function renderConsensusTable(container, family) {
+    const rows = family.members.map(m => `
+        <tr>
+            <td><a href="/feature/${m.feature_id}">${m.feature_id}</a></td>
+            <td style="font-family:monospace">${m.consensus}</td>
+            <td>${m.motif_width ?? "\u2014"}</td>
+            <td>${m.motif_e_value !== null && m.motif_e_value !== undefined ? Number(m.motif_e_value).toExponential(1) : "\u2014"}</td>
+            <td>${fmtVal(m.motif_pr_auc)}</td>
+            <td>${fmtVal(m.motif_best_f1)}</td>
+            <td>${fmtVal(m.geom_pr_auc)}</td>
+            <td style="font-family:monospace;font-size:0.85rem">${m.top_geometric_feature}</td>
+            <td>${m.structural_category || "\u2014"}</td>
+        </tr>
+    `).join("");
+
+    container.innerHTML = `
+        <table role="grid" style="font-size:0.85rem;">
+            <thead>
+                <tr>
+                    <th>Node</th>
+                    <th>Consensus</th>
+                    <th>Width</th>
+                    <th>E-value</th>
+                    <th>MEME PR-AUC</th>
+                    <th>MEME F1</th>
+                    <th>Geom PR-AUC</th>
+                    <th>Top Geom Feature</th>
+                    <th>Structural Category</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+// ============================================================
+// Geometry Feature Importance Heatmap
 // ============================================================
 
 function renderHeatmap(container, family, geomFeatureNames) {
-    // Build importance matrix: rows = nodes, columns = geometry features
-    // Only include features with non-negligible importance in at least one node
     const members = family.members;
 
-    // Filter to features with max importance > 0.02
-    const featureSums = {};
+    const featureMax = {};
     for (const fn of geomFeatureNames) {
-        featureSums[fn] = Math.max(...members.map(m => (m.feature_importances || {})[fn] || 0));
+        featureMax[fn] = Math.max(...members.map(m => (m.feature_importances || {})[fn] || 0));
     }
-    const activeFeatures = geomFeatureNames.filter(fn => featureSums[fn] > 0.02);
+    const activeFeatures = geomFeatureNames.filter(fn => featureMax[fn] > 0.02);
 
-    // Sort features by total importance (descending)
     activeFeatures.sort((a, b) => {
         const sumA = members.reduce((s, m) => s + ((m.feature_importances || {})[a] || 0), 0);
         const sumB = members.reduce((s, m) => s + ((m.feature_importances || {})[b] || 0), 0);
@@ -69,21 +105,15 @@ function renderHeatmap(container, family, geomFeatureNames) {
     const layout = {
         height: Math.max(200, members.length * 60 + 120),
         margin: { t: 20, b: 120, l: 280, r: 80 },
-        xaxis: {
-            tickangle: -45,
-            tickfont: { size: 10 },
-        },
-        yaxis: {
-            tickfont: { size: 11 },
-            autorange: "reversed",
-        },
+        xaxis: { tickangle: -45, tickfont: { size: 10 } },
+        yaxis: { tickfont: { size: 11 }, autorange: "reversed" },
     };
 
     Plotly.newPlot(container, [trace], layout, { responsive: true, displayModeBar: false });
 }
 
 // ============================================================
-// 2. Per-Node Comparison
+// Per-Node Comparison
 // ============================================================
 
 function renderNodeComparison(container, member, featureData, interproData, geometryData) {
@@ -93,14 +123,14 @@ function renderNodeComparison(container, member, featureData, interproData, geom
     section.style.border = "1px solid var(--pico-muted-border-color)";
     section.style.borderRadius = "8px";
 
-    // Header with node ID, metrics, and radar glyph
     const header = document.createElement("div");
     header.style.marginBottom = "0.75rem";
     header.innerHTML = `
         <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
             <a href="/feature/${member.feature_id}" style="font-size:1.2rem;font-weight:700;">Node ${member.feature_id}</a>
             <span id="radar-node-${member.feature_id}" style="flex-shrink:0;"></span>
-            <span class="badge badge-done">InterPro F1: ${fmtVal(member.interpro_res_f1)}</span>
+            <span class="badge badge-done" style="font-family:monospace">${member.consensus}</span>
+            <span class="badge badge-done">MEME PR-AUC: ${fmtVal(member.motif_pr_auc)}</span>
             <span class="badge badge-done">Geom PR-AUC: ${fmtVal(member.geom_pr_auc)}</span>
             <span class="badge badge-count" style="font-family:monospace">${member.top_geometric_feature}</span>
             <span class="badge badge-count">${member.structural_category}</span>
@@ -108,7 +138,6 @@ function renderNodeComparison(container, member, featureData, interproData, geom
     `;
     section.appendChild(header);
 
-    // Render inline radar glyph from member's feature importances
     if (member.feature_importances && typeof aggregateToCategories === "function") {
         const scores = aggregateToCategories(member.feature_importances);
         if (scores) {
@@ -117,7 +146,6 @@ function renderNodeComparison(container, member, featureData, interproData, geom
         }
     }
 
-    // Decision tree rules (compact)
     if (member.rules) {
         const rulesDiv = document.createElement("details");
         rulesDiv.style.marginBottom = "0.75rem";
@@ -129,11 +157,10 @@ function renderNodeComparison(container, member, featureData, interproData, geom
         section.appendChild(rulesDiv);
     }
 
-    // Top 3 protein entries
     const topSeqs = (featureData.top_sequences || []).slice(0, 3);
     const featureMaxAct = featureData.max_activation || 1;
 
-    // Get best residue-level annotation name for domain overlay
+    // Optional InterPro overlay for context
     let bestAnnotationName = null;
     if (interproData) {
         const resEntries = interproData.residue_level || [];
@@ -148,13 +175,11 @@ function renderNodeComparison(container, member, featureData, interproData, geom
         const entry = document.createElement("div");
         entry.className = "protein-entry";
 
-        // Label
         const label = document.createElement("div");
         label.className = "protein-label";
         label.textContent = `${protein.accession} \u00b7 max: ${fmtVal(protein.max_activation, 4)} \u00b7 ${protein.sequence?.length || "?"} residues`;
         entry.appendChild(label);
 
-        // Text sequence with activation coloring
         createTextSequence(entry, {
             sequence: protein.sequence || "",
             activations: protein.per_residue_activations || [],
@@ -164,7 +189,6 @@ function renderNodeComparison(container, member, featureData, interproData, geom
             showLabel: false,
         });
 
-        // Sequence strip with InterPro overlay
         const stripDiv = document.createElement("div");
         entry.appendChild(stripDiv);
         createSequenceStrip(stripDiv, {
@@ -178,7 +202,6 @@ function renderNodeComparison(container, member, featureData, interproData, geom
         section.appendChild(entry);
     }
 
-    // Geometry activation vs geom prob overlay for top protein
     if (geometryData && geometryData.plot_data && geometryData.plot_data.top_proteins) {
         const geoProtein = geometryData.plot_data.top_proteins[0];
         if (geoProtein && geoProtein.sae_activation_profile) {
@@ -193,12 +216,11 @@ function renderNodeComparison(container, member, featureData, interproData, geom
 }
 
 // ============================================================
-// 3. Cross-Node Activation Overlay
+// Cross-Node Activation Overlay
 // ============================================================
 
 function renderCrossNodeOverlay(container, memberData) {
-    // Find proteins that appear in multiple nodes' top sequences
-    const proteinNodes = {}; // accession -> [{feature_id, activations, sequence}]
+    const proteinNodes = {};
     for (const { member, featureData } of memberData) {
         for (const protein of (featureData.top_sequences || [])) {
             const key = protein.accession;
@@ -213,18 +235,15 @@ function renderCrossNodeOverlay(container, memberData) {
         }
     }
 
-    // Find shared proteins (appear in 2+ nodes)
     const shared = Object.entries(proteinNodes)
         .filter(([, nodes]) => nodes.length >= 2)
         .sort((a, b) => b[1].length - a[1].length);
 
     if (shared.length === 0) {
-        // Fall back: overlay top protein from each node
         renderFallbackOverlay(container, memberData);
         return;
     }
 
-    // Plot up to 3 shared proteins
     for (const [accession, nodes] of shared.slice(0, 3)) {
         const plotDiv = document.createElement("div");
         plotDiv.style.marginBottom = "1.5rem";
@@ -257,8 +276,6 @@ function renderCrossNodeOverlay(container, memberData) {
 }
 
 function renderFallbackOverlay(container, memberData) {
-    // No shared proteins — show top protein from each node overlaid
-    // Use the first node's top protein as reference
     const plotDiv = document.createElement("div");
     container.appendChild(plotDiv);
 
@@ -294,46 +311,45 @@ function renderFallbackOverlay(container, memberData) {
 }
 
 // ============================================================
-// Main: fetch data and render
+// Main
 // ============================================================
 
 document.addEventListener("DOMContentLoaded", async () => {
-    const annotationCode = getAnnotationCodeFromUrl();
-    if (!annotationCode) {
-        document.getElementById("page-title").textContent = "Error: No annotation code";
+    const consensus = getConsensusFromUrl();
+    if (!consensus) {
+        document.getElementById("page-title").textContent = "Error: No consensus in URL";
         return;
     }
 
     try {
-        // Fetch family data
-        const familiesRes = await fetch("/api/case-study-families");
-        if (!familiesRes.ok) throw new Error(`Failed to fetch families: ${familiesRes.status}`);
-        const familiesData = await familiesRes.json();
+        const res = await fetch("/api/meme-case-study-families");
+        if (!res.ok) throw new Error(`Failed to fetch families: ${res.status}`);
+        const data = await res.json();
 
-        // Find the specific family
-        const family = familiesData.families.find(f => f.annotation_code === annotationCode);
-        if (!family) throw new Error(`Family ${annotationCode} not found`);
+        const family = data.families.find(f => f.representative_consensus === consensus);
+        if (!family) throw new Error(`Family ${consensus} not found`);
 
-        document.getElementById("page-title").textContent = family.annotation_name;
-        document.title = `${family.annotation_name} \u2014 Case Study`;
+        document.getElementById("page-title").textContent = family.representative_consensus;
+        document.title = `${family.representative_consensus} \u2014 MEME Case Study`;
 
-        // Family summary
         document.getElementById("family-info").innerHTML = `
-            <strong>${family.annotation_code}</strong> &mdash;
-            ${family.n_nodes} SAE nodes share this residue-level InterPro annotation.
+            <strong style="font-family:monospace">${family.representative_consensus}</strong> &mdash;
+            ${family.n_nodes} SAE nodes share this MEME motif (representative consensus).
             Mean geometry cosine similarity: <strong>${fmtVal(family.mean_cosine_similarity, 3)}</strong>
             (lower = more diverse geometry).
-            ${family.geom_diverse ? "Nodes use <strong>different</strong> top geometric features." : "Nodes share the <strong>same</strong> top geometric feature."}
+            ${family.geom_diverse
+                ? "Nodes use <strong>different</strong> top geometric features."
+                : "Nodes share the <strong>same</strong> top geometric feature."}
         `;
 
-        // 1. Heatmap
+        renderConsensusTable(document.getElementById("consensus-container"), family);
+
         renderHeatmap(
             document.getElementById("heatmap-container"),
             family,
-            familiesData.geometry_feature_names || []
+            data.geometry_feature_names || []
         );
 
-        // 2 & 3. Fetch per-node data in parallel
         const fetchPromises = family.members.map(async (member) => {
             const [featureRes, interproRes, geometryRes] = await Promise.all([
                 fetch(`/api/feature/${member.feature_id}`),
@@ -350,21 +366,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         const memberData = await Promise.all(fetchPromises);
 
-        // Render per-node comparison
         const nodesContainer = document.getElementById("nodes-container");
         nodesContainer.innerHTML = "";
         for (const { member, featureData, interproData, geometryData } of memberData) {
             renderNodeComparison(nodesContainer, member, featureData, interproData, geometryData);
         }
 
-        // Render cross-node overlay
         renderCrossNodeOverlay(
             document.getElementById("overlay-container"),
             memberData
         );
 
     } catch (err) {
-        console.error("Failed to load case study:", err);
+        console.error("Failed to load MEME case study:", err);
         document.getElementById("nodes-container").innerHTML =
             `<p style="color:red">Error: ${err.message}</p>`;
     }

@@ -3,72 +3,105 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SAE Feature Visualizer</title>
+    <title>Learned Geometry of pLMs — Feature Visualizer</title>
 
-    <!-- Pico CSS (classless minimal styling) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-
-    <!-- AG Grid Community (row-virtualized data table) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@32.0.2/styles/ag-grid.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@32.0.2/styles/ag-theme-alpine.css">
-
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
     <main class="container-fluid">
         <header>
             <nav>
-                <ul><li><h1 style="margin:0">SAE Feature Visualizer</h1></li></ul>
+                <ul><li><h1 style="margin:0">Learned Geometry of pLMs</h1></li></ul>
                 <ul>
-                    <li><a href="/case-studies" role="button" class="outline">Case Studies</a></li>
-                    <li><a href="/meme-case-studies" role="button" class="outline">MEME Case Studies</a></li>
-                    <li><a href="/cross-family-geometry" role="button" class="outline">Cross-Family Geometry</a></li>
-                    <li><a href="/nmpfam-case-study" role="button" class="outline">NMPFams Hits</a></li>
-                    <li><a href="/subdomain-decomposition" role="button" class="outline">Sub-Domain Decomposition</a></li>
+                    <li><a href="/geometry-fills-missing-db" role="button" class="outline">Missing DB annotations</a></li>
+                    <li><a href="/subdomain-decomposition" role="button" class="outline">Granularity</a></li>
+                    <li><a href="/meme-case-studies" role="button" class="outline">MEME families</a></li>
+                    <li><a href="/nmpfam-case-study" role="button" class="outline">NMPFams hits</a></li>
+                    <li class="read-paper-nav"><a href="/static/docs/paper.pdf" role="button" target="_blank">Read the paper</a></li>
                 </ul>
             </nav>
             <p id="subtitle" class="secondary">Loading...</p>
         </header>
 
-        <!-- Model + Dataset + Pipeline cards -->
-        <section id="cards-row" class="cards-row">
-            <article id="sae-card" class="info-card">
-                <header><strong>SAE Model</strong></header>
-                <div id="sae-card-body">Loading...</div>
-            </article>
-            <article id="dataset-card" class="info-card">
-                <header><strong>Dataset</strong></header>
-                <div id="dataset-card-body">Loading...</div>
-            </article>
-            <article id="pipeline-card" class="info-card">
-                <header><strong>Pipeline Status</strong></header>
-                <div id="pipeline-card-body">Loading...</div>
-            </article>
+        <!-- Paper banner: thesis + SAE config -->
+        <section id="paper-banner" class="paper-banner">
+            <div>
+                <h2>Do ESM-2 SAE features encode geometry?</h2>
+                <p class="thesis">Some SAE features are better described by local backbone geometry than by existing biological annotations. This viz lets you explore the seven annotation methods, see which features each method significantly annotates (BH q&nbsp;&lt;&nbsp;0.05), and drill into individual features.</p>
+            </div>
+            <dl class="config-grid" id="sae-config-grid">
+                <dt>Loading…</dt><dd></dd>
+            </dl>
+            <div class="read-paper">
+                <a href="/static/docs/paper.pdf" role="button" class="outline" target="_blank">Paper PDF</a>
+            </div>
         </section>
 
-        <!-- Scatter plots -->
-        <section id="scatter-section" style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
-            <div id="scatter-protein" style="height:500px;"></div>
-            <div id="scatter-residue" style="height:500px;"></div>
-            <div id="scatter-motif" style="height:500px;"></div>
-            <div id="scatter-position" style="height:500px;"></div>
-            <div id="scatter-cath" style="height:500px;"></div>
-            <div id="scatter-best-f1" style="height:500px;"></div>
-            <div id="scatter-geom-primary" style="height:500px;"></div>
+        <!-- Layer-wise Table 1 preview -->
+        <section id="layer-table-section" class="layer-table-section">
+            <h3>% features annotated per method (paper Table 1)</h3>
+            <div id="layer-table-container">Loading…</div>
+            <p class="footnote">A feature counts as annotated by a method when its BH-corrected q&nbsp;&lt;&nbsp;0.05. "Total" = significant for at least one method.</p>
         </section>
 
-        <!-- Feature table -->
+        <!-- Method coverage strip -->
+        <section id="method-coverage-strip" class="method-strip" aria-label="Method coverage badges"></section>
+        <dialog id="method-info-dialog" class="method-info">
+            <h3 id="method-info-title"></h3>
+            <p id="method-info-body"></p>
+            <form method="dialog"><button>Close</button></form>
+        </dialog>
+
+        <!-- Mini case-study tiles -->
+        <section id="case-study-tiles" class="case-study-tiles">
+            <a class="case-study-tile" href="/geometry-fills-missing-db">
+                <h4>Geometry annotates features with missing DB annotations</h4>
+                <p>Features where all four InterPro/CATH methods are not significant but geometry is. Shows where structure tells us something databases don't.</p>
+            </a>
+            <a class="case-study-tile" href="/subdomain-decomposition">
+                <h4>Geometry is more granular than biology</h4>
+                <p>Groups of features that share an InterPro annotation but encode distinct geometric subdomains — and a contrast with features distinguishable by MEME but not by geometry.</p>
+            </a>
+            <a class="case-study-tile" href="/nmpfam-case-study">
+                <h4>Generalisation to metagenomic proteins</h4>
+                <p>Geometry-primary features activating on novel NMPFams proteins outside the SwissProt training distribution.</p>
+            </a>
+        </section>
+
+        <!-- Fig-2 style scatter + UpSet -->
+        <section id="scatter-section" class="scatter-two-up">
+            <div id="fig2-scatter" style="height:480px;"></div>
+            <div id="upset-chart" style="height:480px;"></div>
+        </section>
+
+        <!-- Table controls + feature table -->
         <section id="table-section">
-            <h2>Features</h2>
-            <div id="feature-grid" class="ag-theme-alpine" style="width:100%; height:700px;"></div>
+            <div class="grid-controls">
+                <h2 style="margin:0">Features</h2>
+                <label>
+                    Significance combo:
+                    <select id="sig-filter">
+                        <option value="all">All features</option>
+                        <option value="geom_only">Geometry only (only m7 q&lt;0.05)</option>
+                        <option value="bio_only">Bio only (any m1–m5 q&lt;0.05; m7 q≥0.05)</option>
+                        <option value="both">Both (bio + geometry)</option>
+                        <option value="none">None (no method significant)</option>
+                    </select>
+                </label>
+                <label>
+                    <input type="checkbox" id="show-only-significant"> Hide rows with 0 significant methods
+                </label>
+                <span id="row-count" style="color:#6b7280;font-variant-numeric:tabular-nums;"></span>
+            </div>
+            <div id="feature-grid" class="ag-theme-alpine" style="width:100%; height:780px;"></div>
         </section>
     </main>
 
-    <!-- AG Grid JS -->
     <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@32.0.2/dist/ag-grid-community.min.js"></script>
-    <!-- Plotly for scatter plots -->
     <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
-
     <script src="/static/js/radar_glyph.js"></script>
     <script src="/static/js/homepage.js"></script>
 </body>

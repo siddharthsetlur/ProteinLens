@@ -27,6 +27,54 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+# The seven annotation methods, in paper order. Used for m{k}_{score,label,q}.
+METHODS: list[dict[str, Any]] = [
+    {"id": 1, "name": "InterPro Protein", "metric": "F1"},
+    {"id": 2, "name": "InterPro Residue", "metric": "F1"},
+    {"id": 3, "name": "CATH Protein", "metric": "F1"},
+    {"id": 4, "name": "CATH Residue", "metric": "F1"},
+    {"id": 5, "name": "Sequence Position", "metric": "F1"},
+    {"id": 6, "name": "Sequence MEME Motif", "metric": "PR-AUC"},
+    {"id": 7, "name": "Geometric", "metric": "PR-AUC"},
+]
+
+Q_SIGNIFICANCE_THRESHOLD = 0.05
+
+
+def _is_sig(q: float | None) -> bool:
+    """Return True when the BH-corrected q-value is significant (q < 0.05)."""
+    return q is not None and q < Q_SIGNIFICANCE_THRESHOLD
+
+
+def _bh_correct(pvals: list[float | None]) -> list[float | None]:
+    """
+    Benjamini–Hochberg FDR correction.
+
+    Input: a list of raw p-values; entries may be None (missing).
+    Output: a same-length list of q-values; None passes through.
+
+    Corrected q for the i-th sorted (ascending) finite p-value is
+    ``p_i * m / (i+1)``, clipped to 1, then made monotonic non-increasing
+    from largest p down to smallest.
+    """
+    n = len(pvals)
+    indexed = [(i, p) for i, p in enumerate(pvals) if p is not None]
+    if not indexed:
+        return [None] * n
+    indexed.sort(key=lambda x: x[1])
+    m = len(indexed)
+    out: list[float | None] = [None] * n
+    running_min = 1.0
+    for rank in range(m - 1, -1, -1):
+        orig_idx, p = indexed[rank]
+        q = p * m / (rank + 1)
+        if q > 1.0:
+            q = 1.0
+        if q < running_min:
+            running_min = q
+        out[orig_idx] = running_min
+    return out
+
 
 def load_json(path: Path) -> dict | None:
     """Load a JSON file, returning None if it doesn't exist or fails to parse."""
@@ -40,56 +88,62 @@ def load_json(path: Path) -> dict | None:
         return None
 
 
-def build_stats(data_dir: Path) -> dict[str, Any]:
+def build_stats(analysis_dir: Path) -> dict[str, Any]:
     """
     Merge dataset_stats.json and the SAE config.yaml into a single stats dict.
 
-    Returns a dict with two top-level keys: "dataset" and "sae".
-    The SAE config is read from the path specified in dataset_stats.json["sae_dir"],
-    resolved relative to the project root (two levels up from data_dir if needed).
+    The SAE config.yaml sits one directory up from the analysis dir
+    (e.g., ``trained_models/layer_4/frosty-sweep-15/config.yaml`` for analysis
+    dir ``.../frosty-sweep-15/analysis/``). We also honour ``sae_dir`` in
+    dataset_stats.json as a last-resort fallback, but the absolute path it
+    records often won't resolve on a different filesystem.
 
-    If config.yaml is not found, the "sae" key will contain only what we can
-    derive from dataset_stats.json (num_features).
+    If config.yaml is not found, the "sae" key stays empty and the homepage
+    renders placeholders.
     """
-    dataset_stats = load_json(data_dir / "dataset_stats.json") or {}
+    dataset_stats = load_json(analysis_dir / "dataset_stats.json") or {}
 
-    # Try to find SAE config.yaml
-    sae_config = {}
+    sae_config: dict[str, Any] = {}
     sae_dir_rel = dataset_stats.get("sae_dir", "")
+    candidates = [
+        analysis_dir.parent / "config.yaml",
+        analysis_dir / "config.yaml",
+    ]
     if sae_dir_rel:
-        # sae_dir is relative to the project root, try a few resolution strategies
-        candidates = [
-            data_dir / sae_dir_rel / "config.yaml",
-            data_dir.parent / sae_dir_rel / "config.yaml",
-            Path(sae_dir_rel) / "config.yaml",
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                try:
-                    with open(candidate) as f:
-                        raw = yaml.safe_load(f)
-                    # Flatten the nested config structure for the frontend
-                    trainer = raw.get("trainer_cfg", {})
-                    wandb = raw.get("wandb_cfg", {})
-                    sae_config = {
-                        "dictionary_size": trainer.get("dictionary_size"),
-                        "expansion_factor": trainer.get("expansion_factor"),
-                        "activation_dim": trainer.get("activation_dim"),
-                        "l1_penalty": trainer.get("l1_penalty"),
-                        "lr": trainer.get("lr"),
-                        "steps": trainer.get("steps"),
-                        "wandb_name": wandb.get("wandb_name"),
-                        "architecture": "ReLUSAE",
-                    }
-                    logger.info("Loaded SAE config from %s", candidate)
-                    break
-                except (yaml.YAMLError, OSError) as e:
-                    logger.warning("Failed to parse %s: %s", candidate, e)
+        candidates.extend(
+            [
+                Path(sae_dir_rel) / "config.yaml",
+                analysis_dir.parent / sae_dir_rel / "config.yaml",
+                analysis_dir / sae_dir_rel / "config.yaml",
+            ]
+        )
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            with open(candidate) as f:
+                raw = yaml.safe_load(f)
+            trainer = raw.get("trainer_cfg", {})
+            wandb = raw.get("wandb_cfg", {})
+            sae_config = {
+                "dictionary_size": trainer.get("dictionary_size"),
+                "expansion_factor": trainer.get("expansion_factor"),
+                "activation_dim": trainer.get("activation_dim"),
+                "l1_penalty": trainer.get("l1_penalty"),
+                "lr": trainer.get("lr"),
+                "steps": trainer.get("steps"),
+                "wandb_name": wandb.get("wandb_name"),
+                "architecture": "ReLUSAE",
+            }
+            logger.info("Loaded SAE config from %s", candidate)
+            break
+        except (yaml.YAMLError, OSError) as e:
+            logger.warning("Failed to parse %s: %s", candidate, e)
 
     return {"dataset": dataset_stats, "sae": sae_config}
 
 
-def build_pipeline_status(data_dir: Path) -> dict[str, Any]:
+def build_pipeline_status(analysis_dir: Path) -> dict[str, Any]:
     """
     Compute pipeline completion status from filesystem state.
 
@@ -99,12 +153,12 @@ def build_pipeline_status(data_dir: Path) -> dict[str, Any]:
       - interpro_count: number of interpro enrichment JSONs (excluding summary)
       - geometry_count: number of geometry enrichment JSONs (excluding summary)
     """
-    pipeline_state = load_json(data_dir / "pipeline_state.json") or {}
+    pipeline_state = load_json(analysis_dir / "pipeline_state.json") or {}
     completed_stages = pipeline_state.get("completed_stages", [])
 
     # Count per-feature files (exclude summary.json)
     def count_jsons(subdir: str) -> int:
-        d = data_dir / subdir
+        d = analysis_dir / subdir
         if not d.is_dir():
             return 0
         return sum(1 for f in d.iterdir() if f.suffix == ".json" and f.name != "summary.json")
@@ -123,156 +177,202 @@ def build_pipeline_status(data_dir: Path) -> dict[str, Any]:
     }
 
 
-def build_feature_index(data_dir: Path) -> list[dict[str, Any]]:
+def build_feature_index(analysis_dir: Path) -> list[dict[str, Any]]:
     """
-    Build the feature index for the homepage AG Grid table.
+    Build the feature index for the homepage table.
 
-    Merges data from multiple sources into one list of dicts (one per feature).
-    Each dict has keys:
-      - feature_id (int)
-      - max_activation (float)
-      - pct_proteins_activated (float or null)
-      - pct_clusters_activated (float or null)
-      - interpro_protein_best_f1 (float or null)
-      - interpro_protein_best_name (str or null)
-      - interpro_residue_best_f1 (float or null)
-      - geometry_protein_r2_cv (float or null)
-      - geometry_residue_pr_auc (float or null)
+    Merges data from multiple sources in the analysis dir into one list of
+    dicts (one per feature). Each row carries a uniform 7-method schema:
+    ``m{k}_score``, ``m{k}_label``, ``m{k}_q`` for k = 1..7 (paper order).
+    Missing data is represented as ``None`` (serialized to JSON ``null``).
 
-    Missing data is represented as None (serialized to JSON null).
+    q-values come from two sources:
+      - ``geometry_primary_analysis.json`` supplies the 5 precomputed
+        ``*_padj`` fields (methods 2, 4, 5, 6, 7).
+      - ``permutation_null/*.json`` supplies the raw p-values for the two
+        protein-level methods (1 and 3), which are BH-corrected in memory.
     """
-    # --- Load feature_max_activations.npy ---
-    max_act_path = data_dir / "feature_max_activations.npy"
+    max_act_path = analysis_dir / "feature_max_activations.npy"
     if max_act_path.exists():
         max_activations = np.load(max_act_path).astype(float)
         num_features = len(max_activations)
     else:
-        logger.warning("feature_max_activations.npy not found, using dataset_stats for num_features")
-        ds = load_json(data_dir / "dataset_stats.json") or {}
+        logger.warning(
+            "feature_max_activations.npy not found, using dataset_stats for num_features",
+        )
+        ds = load_json(analysis_dir / "dataset_stats.json") or {}
         num_features = ds.get("num_features", 0)
         max_activations = np.zeros(num_features)
 
-    # --- Load survey_coverage.json ---
-    coverage_data = load_json(data_dir / "survey_coverage.json") or {}
+    coverage_data = load_json(analysis_dir / "survey_coverage.json") or {}
 
-    # --- Load interpro enrichment summary ---
-    interpro_summary = load_json(data_dir / "interpro_enrichment" / "summary.json")
-    interpro_features = {}
-    if interpro_summary and interpro_summary.get("features"):
-        interpro_features = interpro_summary["features"]
-    else:
-        # Fallback: scan per-feature files for best F1
-        # PM NOTE: This fallback scans individual files which could be slow for 5120 features.
-        # We only do this if summary.json is missing/empty, which means the pipeline
-        # hasn't written the summary yet.
-        interpro_features = _scan_interpro_files(data_dir / "interpro_enrichment")
+    interpro_summary = load_json(analysis_dir / "interpro_enrichment" / "summary.json")
+    interpro_features = (
+        interpro_summary.get("features", {})
+        if interpro_summary and interpro_summary.get("features")
+        else _scan_interpro_files(analysis_dir / "interpro_enrichment")
+    )
 
-    # --- Load MEME/PWM motif enrichment summary (Stage 7b) ---
-    motif_summary = load_json(data_dir / "motif_pwm_enrichment" / "summary.json")
-    motif_features = {}
-    if motif_summary and motif_summary.get("features"):
-        motif_features = motif_summary["features"]
-    else:
-        motif_features = _scan_motif_pwm_files(data_dir / "motif_pwm_enrichment")
+    motif_summary = load_json(analysis_dir / "motif_pwm_enrichment" / "summary.json")
+    motif_features = (
+        motif_summary.get("features", {})
+        if motif_summary and motif_summary.get("features")
+        else _scan_motif_pwm_files(analysis_dir / "motif_pwm_enrichment")
+    )
 
-    # --- Load position enrichment summary ---
-    position_summary = load_json(data_dir / "position_enrichment" / "summary.json")
-    position_features = {}
-    if position_summary and position_summary.get("features"):
-        position_features = position_summary["features"]
-    else:
-        position_features = _scan_position_files(data_dir / "position_enrichment")
+    position_summary = load_json(analysis_dir / "position_enrichment" / "summary.json")
+    position_features = (
+        position_summary.get("features", {})
+        if position_summary and position_summary.get("features")
+        else _scan_position_files(analysis_dir / "position_enrichment")
+    )
 
-    # --- Load geometry enrichment summary ---
-    geometry_summary = load_json(data_dir / "geometry_enrichment" / "summary.json")
-    geometry_features = {}
-    if geometry_summary and geometry_summary.get("features"):
-        # Check if the summary has the expected keys; if not, fall back to scanning
-        sample = next(iter(geometry_summary["features"].values()), {})
-        if "residue_pr_auc" in sample or "protein_r2_cv" in sample:
-            geometry_features = geometry_summary["features"]
-        else:
-            # Summary exists but uses different keys — scan individual files
-            geometry_features = _scan_geometry_files(data_dir / "geometry_enrichment")
-    else:
-        geometry_features = _scan_geometry_files(data_dir / "geometry_enrichment")
+    # CATH summary has per-hierarchy blocks (C/CA/CAT/CATH); compute best
+    # across all four levels for m3 (protein-level) and m4 (residue-level).
+    cath_summary = load_json(analysis_dir / "cath_enrichment" / "summary.json")
+    cath_features = _extract_cath_bests(
+        cath_summary.get("features") if cath_summary else None,
+        analysis_dir / "cath_enrichment",
+    )
 
-    # --- Load CATH enrichment ---
-    cath_features = _scan_cath_files(data_dir / "cath_enrichment")
+    nmpfam_hits = _scan_nmpfam_files(analysis_dir / "nmpfam" / "nmpfam_enrichment")
+    geometry_radar = _build_geometry_radar(analysis_dir / "geometry_enrichment")
 
-    # --- Load NMPFams hit counts ---
-    nmpfam_hits = _scan_nmpfam_files(data_dir / "nmpfam" / "nmpfam_enrichment")
+    # Geometry-primary analysis (q-values for 5 methods + structural category)
+    gp_data = load_json(analysis_dir / "geometry_primary_analysis.json") or {}
+    gp_features = gp_data.get("features", {})
 
-    # --- Load geometry radar data (category-aggregated feature importances) ---
-    geometry_radar = _build_geometry_radar(data_dir / "geometry_enrichment")
-
-    # --- Load geometry-primary analysis ---
-    gp_data = load_json(data_dir / "geometry_primary_analysis.json")
-    gp_features = gp_data.get("features", {}) if gp_data else {}
+    # Permutation null p-values — feeds BH for interpro_protein + cath_protein
+    perm_pvals = _load_permutation_pvals(analysis_dir / "permutation_null")
+    ipro_prot_p: list[float | None] = [
+        perm_pvals.get(str(fid), {}).get("interpro_protein_f1") for fid in range(num_features)
+    ]
+    cath_prot_p: list[float | None] = [
+        perm_pvals.get(str(fid), {}).get("cath_protein_f1") for fid in range(num_features)
+    ]
+    ipro_prot_q = _bh_correct(ipro_prot_p)
+    cath_prot_q = _bh_correct(cath_prot_p)
+    logger.info(
+        "Loaded permutation p-values for %d features; BH applied for interpro_protein (%d) and cath_protein (%d)",
+        len(perm_pvals),
+        sum(1 for q in ipro_prot_q if q is not None),
+        sum(1 for q in cath_prot_q if q is not None),
+    )
 
     # --- Merge into index rows ---
-    index = []
+    index: list[dict[str, Any]] = []
     for fid in range(num_features):
         fid_str = str(fid)
 
-        # Coverage
         cov = coverage_data.get(fid_str, {})
-
-        # InterPro best scores
-        # summary.json uses "top_*" keys; fallback scanner uses "protein_best_*" keys
         ipro = interpro_features.get(fid_str, {})
-
-        # Position scores
         posn = position_features.get(fid_str, {})
-
-        # Motif scores
         motif = motif_features.get(fid_str, {})
-
-        # Geometry scores
-        geom = geometry_features.get(fid_str, {})
-
-        # CATH scores
         cath = cath_features.get(fid_str, {})
-
-        # NMPFams hits
         nmpf = nmpfam_hits.get(fid_str, {})
-
-        # Geometry-primary classification
         gp = gp_features.get(fid_str, {})
+
+        # m1: InterPro protein
+        m1_score = ipro.get("top_protein_f1") or ipro.get("protein_best_f1")
+        m1_label = ipro.get("top_protein_annotation_name") or ipro.get("protein_best_name")
+        m1_q = ipro_prot_q[fid]
+
+        # m2: InterPro residue
+        m2_score = ipro.get("top_residue_f1") or ipro.get("residue_best_f1")
+        m2_label = ipro.get("top_residue_annotation") or ipro.get("top_residue_annotation_name")
+        m2_q = gp.get("interpro_res_f1_padj")
+
+        # m3: CATH protein (max across hierarchy levels)
+        m3_score = cath.get("best_protein_f1")
+        m3_label = cath.get("best_protein_label")
+        m3_q = cath_prot_q[fid]
+
+        # m4: CATH residue (max across hierarchy levels)
+        m4_score = cath.get("best_residue_f1")
+        m4_label = cath.get("best_residue_label")
+        m4_q = gp.get("cath_res_f1_padj")
+
+        # m5: Sequence position
+        m5_score = posn.get("best_position_f1")
+        m5_label = posn.get("best_position")
+        m5_q = gp.get("position_f1_padj")
+
+        # m6: Sequence MEME motif
+        m6_score = motif.get("best_pr_auc")
+        m6_label = motif.get("best_consensus")
+        m6_q = gp.get("motif_pr_auc_padj")
+
+        # m7: Geometric (score is geom_pr_auc from geometry_primary_analysis;
+        # label is the structural category the top geometric feature belongs to)
+        m7_score = gp.get("geom_pr_auc")
+        m7_label = gp.get("structural_category")
+        m7_q = gp.get("geometry_prauc_padj")
 
         row = {
             "feature_id": fid,
             "max_activation": round(float(max_activations[fid]), 6),
             "pct_proteins_activated": cov.get("pct_proteins_activated"),
             "pct_clusters_activated": cov.get("pct_clusters_activated"),
-            "interpro_protein_best_f1": ipro.get("top_protein_f1") or ipro.get("protein_best_f1"),
-            "interpro_protein_best_name": ipro.get("top_protein_annotation_name") or ipro.get("protein_best_name"),
-            "interpro_residue_best_f1": ipro.get("top_residue_f1") or ipro.get("residue_best_f1"),
-            "motif_best_pr_auc": motif.get("best_pr_auc"),
-            "motif_best_consensus": motif.get("best_consensus"),
-            "position_best_f1": posn.get("best_position_f1"),
-            "position_best_name": posn.get("best_position"),
-            "cath_best_f1": cath.get("best_cath_f1"),
-            "cath_best_label": cath.get("best_cath_label"),
-            "geometry_protein_r2_cv": geom.get("protein_r2_cv"),
-            "geometry_residue_pr_auc": geom.get("residue_pr_auc"),
-            "is_geometry_primary": gp.get("is_geometry_primary"),
-            "geometry_primary_score": gp.get("composite_score"),
+            # 7 annotation methods, paper order
+            "m1_score": m1_score, "m1_label": m1_label, "m1_q": m1_q,
+            "m2_score": m2_score, "m2_label": m2_label, "m2_q": m2_q,
+            "m3_score": m3_score, "m3_label": m3_label, "m3_q": m3_q,
+            "m4_score": m4_score, "m4_label": m4_label, "m4_q": m4_q,
+            "m5_score": m5_score, "m5_label": m5_label, "m5_q": m5_q,
+            "m6_score": m6_score, "m6_label": m6_label, "m6_q": m6_q,
+            "m7_score": m7_score, "m7_label": m7_label, "m7_q": m7_q,
+            # Geometry radar + structural category for the radar glyph and cards
             "geometry_radar": geometry_radar.get(fid_str),
+            "top_geometric_feature": gp.get("top_geometric_feature"),
+            "structural_category": gp.get("structural_category"),
+            "is_geometry_primary": gp.get("is_geometry_primary"),
             "n_nmpfam_hits": nmpf.get("n_nmpfam_hits"),
         }
         index.append(row)
 
+    counts = {k: sum(1 for r in index if _is_sig(r.get(f"m{k}_q"))) for k in range(1, 8)}
     logger.info(
-        "Built feature index: %d features, %d with interpro, %d with geometry, %d with motif, %d with position, %d with cath",
+        "Built feature index: %d features (q<0.05 counts: "
+        "m1=%d m2=%d m3=%d m4=%d m5=%d m6=%d m7=%d)",
         num_features,
-        sum(1 for r in index if r["interpro_protein_best_f1"] is not None),
-        sum(1 for r in index if r["geometry_protein_r2_cv"] is not None),
-        sum(1 for r in index if r["motif_best_pr_auc"] is not None),
-        sum(1 for r in index if r["position_best_f1"] is not None),
-        sum(1 for r in index if r["cath_best_f1"] is not None),
+        counts[1], counts[2], counts[3], counts[4], counts[5], counts[6], counts[7],
     )
     return index
+
+
+def build_method_coverage(index: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Summarise significance coverage across the 7 annotation methods.
+
+    A feature counts as annotated by method k when ``m{k}_q < 0.05``.
+    ``total_annotated_*`` counts features significant for at least one method.
+    """
+    total = len(index)
+    methods_out: list[dict[str, Any]] = []
+    for meta in METHODS:
+        k = meta["id"]
+        n_sig = sum(1 for row in index if _is_sig(row.get(f"m{k}_q")))
+        methods_out.append(
+            {
+                "id": k,
+                "name": meta["name"],
+                "metric": meta["metric"],
+                "n_significant": n_sig,
+                "total": total,
+                "pct": round(100.0 * n_sig / total, 2) if total else 0.0,
+            }
+        )
+    total_annotated = sum(
+        1
+        for row in index
+        if any(_is_sig(row.get(f"m{k}_q")) for k in range(1, 8))
+    )
+    return {
+        "methods": methods_out,
+        "total_features": total,
+        "total_annotated_n": total_annotated,
+        "total_annotated_pct": round(100.0 * total_annotated / total, 2) if total else 0.0,
+    }
 
 
 def _scan_interpro_files(interpro_dir: Path) -> dict[str, dict]:
@@ -318,43 +418,6 @@ def _scan_interpro_files(interpro_dir: Path) -> dict[str, dict]:
 
     if result:
         logger.info("Scanned %d interpro files, found %d with enrichment", len(result), len(result))
-    return result
-
-
-def _scan_geometry_files(geometry_dir: Path) -> dict[str, dict]:
-    """
-    Fallback: scan individual geometry enrichment JSONs to extract key scores.
-
-    Returns dict keyed by feature_id str -> {protein_r2_cv, residue_pr_auc}.
-    """
-    if not geometry_dir.is_dir():
-        return {}
-
-    result = {}
-    for fpath in sorted(geometry_dir.iterdir()):
-        if fpath.name == "summary.json" or fpath.suffix != ".json":
-            continue
-        data = load_json(fpath)
-        if not data:
-            continue
-
-        fid_str = str(data.get("feature_id", fpath.stem.lstrip("0") or "0"))
-        entry = {}
-
-        protein = data.get("geometric_protein_level", {})
-        if protein.get("r2_cv") is not None:
-            entry["protein_r2_cv"] = protein["r2_cv"]
-
-        residue = data.get("geometric_residue_level", {})
-        concordance = residue.get("concordance", {})
-        if concordance.get("avg_precision") is not None:
-            entry["residue_pr_auc"] = concordance["avg_precision"]
-
-        if entry:
-            result[fid_str] = entry
-
-    if result:
-        logger.info("Scanned %d geometry files, found %d with enrichment", len(result), len(result))
     return result
 
 
@@ -427,45 +490,108 @@ def _scan_position_files(position_dir: Path) -> dict[str, dict]:
     return result
 
 
-def _scan_cath_files(cath_dir: Path) -> dict[str, dict]:
+def _extract_cath_bests(
+    summary_features: dict | None,
+    cath_dir: Path,
+) -> dict[str, dict]:
     """
-    Scan CATH enrichment JSONs to extract best F1 scores.
+    Extract per-feature best CATH protein-level and residue-level scores.
 
-    For each feature, takes the max residue F1 across all hierarchy levels
-    (C, CA, CAT, CATH) from the summary block.
+    For each feature we take the max across the four hierarchy levels
+    (C, CA, CAT, CATH) for the protein- and residue-level F1 independently.
+    The matching CATH code (e.g. "1.10.760.10") and description are kept as
+    the label. When the ``summary.json`` feature block is available we read
+    from it; otherwise we fall back to scanning the per-feature JSONs.
 
-    Returns dict keyed by feature_id str -> {best_cath_f1, best_cath_label}.
+    Returns dict keyed by feature_id str with:
+      best_protein_f1, best_protein_label,
+      best_residue_f1, best_residue_label.
     """
-    if not cath_dir.is_dir():
+    features_iter: list[tuple[str, dict]] = []
+    if summary_features:
+        features_iter = [(fid, entry) for fid, entry in summary_features.items()]
+    elif cath_dir.is_dir():
+        for fpath in sorted(cath_dir.iterdir()):
+            if fpath.name == "summary.json" or fpath.suffix != ".json":
+                continue
+            data = load_json(fpath)
+            if not data:
+                continue
+            fid_str = str(data.get("feature_id", fpath.stem.lstrip("0") or "0"))
+            # In per-feature files the hierarchy blocks live under "summary"
+            features_iter.append((fid_str, data.get("summary", {})))
+    else:
         return {}
 
-    result = {}
-    for fpath in sorted(cath_dir.iterdir()):
-        if fpath.name == "summary.json" or fpath.suffix != ".json":
+    result: dict[str, dict] = {}
+    for fid_str, entry in features_iter:
+        best_prot = 0.0
+        best_prot_label = ""
+        best_res = 0.0
+        best_res_label = ""
+        for level in ("C", "CA", "CAT", "CATH"):
+            lvl = entry.get(level, {}) if isinstance(entry, dict) else {}
+            if not isinstance(lvl, dict):
+                continue
+            prot_f1 = lvl.get("top_protein_f1") or 0
+            if prot_f1 > best_prot:
+                best_prot = prot_f1
+                best_prot_label = (
+                    lvl.get("top_protein_description")
+                    or lvl.get("top_protein_label")
+                    or ""
+                )
+            res_f1 = lvl.get("top_residue_f1") or 0
+            if res_f1 > best_res:
+                best_res = res_f1
+                best_res_label = (
+                    lvl.get("top_residue_description")
+                    or lvl.get("top_residue_label")
+                    or ""
+                )
+        if best_prot > 0 or best_res > 0:
+            result[fid_str] = {
+                "best_protein_f1": best_prot or None,
+                "best_protein_label": best_prot_label or None,
+                "best_residue_f1": best_res or None,
+                "best_residue_label": best_res_label or None,
+            }
+
+    if result:
+        logger.info(
+            "Extracted CATH best scores for %d features", len(result)
+        )
+    return result
+
+
+def _load_permutation_pvals(permutation_dir: Path) -> dict[str, dict[str, float | None]]:
+    """
+    Load raw p-values from the permutation-null directory.
+
+    Reads every ``{fid:04d}.json`` and pulls out the two protein-level metric
+    p-values we need for BH correction at startup (the residue-level / motif /
+    geometry / position methods already have BH q-values in
+    ``geometry_primary_analysis.json``).
+
+    Returns a dict keyed by feature_id str with
+    ``{"interpro_protein_f1": p, "cath_protein_f1": p}``.
+    """
+    if not permutation_dir.is_dir():
+        logger.warning("Permutation null dir not found: %s", permutation_dir)
+        return {}
+    result: dict[str, dict[str, float | None]] = {}
+    for fpath in sorted(permutation_dir.iterdir()):
+        if fpath.suffix != ".json":
             continue
         data = load_json(fpath)
         if not data:
             continue
-
         fid_str = str(data.get("feature_id", fpath.stem.lstrip("0") or "0"))
-        summary = data.get("summary", {})
-        best_f1 = 0
-        best_label = ""
-        for level in ("C", "CA", "CAT", "CATH"):
-            level_data = summary.get(level, {})
-            res_f1 = level_data.get("top_residue_f1") or 0
-            if res_f1 > best_f1:
-                best_f1 = res_f1
-                best_label = level_data.get("top_residue_label", "")
-
-        if best_f1 > 0:
-            result[fid_str] = {
-                "best_cath_f1": best_f1,
-                "best_cath_label": best_label,
-            }
-
-    if result:
-        logger.info("Scanned %d CATH files, found %d with enrichment", len(result), len(result))
+        pvals = data.get("p_values", {})
+        result[fid_str] = {
+            "interpro_protein_f1": pvals.get("interpro_protein_f1"),
+            "cath_protein_f1": pvals.get("cath_protein_f1"),
+        }
     return result
 
 

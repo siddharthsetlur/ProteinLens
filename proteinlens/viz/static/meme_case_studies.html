@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Case Studies — SAE Visualizer</title>
+    <title>MEME Case Studies &mdash; SAE Visualizer</title>
 
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <link rel="stylesheet" href="/static/css/style.css">
@@ -13,16 +13,19 @@
         <header>
             <nav>
                 <ul><li><a href="/">&larr; Back to features</a></li></ul>
-                <ul><li><strong>Geometry vs InterPro Case Studies</strong></li></ul>
+                <ul><li><strong>Geometry vs MEME Case Studies</strong></li></ul>
             </nav>
         </header>
 
         <section id="intro">
             <p>
-                These are families of SAE nodes that share the <strong>same best residue-level InterPro annotation</strong>
-                (F1 above null) and also have <strong>geometry PR-AUC above null</strong>. Within each family, the
-                nodes respond to the same protein domain but capture <em>different geometric properties</em> of
-                that domain — showing that geometry is more granular than InterPro annotations alone.
+                Families of SAE nodes whose <strong>top MEME/PWM motif is significant</strong>
+                (BH-corrected q&nbsp;&lt;&nbsp;0.05) and which also have <strong>significant geometry
+                PR-AUC</strong> (q&nbsp;&lt;&nbsp;0.05). Because MEME consensuses are rarely identical
+                across features, nodes are grouped when their best motif differs by at most a few
+                residues (edit distance). Within each family, nodes share the same sequence motif but
+                may encode <em>different geometric properties</em> &mdash; evidence that identical
+                primary-sequence signatures can resolve into distinct structural roles.
             </p>
             <div id="summary-stats" class="secondary" style="font-size:0.9rem;">Loading...</div>
         </section>
@@ -34,6 +37,6 @@
         </section>
     </main>
 
-    <script src="/static/js/case_studies.js"></script>
+    <script src="/static/js/meme_case_studies.js"></script>
 </body>
 </html>

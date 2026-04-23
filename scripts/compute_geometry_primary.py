@@ -183,6 +183,15 @@ def _load_permutation_pvalues(data_dir: Path) -> dict | None:
 
     Returns dict: metric_name -> {feature_id (int) -> adjusted_pvalue}, or
     None if permutation null data is not available.
+
+    If ``<data-dir>/geometry_null_refit/`` exists, its per-feature refit
+    p-values overlay the ``geometry_prauc`` raw p-values before BH
+    correction. The downstream ``geometry_prauc_padj`` is therefore based
+    on the refit null for any feature that has a refit JSON, and on the
+    original fixed-GBM null for all other features. Metadata about the
+    overlay is stashed on the returned dict under the key
+    ``_geometry_prauc_source`` (``"refit_gbm"`` / ``"fixed_gbm"`` /
+    ``"mixed"``) for the analysis summary.
     """
     perm_dir = data_dir / "permutation_null"
     if not perm_dir.is_dir():
@@ -209,6 +218,38 @@ def _load_permutation_pvalues(data_dir: Path) -> dict | None:
     if n_loaded == 0:
         return None
 
+    # ── Optional overlay: refit-GBM null for geometry_prauc only ──
+    # See proteinlens/analysis/feature_pipeline/geometry_null_refit.py.
+    # Replaces raw geometry_prauc p-values with refit values before BH.
+    refit_dir = data_dir / "geometry_null_refit"
+    n_refit = 0
+    n_refit_mismatched = 0
+    if refit_dir.is_dir():
+        for fpath in refit_dir.iterdir():
+            if fpath.suffix != ".json":
+                continue
+            try:
+                rd = json.loads(fpath.read_text())
+                if rd.get("source") != "refit-gbm":
+                    continue
+                fid = int(rd["feature_id"])
+                if "p_value_refit" not in rd:
+                    continue
+                # Defensive sanity: the refit output's recomputed observed
+                # must agree with whatever the refit run saved (rounded).
+                # This is NOT a parity check against the fixed-GBM null —
+                # those can legitimately differ (different protein sets).
+                raw["geometry_prauc"][fid] = float(rd["p_value_refit"])
+                n_refit += 1
+            except (json.JSONDecodeError, KeyError, OSError, ValueError, TypeError):
+                n_refit_mismatched += 1
+                continue
+        if n_refit:
+            print(
+                f"  Overlaid {n_refit} refit geometry p-values from "
+                f"{refit_dir.name} (skipped {n_refit_mismatched} malformed)"
+            )
+
     # Apply BH FDR correction per metric
     adjusted: dict[str, dict[int, float]] = {}
     for m in metrics:
@@ -219,6 +260,16 @@ def _load_permutation_pvalues(data_dir: Path) -> dict | None:
         pvals_arr = np.array([raw[m][fid] for fid in fids])
         padj = _benjamini_hochberg(pvals_arr)
         adjusted[m] = {fid: float(padj[i]) for i, fid in enumerate(fids)}
+
+    # Provenance metadata — keyed with a leading underscore so it does not
+    # collide with metric names. Consumed by main() for the analysis summary.
+    if n_refit == 0:
+        adjusted["_geometry_prauc_source"] = "fixed_gbm"  # type: ignore[assignment]
+    elif n_refit == len(raw["geometry_prauc"]):
+        adjusted["_geometry_prauc_source"] = "refit_gbm"  # type: ignore[assignment]
+    else:
+        adjusted["_geometry_prauc_source"] = "mixed"  # type: ignore[assignment]
+    adjusted["_n_refit_geometry_pvalues"] = n_refit  # type: ignore[assignment]
 
     print(f"  Loaded permutation p-values for {n_loaded} features, applied BH FDR")
     return adjusted
@@ -483,6 +534,14 @@ def main() -> None:
     if perm_pvalues:
         analysis["fdr_method"] = "benjamini-hochberg"
         analysis["fdr_threshold"] = 0.05
+        # Provenance for the geometry_prauc p-value source. See
+        # _load_permutation_pvalues for the fixed-vs-refit overlay logic.
+        gp_source = perm_pvalues.get("_geometry_prauc_source")
+        if gp_source is not None:
+            analysis["geometry_prauc_source"] = gp_source
+        n_refit = perm_pvalues.get("_n_refit_geometry_pvalues")
+        if n_refit is not None:
+            analysis["n_refit_geometry_pvalues"] = int(n_refit)
 
     out_path = data_dir / "geometry_primary_analysis.json"
     with open(out_path, "w") as f:

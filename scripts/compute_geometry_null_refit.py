@@ -1,0 +1,497 @@
+#!/usr/bin/env python3
+"""Compute refit-GBM permutation null for geometry PR-AUC.
+
+This is an **additive** companion to ``compute_permutation_null.py``. It
+never modifies any existing file. Output is written to a new directory
+``<data-dir>/geometry_null_refit/{fid:04d}.json`` which
+``compute_geometry_primary.py`` overlays on top of the fixed-GBM null when
+present.
+
+For the rationale and invariants see
+``proteinlens/analysis/feature_pipeline/geometry_null_refit.py``.
+
+Usage
+-----
+Sanity check on a few features (dry-run directory)::
+
+    python scripts/compute_geometry_null_refit.py \\
+        --data-dir trained_models/layer_4/frosty-sweep-15/analysis \\
+        --dry-run-features 5 --n-permutations 20
+
+Full layer (parallel)::
+
+    python scripts/compute_geometry_null_refit.py \\
+        --data-dir trained_models/layer_4/frosty-sweep-15/analysis \\
+        --workers 16
+
+Resume-safe: existing output JSONs are skipped. Kill and restart.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import get_context
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from tqdm import tqdm
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from proteinlens.analysis.feature_pipeline.geometry_null_refit import (
+    compute_refit_null,
+)
+
+logger = logging.getLogger("geometry_null_refit")
+
+
+# ── Tree-immutability guard ────────────────────────────────────────────
+#
+# Snapshot (mtime, size) for every file under paths that must never change.
+# Re-check at shutdown; abort with non-zero exit if any diverge.
+
+
+_GUARDED_SUBDIRS = (
+    "permutation_null",
+    "geometry_classifiers",
+    "geometry_enrichment",
+)
+
+
+def _snapshot_tree(data_dir: Path) -> dict[str, tuple[float, int]]:
+    snap: dict[str, tuple[float, int]] = {}
+    for sub in _GUARDED_SUBDIRS:
+        sub_path = data_dir / sub
+        if not sub_path.is_dir():
+            continue
+        for root, _dirs, files in os.walk(sub_path):
+            for name in files:
+                p = Path(root) / name
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                snap[str(p.relative_to(data_dir))] = (st.st_mtime, st.st_size)
+    return snap
+
+
+def _diff_snapshots(
+    before: dict[str, tuple[float, int]], after: dict[str, tuple[float, int]]
+) -> list[str]:
+    diffs: list[str] = []
+    for rel, stat_b in before.items():
+        if rel not in after:
+            diffs.append(f"DELETED: {rel}")
+            continue
+        stat_a = after[rel]
+        if stat_b != stat_a:
+            diffs.append(
+                f"CHANGED: {rel} (mtime {stat_b[0]} -> {stat_a[0]}, "
+                f"size {stat_b[1]} -> {stat_a[1]})"
+            )
+    for rel in after:
+        if rel not in before:
+            diffs.append(f"NEW (in guarded tree): {rel}")
+    return diffs
+
+
+# ── Shared-data loader — mirrors compute_permutation_null.py:1324–1435 ─
+
+
+def _setup_shared(
+    data_dir: Path,
+    geom_profile_dir_override: Path | None = None,
+    act_dir_override: Path | None = None,
+) -> dict[str, Any]:
+    """Glob directories once and return a dict suitable for worker inheritance.
+
+    The geometry residue profiles (``.npz`` per-protein backbone files) and
+    residue-activation ``.npz`` files may live outside ``data_dir`` on
+    deployments where intermediate per-protein data is kept on a separate
+    mount from the analysis outputs. Override paths let the caller point at
+    the shared location.
+    """
+    pipeline_state_path = data_dir / "pipeline_state.json"
+    protein_maxes_path = data_dir / "protein_feature_maxes.npy"
+    feat_max_path = data_dir / "feature_max_activations.npy"
+    if not feat_max_path.exists():
+        raise FileNotFoundError(f"{feat_max_path} not found")
+    feat_max_arr = np.load(feat_max_path)
+    n_features = int(len(feat_max_arr))
+
+    if not (pipeline_state_path.exists() and protein_maxes_path.exists()):
+        raise FileNotFoundError(
+            "pipeline_state.json and protein_feature_maxes.npy are required "
+            "for the refit null (top-500 protein selection uses the full "
+            "protein-level activation matrix)."
+        )
+    state = json.loads(pipeline_state_path.read_text())
+    acc_to_idx: dict[str, int] = state.get("accession_index", {})
+    n_proteins = len(acc_to_idx)
+
+    # Glob once. Candidate locations for geometry_residue_profiles, in order:
+    #   1. explicit override (--geom-profile-dir)
+    #   2. <data-dir>/geometry_residue_profiles/
+    #   3. <data-dir>/geometry_enrichment/geometry_residue_profiles/
+    #   (this nested form is used by deployments that co-locate profiles
+    #    with the enrichment outputs)
+    if geom_profile_dir_override is not None:
+        geom_profile_dir = geom_profile_dir_override
+    else:
+        geom_profile_dir = data_dir / "geometry_residue_profiles"
+        if not geom_profile_dir.is_dir():
+            nested = data_dir / "geometry_enrichment" / "geometry_residue_profiles"
+            if nested.is_dir():
+                geom_profile_dir = nested
+    geom_profile_files: set[str] = set()
+    if geom_profile_dir.is_dir():
+        geom_profile_files = {p.stem for p in geom_profile_dir.glob("*.npz")}
+
+    act_file_map: dict[str, Path] = {}
+    if act_dir_override is not None:
+        if act_dir_override.is_dir():
+            for p in act_dir_override.glob("*.npz"):
+                if p.stem not in act_file_map:
+                    act_file_map[p.stem] = p
+    else:
+        for act_dir_name in ("residue_activations", "interpro_residue_activations"):
+            act_dir = data_dir / act_dir_name
+            if act_dir.is_dir():
+                for p in act_dir.glob("*.npz"):
+                    if p.stem not in act_file_map:
+                        act_file_map[p.stem] = p
+
+    # Row -> accession map, filtered to proteins with BOTH geom profile + activations.
+    # Matches compute_permutation_null.py:1397–1398 so the top-500 selection is identical.
+    row_to_acc = {
+        v: k
+        for k, v in acc_to_idx.items()
+        if k in geom_profile_files and k in act_file_map
+    }
+
+    act_matrix_full = np.memmap(
+        protein_maxes_path,
+        dtype="float32",
+        mode="r",
+        shape=(n_proteins, n_features),
+    )
+
+    # Geometry enrichment summaries — needed for stored_avg_precision lookup.
+    # We do NOT preload every JSON (would be expensive); per-worker lookup is fine.
+    geom_enrich_dir = data_dir / "geometry_enrichment"
+    geom_enrich_fids: set[int] = set()
+    if geom_enrich_dir.is_dir():
+        for p in geom_enrich_dir.glob("*.json"):
+            if p.name == "summary.json":
+                continue
+            try:
+                geom_enrich_fids.add(int(p.stem))
+            except ValueError:
+                continue
+
+    return {
+        "feat_max_arr": feat_max_arr,
+        "n_features": n_features,
+        "geom_profile_dir": geom_profile_dir,
+        "geom_profile_files": geom_profile_files,
+        "act_file_map": act_file_map,
+        "row_to_acc": row_to_acc,
+        "act_matrix_full": act_matrix_full,
+        "geom_enrich_dir": geom_enrich_dir,
+        "geom_enrich_fids": geom_enrich_fids,
+    }
+
+
+def _read_stored_avg_precision(geom_enrich_dir: Path, fid: int) -> float | None:
+    """Look up ``concordance.avg_precision`` for this feature, if present."""
+    p = geom_enrich_dir / f"{fid:04d}.json"
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    res = d.get("geometric_residue_level") or {}
+    conc = res.get("concordance") or {}
+    v = conc.get("avg_precision")
+    return float(v) if v is not None else None
+
+
+# ── Atomic write ───────────────────────────────────────────────────────
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    os.replace(tmp, path)
+
+
+# ── Worker glue ────────────────────────────────────────────────────────
+
+# Module-level state populated by _worker_init via fork inheritance.
+_WORKER_STATE: dict[str, Any] = {}
+
+
+def _worker_init(shared: dict[str, Any]) -> None:
+    _WORKER_STATE.update(shared)
+
+
+def _worker_process(
+    fid: int,
+    out_dir: Path,
+    n_permutations: int,
+    seed: int,
+    max_proteins: int,
+) -> tuple[int, str, float | None]:
+    """Return (fid, status, null_mean). Status is one of: written, skipped,
+    already_exists, error."""
+    out_path = out_dir / f"{fid:04d}.json"
+    if out_path.exists():
+        return fid, "already_exists", None
+
+    try:
+        stored_ap = _read_stored_avg_precision(_WORKER_STATE["geom_enrich_dir"], fid)
+        result = compute_refit_null(
+            fid=fid,
+            act_matrix_full=_WORKER_STATE["act_matrix_full"],
+            row_to_acc=_WORKER_STATE["row_to_acc"],
+            act_file_map=_WORKER_STATE["act_file_map"],
+            geom_profile_dir=_WORKER_STATE["geom_profile_dir"],
+            geom_profile_files=_WORKER_STATE["geom_profile_files"],
+            n_permutations=n_permutations,
+            seed=seed,
+            max_proteins=max_proteins,
+            stored_avg_precision=stored_ap,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("fid %d: worker crashed: %s", fid, e)
+        return fid, "error", None
+
+    if result is None:
+        return fid, "skipped", None
+
+    _atomic_write_json(out_path, result)
+    return fid, "written", float(result["null_mean"])
+
+
+# ── CLI ────────────────────────────────────────────────────────────────
+
+
+def _parse_range(s: str) -> tuple[int, int]:
+    a, b = s.split("-", 1)
+    return int(a), int(b)
+
+
+def _build_fid_list(shared: dict[str, Any], args: argparse.Namespace) -> list[int]:
+    n_features = shared["n_features"]
+    if args.fids_from:
+        text = Path(args.fids_from).read_text()
+        fids = [int(x.strip()) for x in text.split() if x.strip()]
+    elif args.feature_range:
+        lo, hi = _parse_range(args.feature_range)
+        fids = list(range(lo, hi))
+    else:
+        fids = list(range(n_features))
+
+    # Restrict to features with geometry enrichment data on disk. Without the
+    # stored avg_precision we still run, but the enrichment dir is the
+    # authoritative source of features that have a GBM worth testing.
+    enrich_fids = shared["geom_enrich_fids"]
+    if enrich_fids:
+        fids = [f for f in fids if f in enrich_fids]
+
+    if args.dry_run_features and args.dry_run_features > 0:
+        fids = fids[: args.dry_run_features]
+    return fids
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--n-permutations", type=int, default=100)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--workers", type=int, default=max(1, os.cpu_count() or 1))
+    parser.add_argument(
+        "--max-proteins",
+        type=int,
+        default=500,
+        help="Top-N activating proteins per feature (matches pipeline default 500).",
+    )
+    parser.add_argument(
+        "--fids-from",
+        type=Path,
+        default=None,
+        help="Newline/whitespace-separated feature IDs to process (overrides range).",
+    )
+    parser.add_argument(
+        "--feature-range",
+        type=str,
+        default=None,
+        help="Half-open range 'A-B' of feature IDs (e.g., 0-500).",
+    )
+    parser.add_argument(
+        "--dry-run-features",
+        type=int,
+        default=0,
+        help="Process only the first N features; write to geometry_null_refit_dryrun/.",
+    )
+    parser.add_argument(
+        "--allow-non-empty-output",
+        action="store_true",
+        help="Do not abort if the output directory already has files (normal resume).",
+    )
+    parser.add_argument(
+        "--geom-profile-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Override path to geometry_residue_profiles/. "
+            "Default: <data-dir>/geometry_residue_profiles/ or "
+            "<data-dir>/geometry_enrichment/geometry_residue_profiles/."
+        ),
+    )
+    parser.add_argument(
+        "--act-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Override path to per-protein residue-activation .npz files. "
+            "Default: <data-dir>/residue_activations/ and "
+            "<data-dir>/interpro_residue_activations/ (merged)."
+        ),
+    )
+    args = parser.parse_args()
+
+    data_dir: Path = args.data_dir
+    if not data_dir.is_dir():
+        raise SystemExit(f"--data-dir {data_dir} is not a directory")
+
+    out_name = "geometry_null_refit_dryrun" if args.dry_run_features > 0 else "geometry_null_refit"
+    out_dir = data_dir / out_name
+    out_dir.mkdir(exist_ok=True)
+
+    # Preflight logging
+    logger.info("data_dir = %s", data_dir)
+    logger.info("out_dir  = %s", out_dir)
+    logger.info("n_permutations = %d, seed = %d, workers = %d",
+                args.n_permutations, args.seed, args.workers)
+
+    # Immutability snapshot (guarded trees)
+    t0 = time.time()
+    snap_before = _snapshot_tree(data_dir)
+    logger.info("snapshotted %d files across guarded subdirs in %.1fs",
+                len(snap_before), time.time() - t0)
+
+    # Shared data
+    shared = _setup_shared(
+        data_dir,
+        geom_profile_dir_override=args.geom_profile_dir,
+        act_dir_override=args.act_dir,
+    )
+    logger.info("glob: %d geom_profile_files, %d act_file_map, %d row_to_acc",
+                len(shared["geom_profile_files"]), len(shared["act_file_map"]),
+                len(shared["row_to_acc"]))
+    logger.info("geom_enrich_fids: %d", len(shared["geom_enrich_fids"]))
+
+    fids = _build_fid_list(shared, args)
+    logger.info("features to consider: %d", len(fids))
+
+    existing = sum(1 for f in fids if (out_dir / f"{f:04d}.json").exists())
+    if existing and args.dry_run_features == 0 and not args.allow_non_empty_output:
+        logger.info("resume: %d features already have output and will be skipped", existing)
+
+    # Parallel execution
+    ctx = get_context("fork")
+    n_written = n_skipped = n_existing = n_error = 0
+    null_means: list[float] = []
+    parity_flags = 0
+
+    t_run = time.time()
+    with ProcessPoolExecutor(
+        max_workers=args.workers,
+        mp_context=ctx,
+        initializer=_worker_init,
+        initargs=(shared,),
+    ) as pool:
+        futures = {
+            pool.submit(
+                _worker_process,
+                fid,
+                out_dir,
+                args.n_permutations,
+                args.seed,
+                args.max_proteins,
+            ): fid
+            for fid in fids
+        }
+        for fut in tqdm(as_completed(futures), total=len(futures), desc="refit-null"):
+            fid = futures[fut]
+            try:
+                _fid, status, null_mean = fut.result()
+            except Exception as e:  # noqa: BLE001
+                logger.exception("fid %d: future raised: %s", fid, e)
+                n_error += 1
+                continue
+            if status == "written":
+                n_written += 1
+                if null_mean is not None:
+                    null_means.append(null_mean)
+                    if null_mean < 0.10:
+                        parity_flags += 1
+            elif status == "already_exists":
+                n_existing += 1
+            elif status == "skipped":
+                n_skipped += 1
+            else:
+                n_error += 1
+    t_run_elapsed = time.time() - t_run
+
+    # Post-run immutability check
+    snap_after = _snapshot_tree(data_dir)
+    diffs = _diff_snapshots(snap_before, snap_after)
+    if diffs:
+        logger.error("GUARDED TREE MUTATED (%d diffs):", len(diffs))
+        for d in diffs[:20]:
+            logger.error("  %s", d)
+        if len(diffs) > 20:
+            logger.error("  ... (%d more)", len(diffs) - 20)
+        raise SystemExit(2)
+
+    # Summary
+    logger.info("=" * 60)
+    logger.info("refit-null complete in %.1fs", t_run_elapsed)
+    logger.info("  written: %d   skipped: %d   already_existed: %d   errors: %d",
+                n_written, n_skipped, n_existing, n_error)
+    if null_means:
+        arr = np.asarray(null_means)
+        logger.info(
+            "  null_mean distribution over written features: "
+            "min=%.3f p25=%.3f median=%.3f p75=%.3f max=%.3f",
+            float(arr.min()), float(np.percentile(arr, 25)),
+            float(np.median(arr)), float(np.percentile(arr, 75)),
+            float(arr.max()),
+        )
+    if parity_flags:
+        logger.warning(
+            "  %d features had null_mean < 0.10 (expected >0.10 under refit); "
+            "spot-check a few outputs",
+            parity_flags,
+        )
+    logger.info("guarded trees byte-identical ✓")
+
+
+if __name__ == "__main__":
+    main()

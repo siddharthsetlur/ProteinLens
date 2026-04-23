@@ -184,14 +184,26 @@ def _load_permutation_pvalues(data_dir: Path) -> dict | None:
     Returns dict: metric_name -> {feature_id (int) -> adjusted_pvalue}, or
     None if permutation null data is not available.
 
+    **Refit-GBM geometry null, separate BH pool.**
     If ``<data-dir>/geometry_null_refit/`` exists, its per-feature refit
-    p-values overlay the ``geometry_prauc`` raw p-values before BH
-    correction. The downstream ``geometry_prauc_padj`` is therefore based
-    on the refit null for any feature that has a refit JSON, and on the
-    original fixed-GBM null for all other features. Metadata about the
-    overlay is stashed on the returned dict under the key
-    ``_geometry_prauc_source`` (``"refit_gbm"`` / ``"fixed_gbm"`` /
-    ``"mixed"``) for the analysis summary.
+    p-values are loaded into an independent key ``geometry_prauc_refit``
+    and BH-corrected **separately** from the fixed-GBM ``geometry_prauc``.
+    The two pools are statistically distinct (different observed statistic,
+    different null distribution) and are NEVER mixed inside a single BH
+    run — pooling would invalidate the FDR guarantee for features on
+    either side.
+
+    Downstream (``_classify_features``) prefers the refit q-value when a
+    feature has one, falling back to the fixed q-value otherwise. Each
+    feature's source is recorded on its per-feature analysis entry so
+    paper tables can stratify by method.
+
+    Provenance keyed with underscore-prefixed fields:
+
+    * ``_geometry_prauc_mode`` — ``"fixed_only"`` / ``"refit_only"`` /
+      ``"both_separate"`` depending on what was loaded.
+    * ``_refit_fids`` — ``set[int]`` of feature IDs with refit q-values.
+    * ``_fixed_fids`` — ``set[int]`` of feature IDs with fixed q-values.
     """
     perm_dir = data_dir / "permutation_null"
     if not perm_dir.is_dir():
@@ -218,12 +230,14 @@ def _load_permutation_pvalues(data_dir: Path) -> dict | None:
     if n_loaded == 0:
         return None
 
-    # ── Optional overlay: refit-GBM null for geometry_prauc only ──
+    # ── Refit-GBM geometry null — loaded INTO ITS OWN POOL ──
     # See proteinlens/analysis/feature_pipeline/geometry_null_refit.py.
-    # Replaces raw geometry_prauc p-values with refit values before BH.
+    # The refit test uses a different observed statistic and a different
+    # null construction from the fixed-GBM test. BH is applied to each
+    # pool in isolation below; the two are never concatenated.
+    refit_raw: dict[int, float] = {}
     refit_dir = data_dir / "geometry_null_refit"
-    n_refit = 0
-    n_refit_mismatched = 0
+    n_refit_malformed = 0
     if refit_dir.is_dir():
         for fpath in refit_dir.iterdir():
             if fpath.suffix != ".json":
@@ -235,22 +249,18 @@ def _load_permutation_pvalues(data_dir: Path) -> dict | None:
                 fid = int(rd["feature_id"])
                 if "p_value_refit" not in rd:
                     continue
-                # Defensive sanity: the refit output's recomputed observed
-                # must agree with whatever the refit run saved (rounded).
-                # This is NOT a parity check against the fixed-GBM null —
-                # those can legitimately differ (different protein sets).
-                raw["geometry_prauc"][fid] = float(rd["p_value_refit"])
-                n_refit += 1
+                refit_raw[fid] = float(rd["p_value_refit"])
             except (json.JSONDecodeError, KeyError, OSError, ValueError, TypeError):
-                n_refit_mismatched += 1
+                n_refit_malformed += 1
                 continue
-        if n_refit:
+        if refit_raw:
             print(
-                f"  Overlaid {n_refit} refit geometry p-values from "
-                f"{refit_dir.name} (skipped {n_refit_mismatched} malformed)"
+                f"  Loaded {len(refit_raw)} refit geometry p-values from "
+                f"{refit_dir.name} (skipped {n_refit_malformed} malformed); "
+                f"will BH-correct separately from fixed-GBM pool"
             )
 
-    # Apply BH FDR correction per metric
+    # ── BH FDR per metric (fixed-GBM pool) ──
     adjusted: dict[str, dict[int, float]] = {}
     for m in metrics:
         fids = sorted(raw[m].keys())
@@ -261,17 +271,37 @@ def _load_permutation_pvalues(data_dir: Path) -> dict | None:
         padj = _benjamini_hochberg(pvals_arr)
         adjusted[m] = {fid: float(padj[i]) for i, fid in enumerate(fids)}
 
-    # Provenance metadata — keyed with a leading underscore so it does not
-    # collide with metric names. Consumed by main() for the analysis summary.
-    if n_refit == 0:
-        adjusted["_geometry_prauc_source"] = "fixed_gbm"  # type: ignore[assignment]
-    elif n_refit == len(raw["geometry_prauc"]):
-        adjusted["_geometry_prauc_source"] = "refit_gbm"  # type: ignore[assignment]
+    # ── BH FDR for refit-GBM geometry pool, independent of fixed pool ──
+    refit_fids = sorted(refit_raw.keys())
+    if refit_fids:
+        refit_arr = np.array([refit_raw[fid] for fid in refit_fids])
+        refit_padj = _benjamini_hochberg(refit_arr)
+        adjusted["geometry_prauc_refit"] = {
+            fid: float(refit_padj[i]) for i, fid in enumerate(refit_fids)
+        }
     else:
-        adjusted["_geometry_prauc_source"] = "mixed"  # type: ignore[assignment]
-    adjusted["_n_refit_geometry_pvalues"] = n_refit  # type: ignore[assignment]
+        adjusted["geometry_prauc_refit"] = {}
+
+    # ── Provenance ──
+    fixed_fid_set: set[int] = set(raw["geometry_prauc"].keys())
+    refit_fid_set: set[int] = set(refit_raw.keys())
+    if refit_fid_set and fixed_fid_set:
+        mode = "both_separate"
+    elif refit_fid_set:
+        mode = "refit_only"
+    else:
+        mode = "fixed_only"
+    adjusted["_geometry_prauc_mode"] = mode  # type: ignore[assignment]
+    adjusted["_refit_fids"] = refit_fid_set  # type: ignore[assignment]
+    adjusted["_fixed_fids"] = fixed_fid_set  # type: ignore[assignment]
 
     print(f"  Loaded permutation p-values for {n_loaded} features, applied BH FDR")
+    if refit_fid_set:
+        print(
+            f"  Geometry p-value mode: {mode} — "
+            f"{len(refit_fid_set)} features BH-corrected via refit pool, "
+            f"{len(fixed_fid_set - refit_fid_set)} via fixed-only pool"
+        )
     return adjusted
 
 
@@ -343,15 +373,34 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
         best_seq_f1 = max(m, p, ir, cr)
 
         # Geometry-primary classification
+        geom_padj_refit: float | None = None
+        geom_padj_fixed: float | None = None
+        geom_padj_source: str | None = None  # "refit" | "fixed" | None
         if perm_pvalues is not None:
-            # Permutation-based: use BH-adjusted p-values.
-            # Defaults: geometry=1.0 (not significant → excluded),
-            # sequence metrics=0.0 (significant → excluded).  This is
-            # conservative: features without full permutation data are
-            # never classified as geometry-primary.
+            geom_padj_refit = perm_pvalues.get("geometry_prauc_refit", {}).get(fid)
+            geom_padj_fixed = perm_pvalues["geometry_prauc"].get(fid)
+            # Refit is preferred where available — it is the statistically
+            # clean test; the fixed-GBM q-value is retained alongside for
+            # provenance but the two q-values come from SEPARATE BH pools
+            # and are never pooled for FDR (see _load_permutation_pvalues).
+            if geom_padj_refit is not None:
+                geom_q = geom_padj_refit
+                geom_padj_source = "refit"
+            elif geom_padj_fixed is not None:
+                geom_q = geom_padj_fixed
+                geom_padj_source = "fixed"
+            else:
+                geom_q = None
+
             fdr_threshold = 0.05
+            # Defaults in .get() below: geometry q=1.0 (treated as
+            # "not significant" → excluded from primary), sequence
+            # q=0.0 (treated as "significant" → also excluded). This is
+            # conservative: features without permutation data on either
+            # side are never classified as geometry-primary.
+            geom_q_for_gate = geom_q if geom_q is not None else 1.0
             is_primary = (
-                perm_pvalues["geometry_prauc"].get(fid, 1.0) < fdr_threshold
+                geom_q_for_gate < fdr_threshold
                 and perm_pvalues["pwm_pr_auc"].get(fid, 0.0) >= fdr_threshold
                 and perm_pvalues["position_f1"].get(fid, 0.0) >= fdr_threshold
                 and perm_pvalues["interpro_res_f1"].get(fid, 0.0) >= fdr_threshold
@@ -373,6 +422,11 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
         if is_primary:
             n_primary += 1
 
+        # Preferred geometry q (refit > fixed) for display; both reported
+        # for transparency. Paper tables should cite whichever is the
+        # source of truth for the classification (see geometry_prauc_source).
+        geom_padj_display = geom_padj_refit if geom_padj_refit is not None else geom_padj_fixed
+
         features[str(fid)] = {
             "composite_score": round(score, 4),
             "geom_pr_auc": round(g["pr_auc"], 4),
@@ -389,8 +443,13 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
             "top_geometric_feature": top_feat,
             "structural_category": category,
             "is_geometry_primary": is_primary,
-            # Permutation p-values (None if not available)
-            "geometry_prauc_padj": perm_pvalues["geometry_prauc"].get(fid) if perm_pvalues else None,
+            # Permutation p-values (None if not available). Geometry
+            # reports the preferred q-value (refit > fixed) plus both
+            # raw values and the source, so consumers can choose.
+            "geometry_prauc_padj": geom_padj_display,
+            "geometry_prauc_padj_refit": geom_padj_refit,
+            "geometry_prauc_padj_fixed": geom_padj_fixed,
+            "geometry_prauc_source": geom_padj_source,
             "motif_pr_auc_padj": perm_pvalues["pwm_pr_auc"].get(fid) if perm_pvalues else None,
             "position_f1_padj": perm_pvalues["position_f1"].get(fid) if perm_pvalues else None,
             "interpro_res_f1_padj": perm_pvalues["interpro_res_f1"].get(fid) if perm_pvalues else None,
@@ -534,14 +593,17 @@ def main() -> None:
     if perm_pvalues:
         analysis["fdr_method"] = "benjamini-hochberg"
         analysis["fdr_threshold"] = 0.05
-        # Provenance for the geometry_prauc p-value source. See
-        # _load_permutation_pvalues for the fixed-vs-refit overlay logic.
-        gp_source = perm_pvalues.get("_geometry_prauc_source")
-        if gp_source is not None:
-            analysis["geometry_prauc_source"] = gp_source
-        n_refit = perm_pvalues.get("_n_refit_geometry_pvalues")
-        if n_refit is not None:
-            analysis["n_refit_geometry_pvalues"] = int(n_refit)
+        # Provenance for the geometry_prauc p-value pool. See
+        # _load_permutation_pvalues for the separate-BH policy.
+        gp_mode = perm_pvalues.get("_geometry_prauc_mode")
+        if gp_mode is not None:
+            analysis["geometry_prauc_mode"] = gp_mode
+        refit_fids = perm_pvalues.get("_refit_fids")
+        fixed_fids = perm_pvalues.get("_fixed_fids")
+        if refit_fids is not None:
+            analysis["n_refit_geometry_features"] = len(refit_fids)
+        if fixed_fids is not None:
+            analysis["n_fixed_geometry_features"] = len(fixed_fids)
 
     out_path = data_dir / "geometry_primary_analysis.json"
     with open(out_path, "w") as f:

@@ -83,7 +83,6 @@ _ACT_QUANTILE = 0.80
 _HALF_W = 10
 _BG_RATIO = 3
 _MAX_ACTIVATED = 500  # collect_node_fragments uses max_fragments * 5
-_MIN_ACTIVATED_POSITIONS = 200
 
 # Seeds — match collect_node_fragments + train_motif_classifier exactly.
 _BG_SAMPLING_SEED = 42
@@ -470,6 +469,7 @@ def compute_refit_null(
     max_proteins: int = 500,
     stored_avg_precision: float | None = None,
     observed_warn_delta: float = 0.05,
+    observed_parity_strict: bool = False,
 ) -> dict[str, Any] | None:
     """Compute the refit-GBM permutation null for a single feature.
 
@@ -479,11 +479,22 @@ def compute_refit_null(
     ``geometry_enrichment/*.json:concordance.avg_precision`` because the
     enrichment stage's ``compute_concordance_metrics`` additionally filters to
     proteins with at least one residue above threshold. The delta is recorded
-    in the output JSON as ``observed_parity_delta`` for diagnostic — a delta
-    above ``observed_warn_delta`` logs a warning but does not skip the feature.
+    in the output JSON as ``observed_parity_delta`` for diagnostic.
+
+    Observed-parity policy
+    ----------------------
+    * ``observed_parity_strict = False`` (default, exploratory mode) — if the
+      delta exceeds ``observed_warn_delta`` a warning is logged but the
+      feature is still processed.
+    * ``observed_parity_strict = True`` (paper-grade mode) — if the delta
+      exceeds ``observed_warn_delta`` the feature is **skipped** (returns
+      ``None``) so no refit JSON is written. Use this when the output will
+      feed publishable numbers; it guarantees the refit evaluation
+      population closely matches the pipeline's enrichment-stage
+      population.
 
     Returns None if the feature cannot be processed (too few activating
-    proteins, too few positives, etc.).
+    proteins, too few positives, or parity-strict abort).
     """
     protein_data = _load_protein_data(
         fid,
@@ -528,6 +539,17 @@ def compute_refit_null(
     if stored_avg_precision is not None:
         parity_delta = abs(observed - stored_avg_precision)
         if parity_delta > observed_warn_delta:
+            if observed_parity_strict:
+                logger.error(
+                    "fid %d: observed %.6f vs stored avg_precision %.6f (delta %.6f) "
+                    "exceeds strict threshold %.3f; SKIPPING feature",
+                    fid,
+                    observed,
+                    stored_avg_precision,
+                    parity_delta,
+                    observed_warn_delta,
+                )
+                return None
             logger.warning(
                 "fid %d: observed %.6f vs stored avg_precision %.6f (delta %.6f) — "
                 "consider investigating protein-filter divergence",

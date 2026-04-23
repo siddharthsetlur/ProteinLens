@@ -281,6 +281,219 @@ def test_determinism_same_seed(tmp_path: Path) -> None:
 _DATA_DIR = ROOT / "feature_data_test_500"
 
 
+# ───────────────── BH-pool separation: overlay regression ────────────
+
+
+def _write_fixed_null_json(path: Path, fid: int, p_geometry: float) -> None:
+    """Minimal permutation_null/{fid:04d}.json fixture — only the fields
+    _load_permutation_pvalues reads."""
+    import json as _json
+
+    payload = {
+        "feature_id": fid,
+        "p_values": {
+            "pwm_pr_auc": 0.5,
+            "position_f1": 0.5,
+            "interpro_res_f1": 0.5,
+            "cath_res_f1": 0.5,
+            "geometry_prauc": p_geometry,
+        },
+    }
+    path.write_text(_json.dumps(payload))
+
+
+def _write_refit_null_json(path: Path, fid: int, p_refit: float) -> None:
+    import json as _json
+
+    payload = {
+        "feature_id": fid,
+        "source": "refit-gbm",
+        "p_value_refit": p_refit,
+    }
+    path.write_text(_json.dumps(payload))
+
+
+def test_bh_pools_are_separated(tmp_path: Path) -> None:
+    """When both fixed and refit p-values exist, BH must run on each pool
+    independently — the refit q-value for a feature must reflect its rank
+    within the refit pool only, not its rank within a pooled set."""
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "scripts"))
+    import compute_geometry_primary as cgp  # type: ignore[import-not-found]
+
+    data_dir = tmp_path / "data"
+    perm_dir = data_dir / "permutation_null"
+    refit_dir = data_dir / "geometry_null_refit"
+    perm_dir.mkdir(parents=True)
+    refit_dir.mkdir(parents=True)
+
+    # Fixed pool: 10 features, p-values 0.01..0.10 — all would pass a naive
+    # q<0.05 gate if BH were run on the pooled 10+3 = 13-feature set.
+    for fid in range(10):
+        _write_fixed_null_json(perm_dir / f"{fid:04d}.json", fid, (fid + 1) / 100.0)
+    # Refit pool: 3 features, p-values 0.01, 0.02, 0.03 (fids 100..102) —
+    # these are disjoint from the fixed fids.
+    for i, fid in enumerate((100, 101, 102)):
+        _write_refit_null_json(refit_dir / f"{fid:04d}.json", fid, (i + 1) / 100.0)
+
+    adjusted = cgp._load_permutation_pvalues(data_dir)
+    assert adjusted is not None
+    assert adjusted["_geometry_prauc_mode"] == "both_separate"
+    assert adjusted["_refit_fids"] == {100, 101, 102}
+    assert 0 in adjusted["_fixed_fids"]  # fixed pool has fids 0..9
+
+    # The refit pool has n=3, so BH-adjusted q for p=0.01 at rank 1 is
+    # min(0.01 * 3/1, 1.0) = 0.03. If BH had been pooled (n=13), the same
+    # raw p=0.01 would become 0.01 * 13/1 = 0.13 — very different.
+    q_refit_top = adjusted["geometry_prauc_refit"][100]
+    assert abs(q_refit_top - 0.03) < 1e-9, (
+        f"refit BH q at rank 1 of 3 = {q_refit_top}, expected 0.03 — "
+        "BH appears to be running on pooled set, not refit pool only"
+    )
+
+    # And features in the fixed pool must not appear in the refit q-table.
+    for fid in range(10):
+        assert fid not in adjusted["geometry_prauc_refit"]
+
+
+def test_bh_refit_only_mode(tmp_path: Path) -> None:
+    """When every feature with a fixed null also has a refit null, the
+    mode is 'both_separate' (not 'refit_only'). 'refit_only' means the
+    fixed pool is empty — we test that separately here."""
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "scripts"))
+    import compute_geometry_primary as cgp  # type: ignore[import-not-found]
+
+    data_dir = tmp_path / "data"
+    perm_dir = data_dir / "permutation_null"
+    refit_dir = data_dir / "geometry_null_refit"
+    perm_dir.mkdir(parents=True)
+    refit_dir.mkdir(parents=True)
+
+    # Fixed pool must not be empty — _load_permutation_pvalues returns
+    # None if permutation_null has no usable JSONs. Give it one file with
+    # only non-geometry metrics, no geometry_prauc.
+    import json as _json
+    (perm_dir / "0000.json").write_text(_json.dumps({
+        "feature_id": 0,
+        "p_values": {"pwm_pr_auc": 0.5},  # no geometry_prauc
+    }))
+
+    for i, fid in enumerate((100, 101)):
+        _write_refit_null_json(refit_dir / f"{fid:04d}.json", fid, 0.01)
+
+    adjusted = cgp._load_permutation_pvalues(data_dir)
+    assert adjusted is not None
+    assert adjusted["_geometry_prauc_mode"] == "refit_only"
+    assert adjusted["_fixed_fids"] == set()
+    assert adjusted["_refit_fids"] == {100, 101}
+
+
+# ───────────────── CLI seed-collision guard ──────────────────────────
+
+
+def test_cli_rejects_seed_above_10m(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI must abort with SystemExit when |seed| >= 10_000_000 to avoid
+    collision with the four RNG offset streams (10M/20M/30M/40M)."""
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "scripts"))
+    import compute_geometry_null_refit as cnrf  # type: ignore[import-not-found]
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    # Minimal viable filesystem so arg validation runs, but main() exits
+    # on seed check before touching anything heavy.
+    (data_dir / "feature_max_activations.npy").touch()
+
+    monkeypatch.setattr(
+        _sys, "argv",
+        ["compute_geometry_null_refit.py", "--data-dir", str(data_dir), "--seed", "10000000"],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cnrf.main()
+    # SystemExit message should mention the collision guard.
+    msg = str(exc.value)
+    assert "10_000_000" in msg or "10000000" in msg
+
+
+def test_cli_accepts_seed_just_below_10m(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Seed = 9_999_999 must pass the guard. We stop the test at the
+    next failure (missing pipeline_state.json) so we exercise only the
+    seed check."""
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "scripts"))
+    import compute_geometry_null_refit as cnrf  # type: ignore[import-not-found]
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    # Valid minimal .npy — _setup_shared loads this with np.load() before
+    # hitting the pipeline_state.json check, so an empty file would raise
+    # EOFError before the test's assertion gets to run.
+    np.save(data_dir / "feature_max_activations.npy", np.array([0.0], dtype=np.float32))
+
+    monkeypatch.setattr(
+        _sys, "argv",
+        ["compute_geometry_null_refit.py", "--data-dir", str(data_dir), "--seed", "9999999"],
+    )
+    # Expect a DIFFERENT failure — on missing pipeline_state.json —
+    # proving we passed the seed check.
+    with pytest.raises((SystemExit, FileNotFoundError, OSError, EOFError, ValueError)) as exc:
+        cnrf.main()
+    assert "10_000_000" not in str(exc.value)
+
+
+# ───────────────── Immutability guard — positive test ────────────────
+
+
+def test_immutability_guard_detects_file_change(tmp_path: Path) -> None:
+    """_snapshot_tree + _diff_snapshots must flag any guarded-tree file
+    whose (mtime, size) changes between calls."""
+    import time as _time
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "scripts"))
+    import compute_geometry_null_refit as cnrf  # type: ignore[import-not-found]
+
+    data_dir = tmp_path / "data"
+    (data_dir / "permutation_null").mkdir(parents=True)
+    (data_dir / "geometry_classifiers").mkdir(parents=True)
+    (data_dir / "geometry_enrichment").mkdir(parents=True)
+    guarded = data_dir / "permutation_null" / "0000.json"
+    guarded.write_text('{"feature_id": 0}')
+
+    snap_before = cnrf._snapshot_tree(data_dir)
+    assert str(guarded.relative_to(data_dir)) in snap_before
+
+    # Mutate the file — larger content guarantees a size change even if
+    # mtime resolution is coarse.
+    _time.sleep(0.01)
+    guarded.write_text('{"feature_id": 0, "mutated": true}')
+
+    snap_after = cnrf._snapshot_tree(data_dir)
+    diffs = cnrf._diff_snapshots(snap_before, snap_after)
+    assert any("CHANGED" in d for d in diffs), (
+        f"expected CHANGED diff, got {diffs}"
+    )
+
+    # Deletion should also be detected.
+    guarded.unlink()
+    snap_after2 = cnrf._snapshot_tree(data_dir)
+    diffs2 = cnrf._diff_snapshots(snap_before, snap_after2)
+    assert any("DELETED" in d for d in diffs2), (
+        f"expected DELETED diff, got {diffs2}"
+    )
+
+    # A new file INSIDE the guarded tree must be flagged too.
+    (data_dir / "permutation_null" / "0001.json").write_text('{"feature_id": 1}')
+    snap_after3 = cnrf._snapshot_tree(data_dir)
+    diffs3 = cnrf._diff_snapshots(snap_before, snap_after3)
+    assert any("NEW" in d for d in diffs3), (
+        f"expected NEW diff, got {diffs3}"
+    )
+
+
+# ───────────────── Real-data smoke test (unchanged) ──────────────────
+
+
 @pytest.mark.skipif(
     not (_DATA_DIR / "geometry_enrichment").is_dir()
     or not any((_DATA_DIR / "geometry_enrichment").glob("[0-9]*.json")),

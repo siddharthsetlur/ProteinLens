@@ -4,8 +4,10 @@
 This is an **additive** companion to ``compute_permutation_null.py``. It
 never modifies any existing file. Output is written to a new directory
 ``<data-dir>/geometry_null_refit/{fid:04d}.json`` which
-``compute_geometry_primary.py`` overlays on top of the fixed-GBM null when
-present.
+``compute_geometry_primary.py`` reads as an independent BH pool alongside
+the fixed-GBM null — the two pools are BH-corrected separately and never
+mixed, because they use different observed statistics and different null
+distributions (see ``_load_permutation_pvalues`` in that script).
 
 For the rationale and invariants see
 ``proteinlens/analysis/feature_pipeline/geometry_null_refit.py``.
@@ -250,15 +252,18 @@ def _worker_process(
     n_permutations: int,
     seed: int,
     max_proteins: int,
-) -> tuple[int, str, float | None]:
-    """Return (fid, status, null_mean). Status is one of: written, skipped,
-    already_exists, error."""
+    observed_parity_strict: bool,
+) -> tuple[int, str, float | None, bool]:
+    """Return (fid, status, null_mean, stored_ap_present).
+
+    Status is one of: written, skipped, already_exists, error.
+    """
     out_path = out_dir / f"{fid:04d}.json"
     if out_path.exists():
-        return fid, "already_exists", None
+        return fid, "already_exists", None, False
 
+    stored_ap = _read_stored_avg_precision(_WORKER_STATE["geom_enrich_dir"], fid)
     try:
-        stored_ap = _read_stored_avg_precision(_WORKER_STATE["geom_enrich_dir"], fid)
         result = compute_refit_null(
             fid=fid,
             act_matrix_full=_WORKER_STATE["act_matrix_full"],
@@ -270,16 +275,21 @@ def _worker_process(
             seed=seed,
             max_proteins=max_proteins,
             stored_avg_precision=stored_ap,
+            observed_parity_strict=observed_parity_strict,
         )
+    except (ValueError, OverflowError):
+        # Numerical issues (e.g., RNG seed overflow) must surface — not
+        # swallowed by the generic Exception branch below.
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception("fid %d: worker crashed: %s", fid, e)
-        return fid, "error", None
+        return fid, "error", None, stored_ap is not None
 
     if result is None:
-        return fid, "skipped", None
+        return fid, "skipped", None, stored_ap is not None
 
     _atomic_write_json(out_path, result)
-    return fid, "written", float(result["null_mean"])
+    return fid, "written", float(result["null_mean"]), stored_ap is not None
 
 
 # ── CLI ────────────────────────────────────────────────────────────────
@@ -373,11 +383,42 @@ def main() -> None:
             "<data-dir>/interpro_residue_activations/ (merged)."
         ),
     )
+    parser.add_argument(
+        "--observed-parity-strict",
+        action="store_true",
+        help=(
+            "Abort (skip feature) when |observed - stored concordance.avg_precision| "
+            "exceeds --observed-parity-warn-delta. Use for paper-grade runs where "
+            "the refit protein set must match the enrichment stage closely."
+        ),
+    )
+    parser.add_argument(
+        "--observed-parity-warn-delta",
+        type=float,
+        default=0.05,
+        help=(
+            "Absolute PR-AUC delta above which the observed-parity diagnostic "
+            "fires (warn by default; skip when --observed-parity-strict)."
+        ),
+    )
     args = parser.parse_args()
 
     data_dir: Path = args.data_dir
     if not data_dir.is_dir():
         raise SystemExit(f"--data-dir {data_dir} is not a directory")
+
+    # RNG-offset collision guard. The offsets in compute_permutation_null.py
+    # (10M, 20M, 30M) and in this module (40M) are spaced 10M apart, so any
+    # |seed| >= 10M can collide `seed + fid + offset_a` with
+    # `seed' + fid + offset_b` for some offset pair. Refuse such seeds
+    # rather than silently producing invalid nulls.
+    if abs(args.seed) >= 10_000_000:
+        raise SystemExit(
+            f"--seed must satisfy |seed| < 10_000_000 to avoid RNG-offset "
+            f"collision with the four offset streams (10M / 20M / 30M / "
+            f"40M). Got {args.seed}. Pick a smaller seed (any int in "
+            f"[-9_999_999, 9_999_999] is safe)."
+        )
 
     out_name = "geometry_null_refit_dryrun" if args.dry_run_features > 0 else "geometry_null_refit"
     out_dir = data_dir / out_name
@@ -413,68 +454,103 @@ def main() -> None:
     if existing and args.dry_run_features == 0 and not args.allow_non_empty_output:
         logger.info("resume: %d features already have output and will be skipped", existing)
 
-    # Parallel execution
+    # Parallel execution. The post-run immutability check runs in a
+    # `finally` so that crashes, SIGTERM, SystemExit, and normal
+    # completion all trigger the guarded-tree verification. Ctrl+C
+    # (SIGINT) still bypasses Python `finally` on Linux if the signal
+    # arrives during a blocking syscall in a worker — document that
+    # and instruct the user to verify manually.
     ctx = get_context("fork")
     n_written = n_skipped = n_existing = n_error = 0
+    n_with_stored_ap = 0
+    n_without_stored_ap = 0
     null_means: list[float] = []
     parity_flags = 0
-
     t_run = time.time()
-    with ProcessPoolExecutor(
-        max_workers=args.workers,
-        mp_context=ctx,
-        initializer=_worker_init,
-        initargs=(shared,),
-    ) as pool:
-        futures = {
-            pool.submit(
-                _worker_process,
-                fid,
-                out_dir,
-                args.n_permutations,
-                args.seed,
-                args.max_proteins,
-            ): fid
-            for fid in fids
-        }
-        for fut in tqdm(as_completed(futures), total=len(futures), desc="refit-null"):
-            fid = futures[fut]
-            try:
-                _fid, status, null_mean = fut.result()
-            except Exception as e:  # noqa: BLE001
-                logger.exception("fid %d: future raised: %s", fid, e)
-                n_error += 1
-                continue
-            if status == "written":
-                n_written += 1
-                if null_mean is not None:
-                    null_means.append(null_mean)
-                    if null_mean < 0.10:
-                        parity_flags += 1
-            elif status == "already_exists":
-                n_existing += 1
-            elif status == "skipped":
-                n_skipped += 1
-            else:
-                n_error += 1
-    t_run_elapsed = time.time() - t_run
+    t_run_elapsed = 0.0
 
-    # Post-run immutability check
-    snap_after = _snapshot_tree(data_dir)
-    diffs = _diff_snapshots(snap_before, snap_after)
-    if diffs:
-        logger.error("GUARDED TREE MUTATED (%d diffs):", len(diffs))
-        for d in diffs[:20]:
-            logger.error("  %s", d)
-        if len(diffs) > 20:
-            logger.error("  ... (%d more)", len(diffs) - 20)
-        raise SystemExit(2)
+    try:
+        with ProcessPoolExecutor(
+            max_workers=args.workers,
+            mp_context=ctx,
+            initializer=_worker_init,
+            initargs=(shared,),
+        ) as pool:
+            futures = {
+                pool.submit(
+                    _worker_process,
+                    fid,
+                    out_dir,
+                    args.n_permutations,
+                    args.seed,
+                    args.max_proteins,
+                    args.observed_parity_strict,
+                ): fid
+                for fid in fids
+            }
+            for fut in tqdm(as_completed(futures), total=len(futures), desc="refit-null"):
+                fid = futures[fut]
+                try:
+                    _fid, status, null_mean, stored_ap_present = fut.result()
+                except Exception as e:  # noqa: BLE001
+                    logger.exception("fid %d: future raised: %s", fid, e)
+                    n_error += 1
+                    continue
+                if stored_ap_present:
+                    n_with_stored_ap += 1
+                else:
+                    n_without_stored_ap += 1
+                if status == "written":
+                    n_written += 1
+                    if null_mean is not None:
+                        null_means.append(null_mean)
+                        if null_mean < 0.10:
+                            parity_flags += 1
+                elif status == "already_exists":
+                    n_existing += 1
+                elif status == "skipped":
+                    n_skipped += 1
+                else:
+                    n_error += 1
+        t_run_elapsed = time.time() - t_run
+    finally:
+        # Always snapshot and diff, even on exception / early exit.
+        snap_after = _snapshot_tree(data_dir)
+        diffs = _diff_snapshots(snap_before, snap_after)
+        # Persist the diff list next to the output dir so that an
+        # aborted run still leaves an auditable record.
+        try:
+            report_path = out_dir / "_immutability_check.json"
+            report_payload = {
+                "n_guarded_files": len(snap_before),
+                "n_diffs": len(diffs),
+                "diffs": diffs[:200],  # cap to keep the report small
+                "snapshot_key": "(mtime, size)",
+                "completed_cleanly": not diffs,
+            }
+            _atomic_write_json(report_path, report_payload)
+        except OSError as e:
+            logger.warning("could not write immutability report: %s", e)
+
+        if diffs:
+            logger.error("GUARDED TREE MUTATED (%d diffs):", len(diffs))
+            for d in diffs[:20]:
+                logger.error("  %s", d)
+            if len(diffs) > 20:
+                logger.error("  ... (%d more)", len(diffs) - 20)
+            raise SystemExit(2)
 
     # Summary
     logger.info("=" * 60)
     logger.info("refit-null complete in %.1fs", t_run_elapsed)
     logger.info("  written: %d   skipped: %d   already_existed: %d   errors: %d",
                 n_written, n_skipped, n_existing, n_error)
+    if n_without_stored_ap:
+        logger.info(
+            "  stored avg_precision present for %d features, missing for %d "
+            "(parity diagnostic disabled on the latter)",
+            n_with_stored_ap, n_without_stored_ap,
+        )
     if null_means:
         arr = np.asarray(null_means)
         logger.info(
@@ -490,7 +566,9 @@ def main() -> None:
             "spot-check a few outputs",
             parity_flags,
         )
-    logger.info("guarded trees byte-identical ✓")
+    logger.info(
+        "guarded trees mtime+size identical ✓ (%d files)", len(snap_before)
+    )
 
 
 if __name__ == "__main__":

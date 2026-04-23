@@ -253,10 +253,13 @@ def _worker_process(
     seed: int,
     max_proteins: int,
     observed_parity_strict: bool,
-) -> tuple[int, str, float | None, bool]:
-    """Return (fid, status, null_mean, stored_ap_present).
+) -> tuple[int, str, dict[str, Any] | None, bool]:
+    """Return (fid, status, result_summary, stored_ap_present).
 
     Status is one of: written, skipped, already_exists, error.
+    ``result_summary`` holds the per-feature scalar fields main() logs to
+    wandb (None when status != "written"). Keeping it small keeps
+    inter-process pickling cheap vs returning the full output dict.
     """
     out_path = out_dir / f"{fid:04d}.json"
     if out_path.exists():
@@ -289,7 +292,20 @@ def _worker_process(
         return fid, "skipped", None, stored_ap is not None
 
     _atomic_write_json(out_path, result)
-    return fid, "written", float(result["null_mean"]), stored_ap is not None
+    summary = {
+        "observed_prauc": float(result["observed_prauc"]),
+        "null_mean": float(result["null_mean"]),
+        "null_std": float(result["null_std"]),
+        "p_value_refit": float(result["p_value_refit"]),
+        "n_proteins": int(result["n_proteins"]),
+        "n_residues_total": int(result["n_residues_total"]),
+        "observed_parity_delta": (
+            float(result["observed_parity_delta"])
+            if result.get("observed_parity_delta") is not None
+            else None
+        ),
+    }
+    return fid, "written", summary, stored_ap is not None
 
 
 # ── CLI ────────────────────────────────────────────────────────────────
@@ -401,6 +417,11 @@ def main() -> None:
             "fires (warn by default; skip when --observed-parity-strict)."
         ),
     )
+    parser.add_argument(
+        "--wandb",
+        action="store_true",
+        help="Log progress and summary statistics to Weights & Biases.",
+    )
     args = parser.parse_args()
 
     data_dir: Path = args.data_dir
@@ -418,6 +439,30 @@ def main() -> None:
             f"collision with the four offset streams (10M / 20M / 30M / "
             f"40M). Got {args.seed}. Pick a smaller seed (any int in "
             f"[-9_999_999, 9_999_999] is safe)."
+        )
+
+    # ── Optional W&B init ── (same project + tag scheme as
+    # compute_permutation_null.py so both nulls show up side-by-side.)
+    wb_run = None
+    if args.wandb:
+        import wandb  # local import: wandb is optional at import time
+
+        wb_run = wandb.init(
+            project="proteinlens-pipeline",
+            name="refit-null",
+            tags=["permutation", "null-distribution", "refit-gbm", "geometry"],
+            config={
+                "script": "compute_geometry_null_refit.py",
+                "n_permutations": args.n_permutations,
+                "seed": args.seed,
+                "workers": args.workers,
+                "max_proteins": args.max_proteins,
+                "observed_parity_strict": args.observed_parity_strict,
+                "observed_parity_warn_delta": args.observed_parity_warn_delta,
+                "data_dir": str(args.data_dir),
+                "geom_profile_dir": str(args.geom_profile_dir) if args.geom_profile_dir else None,
+                "act_dir": str(args.act_dir) if args.act_dir else None,
+            },
         )
 
     out_name = "geometry_null_refit_dryrun" if args.dry_run_features > 0 else "geometry_null_refit"
@@ -465,9 +510,13 @@ def main() -> None:
     n_with_stored_ap = 0
     n_without_stored_ap = 0
     null_means: list[float] = []
+    p_values: list[float] = []
+    observed_pr_aucs: list[float] = []
+    parity_deltas: list[float] = []
     parity_flags = 0
     t_run = time.time()
     t_run_elapsed = 0.0
+    total_fids = len(fids)
 
     try:
         with ProcessPoolExecutor(
@@ -491,7 +540,7 @@ def main() -> None:
             for fut in tqdm(as_completed(futures), total=len(futures), desc="refit-null"):
                 fid = futures[fut]
                 try:
-                    _fid, status, null_mean, stored_ap_present = fut.result()
+                    _fid, status, summary, stored_ap_present = fut.result()
                 except Exception as e:  # noqa: BLE001
                     logger.exception("fid %d: future raised: %s", fid, e)
                     n_error += 1
@@ -500,12 +549,30 @@ def main() -> None:
                     n_with_stored_ap += 1
                 else:
                     n_without_stored_ap += 1
-                if status == "written":
+                if status == "written" and summary is not None:
                     n_written += 1
-                    if null_mean is not None:
-                        null_means.append(null_mean)
-                        if null_mean < 0.10:
-                            parity_flags += 1
+                    null_means.append(summary["null_mean"])
+                    p_values.append(summary["p_value_refit"])
+                    observed_pr_aucs.append(summary["observed_prauc"])
+                    if summary.get("observed_parity_delta") is not None:
+                        parity_deltas.append(summary["observed_parity_delta"])
+                    if summary["null_mean"] < 0.10:
+                        parity_flags += 1
+                    if wb_run is not None:
+                        n_processed = n_written + n_skipped + n_existing + n_error
+                        wb_run.log({
+                            "progress/completed": n_processed,
+                            "progress/total": total_fids,
+                            "progress/pct": 100 * n_processed / max(total_fids, 1),
+                            "feature/id": fid,
+                            "feature/n_proteins": summary["n_proteins"],
+                            "feature/n_residues": summary["n_residues_total"],
+                            "pvalue/geometry_prauc_refit": summary["p_value_refit"],
+                            "observed/geometry_prauc": summary["observed_prauc"],
+                            "null/mean": summary["null_mean"],
+                            "null/std": summary["null_std"],
+                            "parity/delta": summary.get("observed_parity_delta"),
+                        })
                 elif status == "already_exists":
                     n_existing += 1
                 elif status == "skipped":
@@ -569,6 +636,50 @@ def main() -> None:
     logger.info(
         "guarded trees mtime+size identical ✓ (%d files)", len(snap_before)
     )
+
+    # ── Final W&B summary ──
+    if wb_run is not None:
+        summary_payload: dict[str, Any] = {
+            "total_features_considered": total_fids,
+            "written": n_written,
+            "skipped": n_skipped,
+            "already_existed": n_existing,
+            "errors": n_error,
+            "features_with_stored_ap": n_with_stored_ap,
+            "features_without_stored_ap": n_without_stored_ap,
+            "elapsed_seconds": t_run_elapsed,
+            "immutability_diffs": len(diffs),
+        }
+        if p_values:
+            pv_arr = np.array(p_values, dtype=np.float64)
+            summary_payload["n_significant_geometry_prauc_refit"] = int((pv_arr < 0.05).sum())
+            summary_payload["pct_significant_geometry_prauc_refit"] = round(
+                100.0 * float((pv_arr < 0.05).mean()), 2
+            )
+            summary_payload["median_pvalue_geometry_prauc_refit"] = round(
+                float(np.median(pv_arr)), 4
+            )
+            import wandb as _wb
+
+            wb_run.log({
+                "hist/pvalue_refit": _wb.Histogram(pv_arr, num_bins=20),
+                "hist/observed_prauc": _wb.Histogram(np.array(observed_pr_aucs), num_bins=20),
+                "hist/null_mean": _wb.Histogram(np.array(null_means), num_bins=20),
+            })
+            if parity_deltas:
+                wb_run.log({
+                    "hist/parity_delta": _wb.Histogram(
+                        np.array(parity_deltas), num_bins=20
+                    ),
+                })
+                summary_payload["median_parity_delta"] = round(
+                    float(np.median(parity_deltas)), 4
+                )
+                summary_payload["p95_parity_delta"] = round(
+                    float(np.percentile(parity_deltas, 95)), 4
+                )
+        wb_run.summary.update(summary_payload)
+        wb_run.finish()
 
 
 if __name__ == "__main__":

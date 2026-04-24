@@ -545,6 +545,25 @@ def main() -> None:
     fids = _build_fid_list(shared, args)
     logger.info("features to consider: %d", len(fids))
 
+    # Cache coverage report. A partial cache (e.g., precompute crashed
+    # halfway) silently falls back per-feature for the missing fids and
+    # produces no wall-clock speedup. Surface this loudly so the k8s log
+    # reader notices before a multi-hour run completes at legacy speed.
+    if cache_dir is not None and fids:
+        present = sum(1 for f in fids if (cache_dir / f"{f:04d}.npz").is_file())
+        pct = 100.0 * present / len(fids)
+        if present == len(fids):
+            logger.info(
+                "cache coverage: %d/%d fids present (100%%)", present, len(fids),
+            )
+        else:
+            logger.warning(
+                "cache coverage: %d/%d fids present (%.1f%%) — the missing fids "
+                "will fall back to per-file loading and run at legacy speed; "
+                "rerun build_activation_column_cache.py to close the gap",
+                present, len(fids), pct,
+            )
+
     existing = sum(1 for f in fids if (out_dir / f"{f:04d}.json").exists())
     if existing and args.dry_run_features == 0 and not args.allow_non_empty_output:
         logger.info("resume: %d features already have output and will be skipped", existing)

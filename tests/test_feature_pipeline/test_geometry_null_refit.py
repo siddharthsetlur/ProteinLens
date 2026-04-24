@@ -553,16 +553,21 @@ def test_real_data_single_feature(tmp_path: Path) -> None:
 # ───────────────── activation-column cache: parity ───────────────────
 
 
-def _write_fixture_files(tmp_path: Path, proteins: list[dict], n_features: int) -> Path:
+def _write_fixture_files(
+    tmp_path: Path,
+    proteins: list[dict],
+    n_features: int,
+    signal_fid: int = 0,
+) -> Path:
     """Materialise a minimal on-disk feature_data_ layout from an in-memory
     ``protein_data`` list.
 
     Writes just the files the refit null + cache-builder need:
 
     * ``residue_activations/{acc}.npz`` with key ``activations``, shape
-      ``(n_res, n_features)``.  The protein's real activation lives at column
-      ``fid=0``; every other column is zero (keeps the .npz compact and is
-      enough for the fid=0 refit test).
+      ``(n_res, n_features)``. The protein's real activation lives at column
+      ``signal_fid``; every other column is zero. ``signal_fid`` must be
+      within ``[0, n_features)``.
     * ``geometry_residue_profiles/{acc}.npz`` with the six profile arrays
       and a ``sequence`` entry — same schema :func:`_load_protein_data`
       expects.
@@ -573,6 +578,7 @@ def _write_fixture_files(tmp_path: Path, proteins: list[dict], n_features: int) 
 
     Returns the created ``data_dir``.
     """
+    assert 0 <= signal_fid < n_features
     data_dir = tmp_path / "feat_data"
     data_dir.mkdir()
     act_dir = data_dir / "residue_activations"
@@ -580,19 +586,16 @@ def _write_fixture_files(tmp_path: Path, proteins: list[dict], n_features: int) 
     gp_dir = data_dir / "geometry_residue_profiles"
     gp_dir.mkdir()
 
-    # Per-protein writes. Activations live only at column fid=0; other cols
-    # zero. That's sufficient for the parity test which runs fid=0.
     protein_maxes = np.zeros((len(proteins), n_features), dtype=np.float32)
     acc_to_row: dict[str, int] = {}
     for i, p in enumerate(proteins):
         acc = p["accession"]
         acc_to_row[acc] = i
         am = p["act_matrix"]
-        col0 = am[:, 0] if am.ndim == 2 else am
-        act_mat = np.zeros((len(col0), n_features), dtype=np.float32)
-        act_mat[:, 0] = col0
+        col = am[:, 0] if am.ndim == 2 else am
+        act_mat = np.zeros((len(col), n_features), dtype=np.float32)
+        act_mat[:, signal_fid] = col
         np.savez(act_dir / f"{acc}.npz", activations=act_mat)
-        # geom profile
         np.savez(
             gp_dir / f"{acc}.npz",
             ca=p["ca"],
@@ -604,7 +607,7 @@ def _write_fixture_files(tmp_path: Path, proteins: list[dict], n_features: int) 
             categories=p["profiles"]["categories"],
             sequence=np.array([p["sequence"]]),
         )
-        protein_maxes[i, 0] = float(col0.max())
+        protein_maxes[i, signal_fid] = float(col.max())
 
     np.save(data_dir / "protein_feature_maxes.npy", protein_maxes)
     feat_max = protein_maxes.max(axis=0)
@@ -615,19 +618,8 @@ def _write_fixture_files(tmp_path: Path, proteins: list[dict], n_features: int) 
     return data_dir
 
 
-def test_activation_cache_parity(tmp_path: Path) -> None:
-    """End-to-end parity: compute_refit_null with and without the
-    pre-built activation-column cache must produce byte-identical JSON
-    output (same observed, null, p-value, n_proteins, ...).
-
-    This is the safety net protecting us from any numerical drift
-    introduced by the cache loader. If this test fails we have a bug in
-    either the precompute (column / accession ordering) or the loader
-    (off-by-one slicing, dtype promotion, etc.) and the job YAMLs for
-    L2/L3/L6 MUST NOT be launched until it is green.
-    """
-    # Import here to keep top-level import surface small and to exercise
-    # the actual script module.
+def _load_bacc_module():
+    """Load scripts/build_activation_column_cache.py as a module."""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -637,61 +629,39 @@ def test_activation_cache_parity(tmp_path: Path) -> None:
     assert spec is not None and spec.loader is not None
     bacc = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bacc)
+    return bacc
 
-    # Build synthetic data with a learnable planted signal so the observed
-    # PR-AUC is not at floor (more informative parity check).
-    rng = np.random.default_rng(11)
-    proteins = _make_protein_data(
-        n_proteins=8, protein_len=70, rng=rng, signal=True
-    )
-    n_features = 4  # enough to make the column indexing non-trivial
-    data_dir = _write_fixture_files(tmp_path, proteins, n_features)
 
-    # Emulate the CLI _setup_shared for both runs.
-    from scripts.compute_geometry_null_refit import _setup_shared  # type: ignore[attr-defined]
-
-    shared = _setup_shared(data_dir)
-
-    # ── Run 1: per-file loader (cache disabled) ──
-    result_nocache = gnr.compute_refit_null(
-        fid=0,
-        act_matrix_full=shared["act_matrix_full"],
-        row_to_acc=shared["row_to_acc"],
-        act_file_map=shared["act_file_map"],
-        geom_profile_dir=shared["geom_profile_dir"],
-        geom_profile_files=shared["geom_profile_files"],
-        n_permutations=10,
-        seed=42,
-        max_proteins=500,
-        activation_col_cache_dir=None,
-    )
-    assert result_nocache is not None
-
-    # ── Build cache ──
-    cache_dir = data_dir / "activation_col_cache"
-    import argparse
+def _build_cache(bacc, data_dir: Path, max_proteins: int) -> Path:
+    """Invoke the precompute CLI and return the cache directory."""
     import sys as _sys
+
+    cache_dir = data_dir / "activation_col_cache"
     argv_saved = _sys.argv[:]
     try:
         _sys.argv = [
             "build_activation_column_cache.py",
             "--data-dir", str(data_dir),
-            "--max-proteins", "500",
+            "--max-proteins", str(max_proteins),
         ]
         bacc.main()
     finally:
         _sys.argv = argv_saved
     assert cache_dir.is_dir()
     assert any(cache_dir.glob("*.npz")), "cache build wrote no files"
+    return cache_dir
 
-    # ── Run 2: cache loader ──
-    # Clear the geom LRU so both runs start from identical state. Otherwise
-    # cache hit-rate differences between runs are harmless but make the
-    # LRU state non-deterministic across tests in the same process.
+
+def _run_refit(
+    shared: dict,
+    *,
+    fid: int,
+    max_proteins: int,
+    activation_col_cache_dir: Path | None,
+) -> dict:
     gnr._load_geom_profile_cached.cache_clear()
-
-    result_cached = gnr.compute_refit_null(
-        fid=0,
+    result = gnr.compute_refit_null(
+        fid=fid,
         act_matrix_full=shared["act_matrix_full"],
         row_to_acc=shared["row_to_acc"],
         act_file_map=shared["act_file_map"],
@@ -699,36 +669,190 @@ def test_activation_cache_parity(tmp_path: Path) -> None:
         geom_profile_files=shared["geom_profile_files"],
         n_permutations=10,
         seed=42,
-        max_proteins=500,
-        activation_col_cache_dir=cache_dir,
+        max_proteins=max_proteins,
+        activation_col_cache_dir=activation_col_cache_dir,
     )
-    assert result_cached is not None
+    assert result is not None
+    return result
 
-    # Byte-identical numeric fields. We don't compare script_version (trivially
-    # identical) but we DO compare every scientific scalar.
-    for key in (
-        "feature_id",
-        "n_permutations",
-        "seed",
-        "rng_offset",
-        "observed_prauc",
-        "null_mean",
-        "null_std",
-        "p_value_refit",
-        "n_proteins",
-        "n_residues_total",
-        "n_residues_valid",
-        "n_pos_real",
-        "n_train_obs",
-        "n_train_pos_obs",
-        "n_train_neg_obs",
-        "threshold_sae",
-    ):
-        assert result_cached[key] == result_nocache[key], (
+
+_PARITY_SCALAR_KEYS = (
+    "feature_id",
+    "n_permutations",
+    "seed",
+    "rng_offset",
+    "observed_prauc",
+    "null_mean",
+    "null_std",
+    "p_value_refit",
+    "n_proteins",
+    "n_residues_total",
+    "n_residues_valid",
+    "n_pos_real",
+    "n_train_obs",
+    "n_train_pos_obs",
+    "n_train_neg_obs",
+    "threshold_sae",
+)
+
+
+def _assert_byte_identical(cached: dict, nocache: dict) -> None:
+    for key in _PARITY_SCALAR_KEYS:
+        assert cached[key] == nocache[key], (
             f"cache-vs-nocache mismatch on {key!r}: "
-            f"cache={result_cached[key]!r} nocache={result_nocache[key]!r}"
+            f"cache={cached[key]!r} nocache={nocache[key]!r}"
         )
-    # Per-permutation null distribution must match exactly.
-    assert result_cached["null_prauc_refit"] == result_nocache["null_prauc_refit"], (
+    assert cached["null_prauc_refit"] == nocache["null_prauc_refit"], (
         "null_prauc_refit arrays differ between cache and no-cache runs"
     )
+
+
+@pytest.mark.parametrize(
+    "n_proteins,protein_len,signal_fid,n_features,max_proteins",
+    [
+        # Baseline: fid=0, small fixture, no top-N trim exercised.
+        (8, 70, 0, 4, 500),
+        # Off-by-one bait: signal planted at fid=2. Exercises column
+        # indexing in the precompute's `slab[:, fid]` and every feature
+        # loop elsewhere — catches any hard-coded `[:, 0]` mistake.
+        (8, 70, 2, 4, 500),
+        # Top-N trim: 40 proteins but only top-5 should survive selection,
+        # on both the per-file (argsort then trim) and cache (precompute
+        # stores exactly 5) paths. If the cache silently included all 40
+        # or miscounted the top-N this comparison would blow up.
+        (40, 50, 0, 3, 5),
+    ],
+)
+def test_activation_cache_parity(
+    tmp_path: Path,
+    n_proteins: int,
+    protein_len: int,
+    signal_fid: int,
+    n_features: int,
+    max_proteins: int,
+) -> None:
+    """End-to-end parity: compute_refit_null with and without the
+    pre-built activation-column cache must produce byte-identical JSON
+    output. This is the load-bearing safety net for the L2/L3/L6 launch —
+    if it fails, the launch is blocked.
+    """
+    bacc = _load_bacc_module()
+    rng = np.random.default_rng(11 + signal_fid * 97 + n_proteins)
+    proteins = _make_protein_data(
+        n_proteins=n_proteins, protein_len=protein_len, rng=rng, signal=True,
+    )
+    data_dir = _write_fixture_files(
+        tmp_path, proteins, n_features=n_features, signal_fid=signal_fid,
+    )
+
+    from scripts.compute_geometry_null_refit import _setup_shared  # type: ignore[attr-defined]
+    shared = _setup_shared(data_dir)
+
+    result_nocache = _run_refit(
+        shared,
+        fid=signal_fid,
+        max_proteins=max_proteins,
+        activation_col_cache_dir=None,
+    )
+    cache_dir = _build_cache(bacc, data_dir, max_proteins=max_proteins)
+    result_cached = _run_refit(
+        shared,
+        fid=signal_fid,
+        max_proteins=max_proteins,
+        activation_col_cache_dir=cache_dir,
+    )
+    _assert_byte_identical(result_cached, result_nocache)
+
+
+def test_activation_cache_rejects_max_proteins_mismatch(tmp_path: Path) -> None:
+    """If the cache was built with ``max_proteins = N_build`` but the refit
+    call passes ``max_proteins != N_build``, the loader must refuse the
+    cache and fall back to the per-file path. Otherwise a sweep over
+    ``max_proteins`` would silently consume a cache with the wrong
+    protein set and publish wrong p-values.
+
+    We verify this indirectly: a run that explicitly sets
+    ``activation_col_cache_dir=cache_dir`` but passes a mismatched
+    ``max_proteins`` must return numbers identical to a no-cache run with
+    the same ``max_proteins`` (because the cache is rejected and the
+    per-file path runs end-to-end).
+    """
+    bacc = _load_bacc_module()
+    rng = np.random.default_rng(23)
+    proteins = _make_protein_data(
+        n_proteins=40, protein_len=50, rng=rng, signal=True,
+    )
+    data_dir = _write_fixture_files(
+        tmp_path, proteins, n_features=3, signal_fid=0,
+    )
+
+    from scripts.compute_geometry_null_refit import _setup_shared  # type: ignore[attr-defined]
+    shared = _setup_shared(data_dir)
+
+    # Cache built with max_proteins=20 (> the selection we will ask for).
+    cache_dir = _build_cache(bacc, data_dir, max_proteins=20)
+
+    # Caller asks for max_proteins=5 — a mismatch that would be
+    # numerically wrong if the loader honoured the 20-protein cache.
+    result_mismatch = _run_refit(
+        shared, fid=0, max_proteins=5, activation_col_cache_dir=cache_dir,
+    )
+    # Reference: identical run with no cache at all.
+    result_reference = _run_refit(
+        shared, fid=0, max_proteins=5, activation_col_cache_dir=None,
+    )
+    _assert_byte_identical(result_mismatch, result_reference)
+
+
+def test_activation_cache_rejects_bad_version(tmp_path: Path) -> None:
+    """A cache file with a wrong ``cache_version`` in its meta payload must
+    be refused (the loader treats it as if the cache were absent). This
+    protects us from a future schema bump silently consuming old caches.
+    """
+    bacc = _load_bacc_module()
+    rng = np.random.default_rng(31)
+    proteins = _make_protein_data(
+        n_proteins=8, protein_len=60, rng=rng, signal=True,
+    )
+    data_dir = _write_fixture_files(
+        tmp_path, proteins, n_features=2, signal_fid=0,
+    )
+    cache_dir = _build_cache(bacc, data_dir, max_proteins=500)
+
+    # Rewrite a cache file's meta with a garbage version. np.savez closes
+    # the handle when the context manager exits, so we can overwrite.
+    cache_file = cache_dir / "0000.npz"
+    assert cache_file.is_file()
+    with np.load(cache_file, allow_pickle=True) as npz:
+        cols = np.array(npz["columns"])
+        offs = np.array(npz["offsets"])
+        accs = np.array(npz["accessions"], dtype=object)
+    bad_meta = json.dumps({
+        "feature_id": 0,
+        "max_proteins": 500,
+        "half_w": gnr._HALF_W,
+        "cache_version": 99999,  # <-- sabotage
+    })
+    np.savez(
+        cache_file,
+        columns=cols,
+        offsets=offs,
+        accessions=accs,
+        meta=np.array([bad_meta], dtype=object),
+    )
+
+    from scripts.compute_geometry_null_refit import _setup_shared  # type: ignore[attr-defined]
+    shared = _setup_shared(data_dir)
+
+    # The cache-enabled run should detect the bad version, emit a warning,
+    # and fall back to the per-file path — producing numerics identical to
+    # a no-cache run.
+    result_bad_cache = _run_refit(
+        shared, fid=0, max_proteins=500, activation_col_cache_dir=cache_dir,
+    )
+    result_reference = _run_refit(
+        shared, fid=0, max_proteins=500, activation_col_cache_dir=None,
+    )
+    _assert_byte_identical(result_bad_cache, result_reference)
+
+

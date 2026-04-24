@@ -56,18 +56,17 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
-# Single source of truth for _HALF_W — import directly from the refit-null
-# module so a change there doesn't silently diverge the cache's skip policy
-# from the loader's.
+# Single source of truth for _HALF_W and _CACHE_VERSION — import directly
+# from the refit-null module so a change there doesn't silently diverge the
+# cache's on-disk layout from what the loader expects.
 from proteinlens.analysis.feature_pipeline.geometry_null_refit import (
+    _CACHE_VERSION,
     _HALF_W,
 )
 
 logger = logging.getLogger("build_activation_column_cache")
 
 _MIN_N_RESIDUES = 2 * _HALF_W + 1  # 21
-
-_CACHE_VERSION = 1
 
 
 def _compute_top_proteins_per_feature(
@@ -187,6 +186,23 @@ def _atomic_savez(path: Path, **arrays: np.ndarray) -> None:
     os.replace(tmp, path)
 
 
+def _sweep_stale_tmp(cache_dir: Path) -> int:
+    """Delete any ``.npz.tmp`` files left by a previously-killed precompute.
+
+    Correctness is not affected — ``_already_cached`` checks only the final
+    filename — but stale ``.tmp`` files consume inodes on a CephFS PVC that
+    has already hit its quota once. Run once at startup.
+    """
+    n = 0
+    for p in cache_dir.glob("*.npz.tmp"):
+        try:
+            p.unlink()
+            n += 1
+        except OSError:
+            continue
+    return n
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -227,6 +243,10 @@ def main() -> None:
 
     cache_dir: Path = args.cache_dir or (data_dir / "activation_col_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
+
+    n_stale = _sweep_stale_tmp(cache_dir)
+    if n_stale:
+        logger.info("swept %d stale .npz.tmp files left from prior runs", n_stale)
 
     t0 = time.time()
     shared = _glob_inputs(data_dir)

@@ -68,12 +68,19 @@ from proteinlens.analysis.geometry.residue_features import (
 logger = logging.getLogger(__name__)
 
 
-# Geom profiles are per-protein and identical across features, so the same file
-# is reopened many times across a refit run (top-500 protein sets overlap
-# heavily across features). An in-process LRU keyed by (dir, accession) keeps
-# the N most-recent parsed profiles resident. Each entry is ~15 KB so 2000
-# entries ≈ 30 MB per worker. Under fork() each worker gets its own cache.
-@functools.lru_cache(maxsize=2000)
+# Geom profiles are per-protein and identical across features, so the same
+# file is reopened many times across a refit run (top-500 protein sets
+# overlap heavily across features). An in-process LRU keyed by (dir,
+# accession) keeps the N most-recent parsed profiles resident. Under fork()
+# each worker gets its own empty cache.
+#
+# Entry size: ~(L, 3) float64 ca + six length-L float64 profile arrays +
+# a sequence string. Empirically ~100-120 KB per entry for L≈2000 residues,
+# ~30-40 KB for shorter chains. At maxsize=500 × 120 KB × 16 workers this
+# caps at ~1 GB of pod memory (headroom for a 32 GB node). The hit rate at
+# 500 is still ≥90% in practice because each feature's top-500 protein set
+# overlaps heavily with its immediate neighbours'.
+@functools.lru_cache(maxsize=500)
 def _load_geom_profile_cached(
     geom_profile_dir: Path, acc: str
 ) -> dict[str, Any] | None:
@@ -112,6 +119,13 @@ def _load_geom_profile_cached(
 _GEOM_REFIT_RNG_OFFSET = 40_000_000
 
 
+# Activation-column-cache schema version. Bump whenever the on-disk layout
+# of ``activation_col_cache/{fid:04d}.npz`` changes. The loader refuses any
+# cache whose ``meta["cache_version"]`` does not match — better to silently
+# fall back than to consume a stale layout with the wrong semantics.
+_CACHE_VERSION = 1
+
+
 # Pipeline defaults — match proteinlens/analysis/feature_pipeline/config.py:
 #   geometry_act_quantile           = 0.80
 #   geometry_fragment_half_w        = 10
@@ -145,20 +159,68 @@ _GBM_HYPER: dict[str, Any] = dict(
 
 def _iter_cache_entries(
     cache_path: Path,
+    expected_max_proteins: int,
 ) -> list[tuple[str, np.ndarray]] | None:
     """Return ``[(accession, activation_column), ...]`` in refit-iteration order.
 
-    Returns ``None`` if the cache file is unreadable so the caller can fall back
-    to per-file loading.
+    The cache's ``meta`` payload is checked against the caller's expectations
+    before any data is returned:
+
+    * ``meta["cache_version"]`` must equal :data:`_CACHE_VERSION`. A mismatch
+      implies the on-disk layout has drifted from what this loader knows how
+      to interpret — consuming it would silently produce wrong numbers.
+    * ``meta["max_proteins"]`` must equal ``expected_max_proteins``. The cache
+      stores the top-N proteins the precompute was told to materialise, so a
+      run that asks for a different N would get the wrong protein set (extra
+      proteins flowing into the fit, or missing proteins the per-file path
+      would have included). Refusing the cache is strictly safer than a
+      silent truncation.
+
+    Returns ``None`` in any of these cases — the caller treats this as
+    "cache absent" and falls back to the per-file loader, which is
+    numerically authoritative.
     """
     try:
         with np.load(cache_path, allow_pickle=True) as npz:
             accessions = npz["accessions"]
             columns = npz["columns"]
             offsets = npz["offsets"]
+            meta_arr = npz["meta"] if "meta" in npz.files else None
     except (OSError, KeyError, ValueError) as e:
         logger.warning("cache read failed for %s: %s — falling back", cache_path, e)
         return None
+
+    # Meta check. A missing ``meta`` key indicates a cache built by a
+    # script version that did not yet write metadata — refuse it. Only
+    # verified caches are allowed through.
+    if meta_arr is None:
+        logger.warning(
+            "cache %s has no meta payload (pre-versioning build); falling back",
+            cache_path,
+        )
+        return None
+    try:
+        import json as _json
+        meta = _json.loads(str(meta_arr[0]))
+    except (ValueError, IndexError, TypeError) as e:
+        logger.warning("cache %s has malformed meta (%s); falling back", cache_path, e)
+        return None
+    cache_version = meta.get("cache_version")
+    cache_max = meta.get("max_proteins")
+    if cache_version != _CACHE_VERSION:
+        logger.warning(
+            "cache %s has version %s (expected %d); falling back",
+            cache_path, cache_version, _CACHE_VERSION,
+        )
+        return None
+    if cache_max != expected_max_proteins:
+        logger.warning(
+            "cache %s was built with max_proteins=%s but caller requested %d; "
+            "falling back to per-file loader",
+            cache_path, cache_max, expected_max_proteins,
+        )
+        return None
+
     out: list[tuple[str, np.ndarray]] = []
     for i, acc in enumerate(accessions):
         col = np.ascontiguousarray(
@@ -206,9 +268,9 @@ def _load_protein_data(
 
     # ── Cached path ───────────────────────────────────────────────────
     if cache_path is not None:
-        entries = _iter_cache_entries(cache_path)
+        entries = _iter_cache_entries(cache_path, expected_max_proteins=max_proteins)
         if entries is None:
-            # Cache corrupt — fall through to per-file.
+            # Cache missing/mismatched/corrupt — fall through to per-file.
             cache_path = None
         else:
             protein_data: list[dict[str, Any]] = []

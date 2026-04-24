@@ -548,3 +548,187 @@ def test_real_data_single_feature(tmp_path: Path) -> None:
         "p_value_refit", "n_proteins", "n_residues_total", "threshold_sae",
     ):
         assert key in result, f"missing {key} in refit output"
+
+
+# ───────────────── activation-column cache: parity ───────────────────
+
+
+def _write_fixture_files(tmp_path: Path, proteins: list[dict], n_features: int) -> Path:
+    """Materialise a minimal on-disk feature_data_ layout from an in-memory
+    ``protein_data`` list.
+
+    Writes just the files the refit null + cache-builder need:
+
+    * ``residue_activations/{acc}.npz`` with key ``activations``, shape
+      ``(n_res, n_features)``.  The protein's real activation lives at column
+      ``fid=0``; every other column is zero (keeps the .npz compact and is
+      enough for the fid=0 refit test).
+    * ``geometry_residue_profiles/{acc}.npz`` with the six profile arrays
+      and a ``sequence`` entry — same schema :func:`_load_protein_data`
+      expects.
+    * ``protein_feature_maxes.npy`` — shape ``(n_proteins, n_features)``
+      with per-protein maxes for each column.
+    * ``feature_max_activations.npy`` — shape ``(n_features,)``.
+    * ``pipeline_state.json`` with an ``accession_index``.
+
+    Returns the created ``data_dir``.
+    """
+    data_dir = tmp_path / "feat_data"
+    data_dir.mkdir()
+    act_dir = data_dir / "residue_activations"
+    act_dir.mkdir()
+    gp_dir = data_dir / "geometry_residue_profiles"
+    gp_dir.mkdir()
+
+    # Per-protein writes. Activations live only at column fid=0; other cols
+    # zero. That's sufficient for the parity test which runs fid=0.
+    protein_maxes = np.zeros((len(proteins), n_features), dtype=np.float32)
+    acc_to_row: dict[str, int] = {}
+    for i, p in enumerate(proteins):
+        acc = p["accession"]
+        acc_to_row[acc] = i
+        am = p["act_matrix"]
+        col0 = am[:, 0] if am.ndim == 2 else am
+        act_mat = np.zeros((len(col0), n_features), dtype=np.float32)
+        act_mat[:, 0] = col0
+        np.savez(act_dir / f"{acc}.npz", activations=act_mat)
+        # geom profile
+        np.savez(
+            gp_dir / f"{acc}.npz",
+            ca=p["ca"],
+            curvature=p["profiles"]["curvature"],
+            torsion=p["profiles"]["torsion"],
+            planarity=p["profiles"]["planarity"],
+            tangents=p["profiles"]["tangents"],
+            helix_mask=p["profiles"]["helix_mask"],
+            categories=p["profiles"]["categories"],
+            sequence=np.array([p["sequence"]]),
+        )
+        protein_maxes[i, 0] = float(col0.max())
+
+    np.save(data_dir / "protein_feature_maxes.npy", protein_maxes)
+    feat_max = protein_maxes.max(axis=0)
+    np.save(data_dir / "feature_max_activations.npy", feat_max)
+    (data_dir / "pipeline_state.json").write_text(
+        json.dumps({"accession_index": acc_to_row})
+    )
+    return data_dir
+
+
+def test_activation_cache_parity(tmp_path: Path) -> None:
+    """End-to-end parity: compute_refit_null with and without the
+    pre-built activation-column cache must produce byte-identical JSON
+    output (same observed, null, p-value, n_proteins, ...).
+
+    This is the safety net protecting us from any numerical drift
+    introduced by the cache loader. If this test fails we have a bug in
+    either the precompute (column / accession ordering) or the loader
+    (off-by-one slicing, dtype promotion, etc.) and the job YAMLs for
+    L2/L3/L6 MUST NOT be launched until it is green.
+    """
+    # Import here to keep top-level import surface small and to exercise
+    # the actual script module.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "build_activation_column_cache",
+        ROOT / "scripts" / "build_activation_column_cache.py",
+    )
+    assert spec is not None and spec.loader is not None
+    bacc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bacc)
+
+    # Build synthetic data with a learnable planted signal so the observed
+    # PR-AUC is not at floor (more informative parity check).
+    rng = np.random.default_rng(11)
+    proteins = _make_protein_data(
+        n_proteins=8, protein_len=70, rng=rng, signal=True
+    )
+    n_features = 4  # enough to make the column indexing non-trivial
+    data_dir = _write_fixture_files(tmp_path, proteins, n_features)
+
+    # Emulate the CLI _setup_shared for both runs.
+    from scripts.compute_geometry_null_refit import _setup_shared  # type: ignore[attr-defined]
+
+    shared = _setup_shared(data_dir)
+
+    # ── Run 1: per-file loader (cache disabled) ──
+    result_nocache = gnr.compute_refit_null(
+        fid=0,
+        act_matrix_full=shared["act_matrix_full"],
+        row_to_acc=shared["row_to_acc"],
+        act_file_map=shared["act_file_map"],
+        geom_profile_dir=shared["geom_profile_dir"],
+        geom_profile_files=shared["geom_profile_files"],
+        n_permutations=10,
+        seed=42,
+        max_proteins=500,
+        activation_col_cache_dir=None,
+    )
+    assert result_nocache is not None
+
+    # ── Build cache ──
+    cache_dir = data_dir / "activation_col_cache"
+    import argparse
+    import sys as _sys
+    argv_saved = _sys.argv[:]
+    try:
+        _sys.argv = [
+            "build_activation_column_cache.py",
+            "--data-dir", str(data_dir),
+            "--max-proteins", "500",
+        ]
+        bacc.main()
+    finally:
+        _sys.argv = argv_saved
+    assert cache_dir.is_dir()
+    assert any(cache_dir.glob("*.npz")), "cache build wrote no files"
+
+    # ── Run 2: cache loader ──
+    # Clear the geom LRU so both runs start from identical state. Otherwise
+    # cache hit-rate differences between runs are harmless but make the
+    # LRU state non-deterministic across tests in the same process.
+    gnr._load_geom_profile_cached.cache_clear()
+
+    result_cached = gnr.compute_refit_null(
+        fid=0,
+        act_matrix_full=shared["act_matrix_full"],
+        row_to_acc=shared["row_to_acc"],
+        act_file_map=shared["act_file_map"],
+        geom_profile_dir=shared["geom_profile_dir"],
+        geom_profile_files=shared["geom_profile_files"],
+        n_permutations=10,
+        seed=42,
+        max_proteins=500,
+        activation_col_cache_dir=cache_dir,
+    )
+    assert result_cached is not None
+
+    # Byte-identical numeric fields. We don't compare script_version (trivially
+    # identical) but we DO compare every scientific scalar.
+    for key in (
+        "feature_id",
+        "n_permutations",
+        "seed",
+        "rng_offset",
+        "observed_prauc",
+        "null_mean",
+        "null_std",
+        "p_value_refit",
+        "n_proteins",
+        "n_residues_total",
+        "n_residues_valid",
+        "n_pos_real",
+        "n_train_obs",
+        "n_train_pos_obs",
+        "n_train_neg_obs",
+        "threshold_sae",
+    ):
+        assert result_cached[key] == result_nocache[key], (
+            f"cache-vs-nocache mismatch on {key!r}: "
+            f"cache={result_cached[key]!r} nocache={result_nocache[key]!r}"
+        )
+    # Per-permutation null distribution must match exactly.
+    assert result_cached["null_prauc_refit"] == result_nocache["null_prauc_refit"], (
+        "null_prauc_refit arrays differ between cache and no-cache runs"
+    )

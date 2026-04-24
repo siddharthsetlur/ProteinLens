@@ -209,6 +209,7 @@ def _setup_shared(
         "act_matrix_full": act_matrix_full,
         "geom_enrich_dir": geom_enrich_dir,
         "geom_enrich_fids": geom_enrich_fids,
+        "activation_col_cache_dir": None,  # set by main() after arg parsing
     }
 
 
@@ -279,6 +280,7 @@ def _worker_process(
             max_proteins=max_proteins,
             stored_avg_precision=stored_ap,
             observed_parity_strict=observed_parity_strict,
+            activation_col_cache_dir=_WORKER_STATE.get("activation_col_cache_dir"),
         )
     except (ValueError, OverflowError):
         # Numerical issues (e.g., RNG seed overflow) must surface — not
@@ -418,6 +420,23 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--activation-cache-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path to a pre-built activation-column cache produced by "
+            "scripts/build_activation_column_cache.py. When present, each feature "
+            "uses 1 file open for activations instead of `max_proteins`. "
+            "Default location checked: <data-dir>/activation_col_cache/. "
+            "Pass --no-activation-cache to disable even if that directory exists."
+        ),
+    )
+    parser.add_argument(
+        "--no-activation-cache",
+        action="store_true",
+        help="Do not use the activation-column cache even if one is present.",
+    )
+    parser.add_argument(
         "--wandb",
         action="store_true",
         help="Log progress and summary statistics to Weights & Biases.",
@@ -462,6 +481,10 @@ def main() -> None:
                 "data_dir": str(args.data_dir),
                 "geom_profile_dir": str(args.geom_profile_dir) if args.geom_profile_dir else None,
                 "act_dir": str(args.act_dir) if args.act_dir else None,
+                "activation_cache_dir": (
+                    str(args.activation_cache_dir) if args.activation_cache_dir else None
+                ),
+                "no_activation_cache": args.no_activation_cache,
             },
         )
 
@@ -491,6 +514,33 @@ def main() -> None:
                 len(shared["geom_profile_files"]), len(shared["act_file_map"]),
                 len(shared["row_to_acc"]))
     logger.info("geom_enrich_fids: %d", len(shared["geom_enrich_fids"]))
+
+    # Activation-column cache resolution. Priority:
+    #   1. --no-activation-cache → disabled
+    #   2. --activation-cache-dir <path> → that path (if it exists)
+    #   3. default <data-dir>/activation_col_cache (if it exists)
+    cache_dir: Path | None = None
+    if not args.no_activation_cache:
+        candidate = args.activation_cache_dir or (data_dir / "activation_col_cache")
+        if candidate.is_dir():
+            # Sample: require at least one per-feature file or we treat it as
+            # absent (empty dir from a failed precompute would otherwise
+            # silently fall back per feature which is confusing).
+            has_any = any(candidate.glob("*.npz"))
+            if has_any:
+                cache_dir = candidate
+                logger.info("activation-column cache enabled: %s", cache_dir)
+            else:
+                logger.info(
+                    "activation-column cache dir exists but is empty; "
+                    "per-file loading will be used: %s", candidate,
+                )
+        elif args.activation_cache_dir is not None:
+            logger.warning(
+                "--activation-cache-dir %s does not exist; per-file loading "
+                "will be used", args.activation_cache_dir,
+            )
+    shared["activation_col_cache_dir"] = cache_dir
 
     fids = _build_fid_list(shared, args)
     logger.info("features to consider: %d", len(fids))

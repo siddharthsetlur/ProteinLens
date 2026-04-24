@@ -52,6 +52,7 @@ Design invariants (scientific-code safety)
 
 from __future__ import annotations
 
+import functools
 import logging
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,44 @@ from proteinlens.analysis.geometry.residue_features import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Geom profiles are per-protein and identical across features, so the same file
+# is reopened many times across a refit run (top-500 protein sets overlap
+# heavily across features). An in-process LRU keyed by (dir, accession) keeps
+# the N most-recent parsed profiles resident. Each entry is ~15 KB so 2000
+# entries ≈ 30 MB per worker. Under fork() each worker gets its own cache.
+@functools.lru_cache(maxsize=2000)
+def _load_geom_profile_cached(
+    geom_profile_dir: Path, acc: str
+) -> dict[str, Any] | None:
+    """Return ``{"ca": ..., "profiles": {...}, "sequence": str}`` or None on failure.
+
+    ``profiles`` carries the six arrays the refit loader needs. The cache key
+    includes ``geom_profile_dir`` so callers that override the profile
+    location via CLI don't cross-contaminate.
+    """
+    path = geom_profile_dir / f"{acc}.npz"
+    try:
+        with np.load(path, allow_pickle=True) as gp:
+            ca = np.array(gp["ca"])
+            profiles = {
+                k: np.array(gp[k])[: len(ca)]
+                for k in (
+                    "curvature",
+                    "torsion",
+                    "planarity",
+                    "tangents",
+                    "helix_mask",
+                    "categories",
+                )
+            }
+            seq_arr = gp.get("sequence", np.array([""]))
+            seq = str(seq_arr[0]) if len(seq_arr) > 0 else ""
+        return {"ca": ca, "profiles": profiles, "sequence": seq}
+    except (OSError, KeyError, ValueError) as e:
+        logger.debug("geom load failed for %s: %s", acc, e)
+        return None
 
 
 # RNG offset for this module's permutation shuffle. Distinct from all offsets
@@ -104,6 +143,31 @@ _GBM_HYPER: dict[str, Any] = dict(
 # ──────────────────────────────────────────────────────────────────────
 
 
+def _iter_cache_entries(
+    cache_path: Path,
+) -> list[tuple[str, np.ndarray]] | None:
+    """Return ``[(accession, activation_column), ...]`` in refit-iteration order.
+
+    Returns ``None`` if the cache file is unreadable so the caller can fall back
+    to per-file loading.
+    """
+    try:
+        with np.load(cache_path, allow_pickle=True) as npz:
+            accessions = npz["accessions"]
+            columns = npz["columns"]
+            offsets = npz["offsets"]
+    except (OSError, KeyError, ValueError) as e:
+        logger.warning("cache read failed for %s: %s — falling back", cache_path, e)
+        return None
+    out: list[tuple[str, np.ndarray]] = []
+    for i, acc in enumerate(accessions):
+        col = np.ascontiguousarray(
+            columns[offsets[i]: offsets[i + 1]], dtype=np.float32
+        )
+        out.append((str(acc), col))
+    return out
+
+
 def _load_protein_data(
     fid: int,
     act_matrix_full: np.ndarray,
@@ -112,21 +176,73 @@ def _load_protein_data(
     geom_profile_dir: Path,
     geom_profile_files: set[str],
     max_proteins: int = 500,
+    activation_col_cache_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Return ``protein_data`` for the top-``max_proteins`` activating proteins.
 
     Replicates the fallback logic in ``compute_permutation_null.py:602–639``.
-    Each dict has ``accession``, ``act_matrix`` (shape ``(n, D_features)`` or
-    ``(n,)``; the caller reads column ``fid``), ``ca``, ``profiles``,
-    ``n_residues``, ``sequence``.
+    Each dict has ``accession``, ``act_matrix`` (``(n,)`` column), ``ca``,
+    ``profiles``, ``n_residues``, ``sequence``.
+
+    Two load paths, chosen by the presence of ``activation_col_cache_dir/
+    {fid:04d}.npz``:
+
+    * **Cached** — one file open per feature for activations. Accession order
+      is read from the cache; it is guaranteed to match the refit iteration
+      order because ``build_activation_column_cache.py`` writes entries sorted
+      by the same ``active_rows`` array computed here.
+    * **Per-file** — the original loader, one ``.npz`` per protein for
+      activations. Used when no cache is present so the module remains
+      functional in any environment.
+
+    In both paths, geom profiles go through :func:`_load_geom_profile_cached`,
+    a per-process LRU so the same profile is not reparsed on every feature.
     """
+    cache_path: Path | None = None
+    if activation_col_cache_dir is not None:
+        candidate = activation_col_cache_dir / f"{fid:04d}.npz"
+        if candidate.is_file():
+            cache_path = candidate
+
+    # ── Cached path ───────────────────────────────────────────────────
+    if cache_path is not None:
+        entries = _iter_cache_entries(cache_path)
+        if entries is None:
+            # Cache corrupt — fall through to per-file.
+            cache_path = None
+        else:
+            protein_data: list[dict[str, Any]] = []
+            for acc, act_col in entries:
+                if acc not in geom_profile_files:
+                    continue
+                gp = _load_geom_profile_cached(geom_profile_dir, acc)
+                if gp is None:
+                    continue
+                ca = gp["ca"]
+                n = min(len(ca), act_col.shape[0])
+                if n < 2 * _HALF_W + 1:
+                    continue
+                profiles = {k: v[:n] for k, v in gp["profiles"].items()}
+                protein_data.append(
+                    {
+                        "accession": acc,
+                        "act_matrix": act_col[:n],
+                        "ca": ca[:n],
+                        "profiles": profiles,
+                        "n_residues": n,
+                        "sequence": gp["sequence"],
+                    }
+                )
+            return protein_data
+
+    # ── Per-file path (original) ──────────────────────────────────────
     node_col = act_matrix_full[:, fid]
     active_rows = np.where(node_col > 0)[0]
     if len(active_rows) > max_proteins:
         top_idx = np.argsort(node_col[active_rows])[-max_proteins:]
         active_rows = active_rows[top_idx]
 
-    protein_data: list[dict[str, Any]] = []
+    protein_data_fallback: list[dict[str, Any]] = []
     for row_idx in active_rows:
         acc = row_to_acc.get(int(row_idx))
         if acc is None or acc not in geom_profile_files:
@@ -135,39 +251,35 @@ def _load_protein_data(
         if act_path is None:
             continue
         try:
-            act_mat = np.load(act_path)["activations"]
-            gp = np.load(geom_profile_dir / f"{acc}.npz", allow_pickle=True)
-            ca = np.array(gp["ca"])
-            profiles = {
-                k: np.array(gp[k])[: len(ca)]
-                for k in (
-                    "curvature",
-                    "torsion",
-                    "planarity",
-                    "tangents",
-                    "helix_mask",
-                    "categories",
+            # Load only column `fid` — the full (n_residues, n_features) matrix
+            # is ~12MB per protein at L4, and we only ever read one column.
+            with np.load(act_path) as _npz:
+                act_col = np.ascontiguousarray(
+                    _npz["activations"][:, fid], dtype=np.float32
                 )
-            }
-            n = min(len(ca), act_mat.shape[0])
-            if n < 2 * _HALF_W + 1:
-                continue
-            seq_arr = gp.get("sequence", np.array([""]))
-            seq = str(seq_arr[0]) if len(seq_arr) > 0 else ""
-            protein_data.append(
-                {
-                    "accession": acc,
-                    "act_matrix": act_mat[:n],
-                    "ca": ca[:n],
-                    "profiles": profiles,
-                    "n_residues": n,
-                    "sequence": seq,
-                }
-            )
         except (OSError, KeyError, ValueError) as e:
-            logger.debug("skip protein %s for fid %d: %s", acc, fid, e)
+            logger.debug("skip protein %s for fid %d (activations): %s", acc, fid, e)
             continue
-    return protein_data
+        gp = _load_geom_profile_cached(geom_profile_dir, acc)
+        if gp is None:
+            continue
+        ca = gp["ca"]
+        n = min(len(ca), act_col.shape[0])
+        if n < 2 * _HALF_W + 1:
+            continue
+        profiles = {k: v[:n] for k, v in gp["profiles"].items()}
+        protein_data_fallback.append(
+            {
+                "accession": acc,
+                # 1-D column — downstream readers already handle .ndim==1.
+                "act_matrix": act_col[:n],
+                "ca": ca[:n],
+                "profiles": profiles,
+                "n_residues": n,
+                "sequence": gp["sequence"],
+            }
+        )
+    return protein_data_fallback
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -470,6 +582,7 @@ def compute_refit_null(
     stored_avg_precision: float | None = None,
     observed_warn_delta: float = 0.05,
     observed_parity_strict: bool = False,
+    activation_col_cache_dir: Path | None = None,
 ) -> dict[str, Any] | None:
     """Compute the refit-GBM permutation null for a single feature.
 
@@ -504,6 +617,7 @@ def compute_refit_null(
         geom_profile_dir,
         geom_profile_files,
         max_proteins=max_proteins,
+        activation_col_cache_dir=activation_col_cache_dir,
     )
     if len(protein_data) < 2:
         return None

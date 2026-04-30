@@ -1,7 +1,0 @@
-current_epoch: 153
-current_step: 450000
-current_time: '2025-11-27T05:11:00.327125'
-last_epoch_steps: 1220
-n_tokens_total: 1843073622
-steps_in_epoch: 2934
-total_epochs: 171

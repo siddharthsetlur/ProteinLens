@@ -1,8 +1,24 @@
-# Data directories
+# Data directories — these all live on the PVC at runtime (/data/...),
+# never bake them into the image (trained_models alone is ~50GB).
 data/
 wandb/
 models/
 feature_data*/
+trained_models/
+# protein_results/ is a Python package (imported by proteinlens.analysis.geometry);
+# keep the .py files but exclude the data blobs.
+protein_results/results/
+protein_results/alphafold_analysis/
+protein_results/*.npy
+protein_results/*.npz
+protein_results/*.yaml
+protein_results/__pycache__/
+results/
+explainer/
+docs/
+nohup.out
+hf_upload.log
+.claude/
 # Python cache
 __pycache__/
 *.pyc

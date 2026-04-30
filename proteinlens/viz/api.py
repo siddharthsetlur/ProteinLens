@@ -333,6 +333,45 @@ def get_feature_nmpfam(feature_id: int) -> dict[str, Any]:
         return json.load(f)
 
 
+@router.get("/nmpfam-annotations")
+def get_nmpfam_annotations() -> dict[str, Any]:
+    """Return the q-value-tiered NMPFam annotations master index."""
+    fpath = _analysis_dir / "nmpfam_annotation" / "annotations.json"
+    if not fpath.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="NMPFam annotations not built. Run scripts/annotate_nmpfam_hits.py first.",
+        )
+    with open(fpath) as f:
+        return json.load(f)
+
+
+@router.get("/nmpfam-annotations/{feature_id}")
+def get_nmpfam_annotation_feature(feature_id: int) -> dict[str, Any]:
+    """Return the per-feature NMPFam annotation payload with all hit tiers."""
+    fpath = _analysis_dir / "nmpfam_annotation" / f"{feature_id:04d}.json"
+    if not fpath.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"NMPFam annotation for feature {feature_id} not found",
+        )
+    with open(fpath) as f:
+        return json.load(f)
+
+
+@router.get("/transfer-metrics/B")
+def get_transfer_metric_b() -> dict[str, Any]:
+    """Metric B — predictive transfer of SwissProt GBM to NMPFams (PR-AUC / prevalence)."""
+    fpath = _analysis_dir / "transfer_metrics" / "metric_B.json"
+    if not fpath.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Metric B not built. Run scripts/transfer_metric_b.py first.",
+        )
+    with open(fpath) as f:
+        return json.load(f)
+
+
 @router.get("/nmpfam-pdb/{family_id}")
 async def get_nmpfam_pdb(family_id: str) -> Response:
     """

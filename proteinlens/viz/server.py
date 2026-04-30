@@ -127,6 +127,13 @@ def create_app(analysis_dir: Path) -> FastAPI:
         """Serve the NMPFams case study overview page."""
         return FileResponse(STATIC_DIR / "nmpfam_case_study.html")
 
+    # Literal /sun must be declared BEFORE the int-param route below, otherwise
+    # FastAPI will try to parse "sun" as int and 422.
+    @app.get("/nmpfam-case-study/sun", response_class=FileResponse)
+    def nmpfam_sun_case_study_page():
+        """Serve the unified annotation-transfer case study (the 'sun' view)."""
+        return FileResponse(STATIC_DIR / "nmpfam_sun_case_study.html")
+
     @app.get("/nmpfam-case-study/{feature_id}", response_class=FileResponse)
     def nmpfam_detail_page(feature_id: int):
         """Serve the NMPFams feature detail page."""

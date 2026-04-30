@@ -32,21 +32,23 @@ sys.path.insert(0, str(ROOT))
 
 Q_SIG = 0.05
 
+# Non-geometry methods to flag as overlapping significance
+OTHER_METHODS = [
+    ("interpro_res_f1_padj", "interpro_res"),
+    ("cath_res_f1_padj", "cath_res"),
+    ("motif_pr_auc_padj", "motif_pr"),
+    ("position_f1_padj", "position"),
+]
+
 
 def _is_sig(info: dict, padj_key: str) -> bool:
     q = info.get(padj_key)
     return q is not None and q < Q_SIG
 
 
-def _is_q_geometry_primary(info: dict) -> bool:
-    """q-value analogue of is_geometry_primary."""
-    if not _is_sig(info, "geometry_prauc_padj"):
-        return False
-    for other in ("interpro_res_f1_padj", "cath_res_f1_padj",
-                  "motif_pr_auc_padj", "position_f1_padj"):
-        if _is_sig(info, other):
-            return False
-    return True
+def _other_sig_methods(info: dict) -> list[str]:
+    """Return short names of non-geometry methods that are also q<0.05."""
+    return [name for padj_key, name in OTHER_METHODS if _is_sig(info, padj_key)]
 
 
 def build_nmpfam_case_study(data_dir: Path) -> dict:
@@ -82,7 +84,7 @@ def build_nmpfam_case_study(data_dir: Path) -> dict:
         return {}
     gp_data = json.load(open(gp_path))
     gp_features = gp_data.get("features", {})
-    geom_primary_ids = {int(k) for k, v in gp_features.items() if _is_q_geometry_primary(v)}
+    geom_sig_ids = {int(k) for k, v in gp_features.items() if _is_sig(v, "geometry_prauc_padj")}
 
     # Load coverage (sparsity)
     coverage_data = json.load(open(data_dir / "survey_coverage.json"))
@@ -95,15 +97,15 @@ def build_nmpfam_case_study(data_dir: Path) -> dict:
     # Load global max activations
     global_max = np.load(data_dir / "feature_max_activations.npy")
 
-    # Triple intersection
-    triple = sparse_ids & geom_primary_ids & nmpfam_fids
-    print(f"Triple intersection: {len(triple)} features")
+    # Triple intersection (sparse ∩ geom-significant ∩ nmpfam-hit)
+    triple = sparse_ids & geom_sig_ids & nmpfam_fids
+    print(f"Triple intersection (sparse + geom q<0.05 + NMPFam): {len(triple)} features")
 
     # Also collect broader stats for context
-    gp_with_nmpfam = geom_primary_ids & nmpfam_fids
+    gp_with_nmpfam = geom_sig_ids & nmpfam_fids
     sparse_with_nmpfam = sparse_ids & nmpfam_fids
 
-    # Now load ONLY the enrichment JSONs we need (triple + broader GP)
+    # Now load ONLY the enrichment JSONs we need (triple + geom-sig ∩ nmpfam)
     fids_to_load = triple | gp_with_nmpfam
     nmpfam_data = {}
     for fid in fids_to_load:
@@ -112,9 +114,20 @@ def build_nmpfam_case_study(data_dir: Path) -> dict:
             nmpfam_data[fid] = json.load(open(fp))
     print(f"Loaded {len(nmpfam_data)} enrichment JSONs (of {len(nmpfam_fids)} total)")
 
+    def _hit_norm_act(nd: dict, hit: dict) -> float:
+        gmax = nd.get("feature_global_max") or 0.0
+        if gmax <= 0:
+            return 0.0
+        return float(hit.get("max_sae_activation", 0.0)) / float(gmax)
+
+    def _top_norm(fid: int) -> float:
+        nd = nmpfam_data[fid]
+        hits = nd.get("nmpfam_hits") or []
+        return _hit_norm_act(nd, hits[0]) if hits else 0.0
+
     # Build per-feature entries for the triple intersection
     feature_entries = []
-    for fid in sorted(triple, key=lambda f: nmpfam_data[f]["nmpfam_hits"][0]["normalized_activation"], reverse=True):
+    for fid in sorted(triple, key=_top_norm, reverse=True):
         nd = nmpfam_data[fid]
         gp = gp_features[str(fid)]
         cov = coverage_data.get(str(fid), {})
@@ -153,16 +166,17 @@ def build_nmpfam_case_study(data_dir: Path) -> dict:
         hits_summary = []
         for hit in nd["nmpfam_hits"][:10]:
             meta = families_meta.get(hit["family_id"], {})
+            max_act = float(hit.get("max_sae_activation", 0.0))
             entry = {
                 "family_id": hit["family_id"],
                 "category": hit.get("category", meta.get("Category", "Unknown")),
                 "sequence_count": hit.get("sequence_count", meta.get("SequenceCount", 0)),
-                "max_activation": hit["max_activation"],
-                "normalized_activation": hit["normalized_activation"],
-                "sequence_length": hit.get("sequence_length", 0),
+                "max_activation": max_act,
+                "normalized_activation": _hit_norm_act(nd, hit),
+                "sequence_length": hit.get("n_residues", 0),
                 "nmpfams_url": hit.get("nmpfams_url", f"https://bib.fleming.gr/NMPFamsDB/family/{hit['family_id']}"),
-                "has_per_residue": hit.get("per_residue_activations") is not None,
-                "has_geometry": "geometry" in hit,
+                "has_per_residue": hit.get("sae_activation_profile") is not None,
+                "has_geometry": hit.get("geom_prob_profile") is not None,
             }
             hits_summary.append(entry)
 
@@ -172,9 +186,11 @@ def build_nmpfam_case_study(data_dir: Path) -> dict:
             "coverage_pct": cov.get("pct_proteins_activated", 0),
             "n_clusters_activated": cov.get("n_clusters_activated", 0),
             "composite_score": gp.get("composite_score", 0),
-            "is_geometry_primary": True,
+            "is_geometry_primary": len(_other_sig_methods(gp)) == 0,
+            "geometry_padj": gp.get("geometry_prauc_padj"),
+            "other_sig_methods": _other_sig_methods(gp),
             "n_nmpfam_hits": nd["n_nmpfam_hits"],
-            "activation_threshold": nd["activation_threshold"],
+            "activation_threshold": nd.get("activation_threshold_sae", nd.get("activation_threshold", 0)),
             "top_nmpfam_norm_act": hits_summary[0]["normalized_activation"] if hits_summary else 0,
             "geometry": geom_info,
             "interpro": interpro_info,
@@ -183,16 +199,19 @@ def build_nmpfam_case_study(data_dir: Path) -> dict:
 
     # Also build broader context entries (geometry-primary + NMPFams, but not necessarily sparse)
     broader_entries = []
-    for fid in sorted(gp_with_nmpfam - triple, key=lambda f: nmpfam_data[f]["nmpfam_hits"][0]["normalized_activation"], reverse=True):
+    for fid in sorted(gp_with_nmpfam - triple, key=_top_norm, reverse=True):
         nd = nmpfam_data[fid]
         gp = gp_features[str(fid)]
         cov = coverage_data.get(str(fid), {})
+        hits = nd.get("nmpfam_hits") or []
         broader_entries.append({
             "feature_id": fid,
             "coverage_pct": cov.get("pct_proteins_activated", 0),
             "composite_score": gp.get("composite_score", 0),
+            "geometry_padj": gp.get("geometry_prauc_padj"),
+            "other_sig_methods": _other_sig_methods(gp),
             "n_nmpfam_hits": nd["n_nmpfam_hits"],
-            "top_nmpfam_norm_act": nd["nmpfam_hits"][0]["normalized_activation"] if nd["nmpfam_hits"] else 0,
+            "top_nmpfam_norm_act": _hit_norm_act(nd, hits[0]) if hits else 0,
         })
 
     # NMPFams sample statistics
@@ -206,7 +225,7 @@ def build_nmpfam_case_study(data_dir: Path) -> dict:
     all_norm_acts = []
     for fid, nd in nmpfam_data.items():
         for hit in nd["nmpfam_hits"]:
-            all_norm_acts.append(hit["normalized_activation"])
+            all_norm_acts.append(_hit_norm_act(nd, hit))
 
     result = {
         "summary": {
@@ -214,8 +233,10 @@ def build_nmpfam_case_study(data_dir: Path) -> dict:
             "n_families_by_category": categories,
             "n_features_total": len(global_max),
             "n_features_with_nmpfam_hits": len(nmpfam_fids),
-            "n_geometry_primary": len(geom_primary_ids),
+            "n_geometry_primary": len(geom_sig_ids),
             "n_geometry_primary_with_nmpfam": len(gp_with_nmpfam),
+            "n_geometry_significant": len(geom_sig_ids),
+            "n_geometry_significant_with_nmpfam": len(gp_with_nmpfam),
             "n_sparse": len(sparse_ids),
             "n_sparse_with_nmpfam": len(sparse_with_nmpfam),
             "n_triple_intersection": len(triple),

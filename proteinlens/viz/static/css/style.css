@@ -821,3 +821,215 @@ dialog.method-info p {
         grid-template-columns: 1fr;
     }
 }
+
+/* ===================================================================
+   NMPFams "Sun" case study — annotation-transfer page
+   =================================================================== */
+
+.sun-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+    gap: 1rem;
+    margin-top: 0.5rem;
+}
+
+.sun-card {
+    margin: 0;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 8px;
+    background: var(--pico-card-background-color);
+}
+
+.sun-card-hdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.4rem;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+    padding-bottom: 0.4rem;
+}
+
+.sun-card-body .blurb {
+    font-size: 0.9rem;
+    margin: 0.4rem 0 0.6rem 0;
+    line-height: 1.45;
+}
+
+.evidence-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+}
+
+.evidence-row {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 0.6rem;
+    padding: 0.25rem 0;
+}
+
+.evi-label {
+    font-weight: 600;
+    color: var(--pico-muted-color);
+    font-size: 0.8rem;
+}
+
+.evi-value code {
+    font-size: 0.78rem;
+    background: #f2f5fa;
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+.hits-table {
+    width: 100%;
+    font-size: 0.8rem;
+    margin-top: 0.4rem;
+}
+
+.hits-table th, .hits-table td {
+    padding: 0.22rem 0.35rem;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+    text-align: left;
+}
+
+.card-footer {
+    margin-top: 0.6rem;
+    padding-top: 0.4rem;
+    border-top: 1px dashed var(--pico-muted-border-color);
+    font-size: 0.78rem;
+    color: var(--pico-muted-color);
+}
+
+.chip {
+    display: inline-block;
+    font-size: 0.72rem;
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: #eef2f7;
+    color: #334155;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.chip-fid {
+    background: #1f2937;
+    color: #fff;
+}
+
+.chip-fid a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.chip-section {
+    background: #fde68a;
+    color: #78350f;
+}
+
+.cite-chip {
+    display: inline-block;
+    font-size: 0.7rem;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: #e0e7ff;
+    color: #3730a3;
+    text-decoration: none;
+    margin-right: 2px;
+}
+
+.cite-chip:hover {
+    background: #c7d2fe;
+}
+
+.overview-table {
+    font-size: 0.82rem;
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.overview-table th, .overview-table td {
+    padding: 0.35rem 0.5rem;
+    vertical-align: top;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+    text-align: left;
+}
+
+.overview-table code {
+    font-size: 0.76rem;
+    background: #f2f5fa;
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+.ref-list {
+    font-size: 0.85rem;
+    padding-left: 1.4rem;
+}
+
+.ref-list li {
+    margin-bottom: 0.35rem;
+}
+
+.ref-list .ref-key {
+    font-family: monospace;
+    color: #3730a3;
+    margin-right: 0.3rem;
+}
+
+.sun-pointer {
+    padding: 0.85rem 1rem;
+    border: 1px solid #fcd34d;
+    border-left: 4px solid #f59e0b;
+    border-radius: 6px;
+    background: #fffbeb;
+    margin: 0.75rem 0 1.25rem 0;
+}
+
+.sun-pointer a {
+    font-weight: 600;
+}
+
+/* Tier chips for q-value confidence */
+.tier-chip {
+    display: inline-block;
+    font-size: 0.72rem;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-weight: 700;
+    margin-right: 3px;
+    color: #fff;
+}
+.tier-A { background: #166534; }   /* deep green */
+.tier-B { background: #65a30d; }   /* lime    */
+.tier-C { background: #ca8a04; }   /* amber   */
+.tier-D { background: #9ca3af; color: #1f2937; } /* grey */
+
+.proposed-label {
+    font-size: 0.82rem;
+    max-width: 320px;
+}
+.tier-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin: 0.4rem 0 0.6rem 0;
+    font-size: 0.85rem;
+}
+.tier-legend-item {
+    display: flex;
+    gap: 0.4rem;
+    align-items: baseline;
+}
+
+@media (max-width: 640px) {
+    .evidence-row {
+        grid-template-columns: 1fr;
+    }
+}
+

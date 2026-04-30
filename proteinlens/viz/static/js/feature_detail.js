@@ -290,7 +290,7 @@ function renderNmpfamHits(container, nmpfamData, featureMaxAct) {
     container.innerHTML = "";
 
     const hits = nmpfamData.nmpfam_hits || [];
-    const threshold = nmpfamData.activation_threshold || 0;
+    const threshold = nmpfamData.activation_threshold_sae ?? nmpfamData.activation_threshold ?? 0;
 
     // Summary line
     const summary = document.createElement("p");
@@ -301,24 +301,28 @@ function renderNmpfamHits(container, nmpfamData, featureMaxAct) {
         const entry = document.createElement("div");
         entry.className = "protein-entry";
 
+        const maxAct = hit.max_sae_activation ?? hit.max_activation;
+        const nRes = hit.n_residues ?? hit.sequence_length ?? hit.sequence?.length ?? "?";
+        const acts = hit.sae_activation_profile ?? hit.per_residue_activations;
+
         // Label with family info and link
         const label = document.createElement("div");
         label.className = "protein-label";
         label.innerHTML = `<a href="${hit.nmpfams_url}" target="_blank">${hit.family_id}</a> · `
-            + `max: ${fmtVal(hit.max_activation, 4)} (${fmtVal(hit.normalized_activation * 100, 1)}% of global max) · `
-            + `${hit.sequence_length || "?"} residues · `
+            + `max: ${fmtVal(maxAct, 4)} · `
+            + `${nRes} residues · `
             + `<span style="opacity:0.7">${hit.category} · ${hit.sequence_count} members</span>`;
         entry.appendChild(label);
 
         // Sequence strip with activation coloring
-        if (hit.per_residue_activations && hit.sequence) {
+        if (acts && hit.sequence) {
             // Text sequence
             createTextSequence(entry, {
                 sequence: hit.sequence,
-                activations: hit.per_residue_activations,
+                activations: acts,
                 maxActivation: featureMaxAct,
                 accession: hit.family_id,
-                maxAct: hit.max_activation,
+                maxAct: maxAct,
                 showLabel: false,
             });
 
@@ -327,23 +331,21 @@ function renderNmpfamHits(container, nmpfamData, featureMaxAct) {
             entry.appendChild(stripDiv);
             createSequenceStrip(stripDiv, {
                 sequence: hit.sequence,
-                activations: hit.per_residue_activations,
+                activations: acts,
                 maxActivation: featureMaxAct,
                 accession: hit.family_id,
             });
         }
 
-        // 3D viewer from NMPFams PDB proxy
-        if (hit.pdb_available) {
-            const viewerDiv = document.createElement("div");
-            viewerDiv.className = "viewer-container";
-            entry.appendChild(viewerDiv);
-            lazyLoadNmpfamViewer(
-                viewerDiv, hit.family_id,
-                hit.per_residue_activations || [],
-                featureMaxAct
-            );
-        }
+        // 3D viewer from NMPFams PDB proxy (lazy; shows "No structure" if 404)
+        const viewerDiv = document.createElement("div");
+        viewerDiv.className = "viewer-container";
+        entry.appendChild(viewerDiv);
+        lazyLoadNmpfamViewer(
+            viewerDiv, hit.family_id,
+            acts || [],
+            featureMaxAct
+        );
 
         container.appendChild(entry);
     }

@@ -1214,7 +1214,12 @@ def _worker(fid: int) -> tuple[int, str, dict | None]:
         if result is None:
             return fid, "skipped", None
         out_path = s["perm_dir"] / f"{fid:04d}.json"
-        out_path.write_text(json.dumps(result, indent=2))
+        # Atomic write: tmp + rename. If the worker is SIGKILL'd (OOM, eviction)
+        # mid-write, the visible file is either fully-written or absent —
+        # never a 0-byte stub that the resume glob would mistake for "done".
+        tmp_path = out_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(result, indent=2))
+        tmp_path.rename(out_path)
         # Return lightweight summary (p-values + metadata) instead of full
         # result with null distributions to reduce pickle overhead.
         summary = {
@@ -1310,14 +1315,24 @@ def main() -> None:
     n_features = len(feat_max_arr)
     all_fids = [i for i in range(n_features) if feat_max_arr[i] > 0]
 
-    # Check for completed features (resume) — single glob
+    # Check for completed features (resume) — single glob.
+    # Skip 0-byte stubs left by SIGKILL'd workers in older runs (pre atomic
+    # write fix). Without this, those stubs are treated as "done" and the
+    # corresponding features are never recomputed; downstream consumers then
+    # JSONDecodeError on empty input.
     done_fids = set()
+    stale_stubs = 0
     for fpath in perm_dir.glob("*.json"):
         try:
+            if fpath.stat().st_size == 0:
+                stale_stubs += 1
+                continue
             fid = int(fpath.stem)
             done_fids.add(fid)
-        except ValueError:
+        except (ValueError, OSError):
             pass
+    if stale_stubs:
+        print(f"  Skipping {stale_stubs} zero-byte stub(s) — will recompute")
 
     todo = [fid for fid in all_fids if fid not in done_fids]
 

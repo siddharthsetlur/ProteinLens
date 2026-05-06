@@ -154,12 +154,13 @@ def real_protein_dir() -> Path | None:
         p = Path(env)
         if p.is_dir():
             return p
+    repo_root = Path(__file__).resolve().parents[2]
     candidates = [
-        Path("/home/s2721407/Desktop/ProteinLens/feature_data_test_500"),
-        Path("/home/s2721407/Desktop/ProteinLens/feature_data_test_20"),
-        Path("/home/s2721407/Desktop/ProteinLens/trained_models/layer_4/frosty-sweep-15/analysis"),
-        Path("/home/s2721407/Desktop/ProteinLens/trained_models/layer_2/firm-sweep-3/analysis"),
-        Path("/home/s2721407/Desktop/ProteinLens/trained_models/layer_6/major-sweep-15/analysis"),
+        repo_root / "feature_data_test_500",
+        repo_root / "feature_data_test_20",
+        repo_root / "trained_models" / "layer_4" / "frosty-sweep-15" / "analysis",
+        repo_root / "trained_models" / "layer_2" / "firm-sweep-3" / "analysis",
+        repo_root / "trained_models" / "layer_6" / "major-sweep-15" / "analysis",
     ]
     for c in candidates:
         if (c / "residue_activations").is_dir() and (c / "geometry_residue_profiles").is_dir():
@@ -176,10 +177,11 @@ def real_analysis_dir() -> Path | None:
         p = Path(env)
         if p.is_dir() and (p / "geometry_classifiers").is_dir():
             return p
+    repo_root = Path(__file__).resolve().parents[2]
     candidates = [
-        Path("/home/s2721407/Desktop/ProteinLens/trained_models/layer_4/frosty-sweep-15/analysis"),
-        Path("/home/s2721407/Desktop/ProteinLens/trained_models/layer_2/firm-sweep-3/analysis"),
-        Path("/home/s2721407/Desktop/ProteinLens/trained_models/layer_6/major-sweep-15/analysis"),
+        repo_root / "trained_models" / "layer_4" / "frosty-sweep-15" / "analysis",
+        repo_root / "trained_models" / "layer_2" / "firm-sweep-3" / "analysis",
+        repo_root / "trained_models" / "layer_6" / "major-sweep-15" / "analysis",
     ]
     for c in candidates:
         if c.is_dir() and (c / "geometry_classifiers").is_dir():

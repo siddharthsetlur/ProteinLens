@@ -177,11 +177,4 @@ docs/                           paper-companion docs
 
 ## Citation
 
-```bibtex
-@article{setlur2026proteinlens,
-  title={ProteinLens: ...},
-  author={Setlur, Siddharth and ...},
-  journal={...},
-  year={2026}
-}
-```
+Citation will be added after review.

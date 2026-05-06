@@ -10,11 +10,18 @@ Bins are aligned with pipeline thresholds:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
 
-ROOT = Path("/home/s2721407/Desktop/ProteinLens/trained_models")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(
+    os.environ.get(
+        "PROTEINLENS_TRAINED_MODELS",
+        str(REPO_ROOT / "trained_models"),
+    )
+)
 LAYERS = [
     ("layer_2", "firm-sweep-3"),
     ("layer_4", "frosty-sweep-15"),
@@ -75,7 +82,7 @@ def main() -> None:
         print(f"  {layer} (n_eval={n_eval}): mean={prauc.mean():.4f}  "
               f"median={np.median(prauc):.4f}  max={prauc.max():.4f}")
 
-    out_csv = Path("/home/s2721407/Desktop/ProteinLens/scripts/geom_pr_auc_bin_table.csv")
+    out_csv = Path(__file__).resolve().parent / "geom_pr_auc_bin_table.csv"
     with out_csv.open("w") as f:
         f.write(
             "layer,sweep,sae_size,n_evaluated,n_dead,"

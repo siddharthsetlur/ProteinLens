@@ -15,7 +15,7 @@ Replace `<REGISTRY>` with your Docker registry and `<NAMESPACE>` with your Kuber
 Build from the **project root** (not the `k8s/` directory), using the pipeline-specific Dockerfile:
 
 ```bash
-cd /home/s2721407/Desktop/ProteinLens
+cd <PROJECT_ROOT>
 docker build -t <REGISTRY>/proteinlens-pipeline:latest -f k8s/Dockerfile.pipeline .
 docker push <REGISTRY>/proteinlens-pipeline:latest
 ```
@@ -52,8 +52,8 @@ Note the **PORTNUMBER** from the output.
 
 ```bash
 rsync -rvP \
-  -e 'ssh -J ssetlur-infk8s@eidf-gateway.epcc.ed.ac.uk,ssetlur-infk8s@10.24.5.121 -p PORTNUMBER' \
-  /home/s2721407/Desktop/ProteinLens/trained_models/fiery-sweep/ \
+  -e 'ssh -J <USER>@<GATEWAY_HOST>,<USER>@<INTERNAL_HOST> -p PORTNUMBER' \
+  <PROJECT_ROOT>/trained_models/fiery-sweep/ \
   root@localhost:/data/trained_models/fiery-sweep/
 ```
 
@@ -109,9 +109,9 @@ Note the **PORTNUMBER** from the output.
 
 ```bash
 rsync -rvP \
-  -e 'ssh -J ssetlur-infk8s@eidf-gateway.epcc.ed.ac.uk,ssetlur-infk8s@10.24.5.121 -p PORTNUMBER' \
+  -e 'ssh -J <USER>@<GATEWAY_HOST>,<USER>@<INTERNAL_HOST> -p PORTNUMBER' \
   root@localhost:/data/feature_data/ \
-  /home/s2721407/Desktop/ProteinLens/feature_data_cluster/
+  <PROJECT_ROOT>/feature_data_cluster/
 ```
 
 ---

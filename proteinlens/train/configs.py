@@ -10,8 +10,7 @@ from proteinlens.train.checkpoint_manager import CheckpointConfig
 from proteinlens.train.data_loader import DataloaderConfig
 from proteinlens.train.evaluation import EvaluationConfig
 from proteinlens.train.trainers.base_trainer import SAETrainerConfig
-from proteinlens.train.trainers.relu import ReLUTrainerConfig  
-from proteinlens.train.trainers.jump_relu import JumpReLUTrainerConfig
+from proteinlens.train.trainers.relu import ReLUTrainerConfig
 from proteinlens.train.trainers.matryoshka_batch_top_k import MatryoshkaBatchTopKTrainerConfig
 from proteinlens.train.wandb_manager import WandbConfig
 import torch
@@ -21,10 +20,8 @@ def _get_trainer_config_class(trainer_data: dict) -> type:
     # Check for unique fields that identify each trainer type
     if 'l1_penalty' in trainer_data:
         return ReLUTrainerConfig
-    elif 'bandwidth' in trainer_data:
-        return JumpReLUTrainerConfig
     elif 'group_fractions' in trainer_data:
-        return MatryoshkaBatchTopKTrainerConfig  
+        return MatryoshkaBatchTopKTrainerConfig
     else:
         # Default to ReLU if we can't determine the type
         print("Warning: Could not determine trainer type, defaulting to ReLUTrainerConfig")

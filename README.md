@@ -1,5 +1,13 @@
 # ProteinLens
 
+> **Acknowledgement.** The SAE training portion of this codebase
+> (`proteinlens/sae/`, `proteinlens/train/`, and the top-level
+> `train_basic_sae.py` / `train_matry_sae.py` / `relu_sweep.py` /
+> `matryoshka_sweep.py` entrypoints) is **heavily based on
+> [InterPLM](https://github.com/ElanaPearl/interPLM)** by Elana Simon
+> and James Zou. Please cite their work if you use this training
+> stack.
+
 Code accompanying the ProteinLens paper. The repo supports three workflows:
 
 1. **Train** Sparse Autoencoders (SAEs) on ESM2 activations.

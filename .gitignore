@@ -2,7 +2,10 @@
 # Heavy artifacts — distributed via HF/Zenodo, not git
 # ─────────────────────────────────────────────────────────────────────────────
 trained_models/
-analysis/                                # symlinks into trained_models/layer_*/{run}/analysis/
+# symlinks into trained_models/layer_*/{run}/analysis/, plus pulled cluster
+# artefacts (analysis/esm35m_l6/). Git only honours `#` at the start of a
+# line, so this comment must not sit on the pattern itself.
+analysis/
 feature_data_test_20/
 feature_data_test_500/
 feature_data_cluster/

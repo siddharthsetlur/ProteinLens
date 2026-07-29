@@ -1,0 +1,6 @@
+# Packages required by the feature pipeline that are NOT in environment.yml
+# (environment.yml handles torch, transformers, biopython, scikit-learn, scipy, etc.)
+
+requests>=2.31.0
+tqdm>=4.66.0
+numba>=0.59.0

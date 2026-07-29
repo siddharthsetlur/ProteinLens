@@ -1,0 +1,7 @@
+sudo docker build -f k8s/Dockerfile.pipeline -t <REGISTRY>/proteinlens-pipeline:prelim .
+
+sudo docker push <REGISTRY>/proteinlens-pipeline:prelim
+
+kubectl create -f k8s/job-esm35m-prelim-prauc.yaml
+
+kubectl logs -f -l app=proteinlens-esm35m-prelim-prauc

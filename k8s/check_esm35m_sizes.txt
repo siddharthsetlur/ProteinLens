@@ -1,5 +1,0 @@
-kubectl exec POD -- du -sh /data/models/sweeps/layer_6/cgvpk5vp /data/feature_data_esm35m_l6
-
-kubectl exec POD -- du -sh /data/feature_data_esm35m_l6/*
-
-kubectl exec POD -- df -h /data

@@ -36,10 +36,13 @@ nohup.out
 *.npy
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cluster job manifests are templated per-run and never committed
-# (Dockerfile.pipeline and INSTRUCTIONS.md remain tracked.)
+# Cluster job manifests and per-run runbooks are local operational notes and
+# are never committed. (Dockerfile.pipeline and INSTRUCTIONS.md remain tracked
+# as the generic, placeholder-only reference.)
 # ─────────────────────────────────────────────────────────────────────────────
 k8s/*.yaml
+k8s/CLUSTER_INSTRUCTIONS_*.md
+k8s/*.txt
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Other YAML configs are local — only the canonical training sweep

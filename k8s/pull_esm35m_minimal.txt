@@ -1,7 +1,0 @@
-mkdir -p analysis/esm35m_l6
-
-rsync -rvP -e 'ssh -J <USER>@<GATEWAY_HOST>,<USER>@<INTERNAL_HOST> -p PORTNUMBER' --include='feature_max_activations.npy' --include='geometry_primary_analysis.json' --include='paper_tables.txt' --include='paper_tables.json' --include='permutation_null/***' --exclude='*' root@localhost:/data/feature_data_esm35m_l6/ analysis/esm35m_l6/
-
-conda run -n interplm --no-capture-output python scripts/paper_tables.py --analysis "ESM2-35M Layer 6=analysis/esm35m_l6"
-
-rsync -rvP -e 'ssh -J <USER>@<GATEWAY_HOST>,<USER>@<INTERNAL_HOST> -p PORTNUMBER' --include='survey_coverage.json' --include='interpro_enrichment/summary.json' --include='motif_pwm_enrichment/summary.json' --include='position_enrichment/summary.json' --include='geometry_enrichment/summary.json' --include='*/' --exclude='*' root@localhost:/data/feature_data_esm35m_l6/ analysis/esm35m_l6/

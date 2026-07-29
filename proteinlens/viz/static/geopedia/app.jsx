@@ -23,18 +23,23 @@ function parseInitialView() {
       if (!Number.isNaN(fid)) return { kind: "feature", layer: null, featureId: fid };
     }
   }
-  // /case/<id>/<layer>[/family/<source>/<code>]
+  // /case/<id>/<layer>[/family/<source>/<code> | /feature/<fid>]
   if (parts[0] === "case" && parts[1] && parts[2]) {
     const layer = parseInt(parts[2], 10);
     if (!Number.isNaN(layer)) {
-      // Family detail under granularity: /case/granularity/<layer>/family/<source>/<code>
+      // Family detail under granularity
       if (parts[1] === "granularity" && parts[3] === "family" && parts[4] && parts[5]) {
         return {
-          kind: "casestudy",
-          id: "granularity",
-          layer,
+          kind: "casestudy", id: "granularity", layer,
           family: { source: parts[4], code: decodeURIComponent(parts[5]) },
         };
+      }
+      // Feature detail under metagenomic transfer (Figure 4-style side-by-side)
+      if (parts[1] === "metagenomic" && parts[3] === "feature" && parts[4]) {
+        const fid = parseInt(parts[4], 10);
+        if (!Number.isNaN(fid)) {
+          return { kind: "casestudy", id: "metagenomic", layer, featureId: fid };
+        }
       }
       return { kind: "casestudy", id: parts[1], layer };
     }
@@ -50,6 +55,9 @@ function pushUrl(view) {
     if (view.kind === "casestudy") {
       if (view.family) {
         return `/case/${view.id}/${view.layer}/family/${view.family.source}/${encodeURIComponent(view.family.code)}`;
+      }
+      if (view.featureId != null) {
+        return `/case/${view.id}/${view.layer}/feature/${view.featureId}`;
       }
       return `/case/${view.id}/${view.layer}`;
     }
@@ -100,29 +108,37 @@ function App() {
           <span style={{color:'var(--ink)'}}>f/{view.featureId}</span>
         </React.Fragment>
       )}
-      {view.kind === "casestudy" && (
-        <React.Fragment>
-          <span className="sep">/</span>
-          {view.family ? (
-            <a onClick={() => setView({ kind: "casestudy", id: view.id, layer: view.layer })}>
-              {view.id === "granularity" ? "case 02" : view.id}
-            </a>
-          ) : (
-            <span style={{color:'var(--ink)'}}>
-              {view.id === "geom-fills-db" ? "case 01"
-              : view.id === "granularity"  ? "case 02"
-              : view.id === "metagenomic"  ? "case 03"
-              : view.id}
-            </span>
-          )}
-          {view.family && (
-            <React.Fragment>
-              <span className="sep">/</span>
-              <span style={{color:'var(--ink)'}}>{view.family.code}</span>
-            </React.Fragment>
-          )}
-        </React.Fragment>
-      )}
+      {view.kind === "casestudy" && (() => {
+        const sublabel = view.id === "geom-fills-db" ? "case 01"
+                       : view.id === "granularity"  ? "case 02"
+                       : view.id === "metagenomic"  ? "case 03"
+                       : view.id;
+        const isLeaf = !view.family && view.featureId == null;
+        return (
+          <React.Fragment>
+            <span className="sep">/</span>
+            {isLeaf ? (
+              <span style={{ color: 'var(--ink)' }}>{sublabel}</span>
+            ) : (
+              <a onClick={() => setView({ kind: "casestudy", id: view.id, layer: view.layer })}>
+                {sublabel}
+              </a>
+            )}
+            {view.family && (
+              <React.Fragment>
+                <span className="sep">/</span>
+                <span style={{ color: 'var(--ink)' }}>{view.family.code}</span>
+              </React.Fragment>
+            )}
+            {view.featureId != null && (
+              <React.Fragment>
+                <span className="sep">/</span>
+                <span style={{ color: 'var(--ink)' }}>f/{view.featureId}</span>
+              </React.Fragment>
+            )}
+          </React.Fragment>
+        );
+      })()}
     </div>
   );
 
@@ -233,11 +249,19 @@ function App() {
           onPickFeature={(layer, featureId) => setView({ kind: "feature", layer, featureId })}
         />
       )}
-      {view.kind === "casestudy" && view.id === "metagenomic" && (
+      {view.kind === "casestudy" && view.id === "metagenomic" && view.featureId == null && (
         <CaseStudyMetagenomic
           layer={view.layer}
-          onPickFeature={(layer, featureId) => setView({ kind: "feature", layer, featureId })}
+          onPickFeature={(featureId) => setView({ kind: "casestudy", id: "metagenomic", layer: view.layer, featureId })}
           layersAvailable={layersAvailable}
+        />
+      )}
+      {view.kind === "casestudy" && view.id === "metagenomic" && view.featureId != null && (
+        <CaseStudyMetagenomicDetail
+          layer={view.layer}
+          featureId={view.featureId}
+          onBack={() => setView({ kind: "casestudy", id: "metagenomic", layer: view.layer })}
+          onOpenFeaturePage={(featureId) => setView({ kind: "feature", layer: view.layer, featureId })}
         />
       )}
 
@@ -251,4 +275,41 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+// Error boundary so a runtime crash inside a view doesn't blank the screen.
+// Without this, React 18 unmounts the whole tree on an uncaught error and
+// you just see an empty page with no clue why.
+class RootErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null, info: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    console.error("GeoPedia crash:", error, info);
+    this.setState({ info });
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 32, fontFamily: 'IBM Plex Mono, monospace', color: '#1c1a17', background: '#faf7f2', minHeight: '100vh' }}>
+          <h2 style={{ fontFamily: 'IBM Plex Serif, serif', fontWeight: 500 }}>
+            Something crashed
+          </h2>
+          <pre style={{ background: '#f3eee5', padding: 14, fontSize: 12, whiteSpace: 'pre-wrap', borderLeft: '3px solid #C9362D' }}>
+            {String(this.state.error?.stack || this.state.error)}
+          </pre>
+          {this.state.info?.componentStack && (
+            <pre style={{ background: '#f3eee5', padding: 14, fontSize: 11, color: '#4a4640', marginTop: 12 }}>
+              {this.state.info.componentStack}
+            </pre>
+          )}
+          <p style={{ marginTop: 20 }}>
+            <a href="/" style={{ color: '#1c1a17' }}>← back to landing</a>
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <RootErrorBoundary><App /></RootErrorBoundary>
+);

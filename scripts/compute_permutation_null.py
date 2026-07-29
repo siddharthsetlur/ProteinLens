@@ -1266,6 +1266,20 @@ def main() -> None:
         help="Log progress and summary statistics to Weights & Biases",
     )
     parser.add_argument(
+        "--num-shards", type=int, default=1,
+        help=(
+            "Split the feature list across this many concurrent workers "
+            "(default: 1, no sharding). Shard s handles features where "
+            "feature_id %% num_shards == s. Per-feature seeds are "
+            "feature-id-derived, so a sharded run reproduces an unsharded "
+            "one exactly."
+        ),
+    )
+    parser.add_argument(
+        "--shard", type=int, default=0,
+        help="Index of this shard, in [0, num-shards).",
+    )
+    parser.add_argument(
         "--include-pwm", action="store_true",
         help=(
             "Also compute a null distribution for the PWM motif F1 from "
@@ -1290,19 +1304,31 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.num_shards < 1:
+        parser.error("--num-shards must be >= 1")
+    if not 0 <= args.shard < args.num_shards:
+        parser.error(
+            f"--shard must be in [0, {args.num_shards}); got {args.shard}"
+        )
+
     # ── Optional W&B init ──
     wb_run = None
     if args.wandb:
         import wandb
+        shard_suffix = (
+            f"-shard{args.shard}of{args.num_shards}" if args.num_shards > 1 else ""
+        )
         wb_run = wandb.init(
             project="proteinlens-pipeline",
-            name="permutation-null",
+            name=f"permutation-null{shard_suffix}",
             tags=["permutation", "null-distribution"],
             config={
                 "n_permutations": args.n_permutations,
                 "seed": args.seed,
                 "workers": args.workers,
                 "data_dir": str(args.data_dir),
+                "shard": args.shard,
+                "num_shards": args.num_shards,
             },
         )
 
@@ -1335,6 +1361,22 @@ def main() -> None:
         print(f"  Skipping {stale_stubs} zero-byte stub(s) — will recompute")
 
     todo = [fid for fid in all_fids if fid not in done_fids]
+
+    # ── Shard across pods ──
+    # Feature ids are partitioned by ``fid % num_shards`` so several workers
+    # can share one data-dir without coordinating. The partition is on the
+    # feature id itself, not on a position in ``todo``, so it is stable
+    # under resume: a shard always owns exactly the same features whether it
+    # starts fresh or picks up after a restart. Each feature's RNG seed is
+    # ``seed + feature_id`` (see ``_process_feature``), so sharding does not
+    # perturb any feature's null distribution — the results are identical to
+    # a single-shard run.
+    if args.num_shards > 1:
+        todo = [fid for fid in todo if fid % args.num_shards == args.shard]
+        print(
+            f"  Shard {args.shard}/{args.num_shards}: "
+            f"{len(todo)} of this shard's features remain"
+        )
 
     # ── Pre-glob all directories once to avoid per-feature stat() calls ──
     print("Pre-globbing directories for cephfs I/O optimization...")

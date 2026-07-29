@@ -1151,4 +1151,11 @@ function MetagenomicEntry({ hit, feat, activationThreshold }) {
   );
 }
 
+// Helpers needed by case-study.jsx (the side-by-side detail viewer reuses the
+// same activation colouring + Plotly helper). Babel-standalone compiles each
+// <script type="text/babel"> block in its own scope, so anything cross-file
+// has to be attached to window explicitly.
+window.buildActivationColorMap = buildActivationColorMap;
+window.init3DViewerWithMap     = init3DViewerWithMap;
+
 window.FeatureView = FeatureView;

@@ -28,16 +28,21 @@ def main():
     INTERPLM_DATA = os.environ.get("INTERPLM_DATA", "data")
     MODEL_DIR = os.environ.get("MODEL_DIR", "models")
     LAYER = os.environ.get("LAYER", "4")
-    
+
+    # Model / embedding selection. Defaults reproduce the published ESM2-8M run
+    # exactly; override via env to train on another ESM2 size (e.g. 35M, layer 6).
+    EMBED_TAG = os.environ.get("EMBED_TAG", "esm2_8m")            # embeddings subdir
+    EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "320"))   # ESM2 hidden dim
+    ESM_MODEL_NAME = os.environ.get("ESM_MODEL_NAME", "esm2_t6_8M_UR50D")
+
     # Paths
-    EMBEDDINGS_DIR = Path(INTERPLM_DATA) / "training_embeddings" / "esm2_8m" / f"layer_{LAYER}"
+    EMBEDDINGS_DIR = Path(INTERPLM_DATA) / "training_embeddings" / EMBED_TAG / f"layer_{LAYER}"
     EVAL_SEQ_FILE = Path(INTERPLM_DATA) / "eval_sequences.txt"
     EVAL_FASTA = Path(INTERPLM_DATA) / "eval_shards" / "shard_0.fasta"
     
     # Use wandb run ID for unique save directory
     SAVE_DIR = Path(MODEL_DIR) / "sweeps" / f"layer_{LAYER}" / wandb.run.id
     
-    EMBEDDING_DIM = 320 # ESM2-8M layer dimension
     STEPS = 500000
     
     # ========== Sweep Hyperparameters ==========
@@ -85,7 +90,7 @@ def main():
     
     eval_cfg = ESMFidelityConfig(
         eval_seq_path=EVAL_SEQ_FILE if EVAL_SEQ_FILE.exists() else None,
-        model_name="esm2_t6_8M_UR50D",
+        model_name=ESM_MODEL_NAME,
         layer_idx=int(LAYER),
         eval_steps=100000,  # Evaluate during training (every 100k steps)
         eval_batch_size=256,

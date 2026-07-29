@@ -193,8 +193,17 @@ function CaseStudyMetagenomic({ layer, onPickFeature }) {
   );
   const [sortKey, setSortKey] = React.useState("max_prauc");
 
-  if (cs.loading) return <div className="container"><Loading what="case study 03 transfer summary" /></div>;
+  // ALL hooks must run on every render — keep useMemo above any early
+  // returns (React's rules-of-hooks: same hook order every render).
   const data = cs.data || {};
+  const t = data.table4 || {};
+  const features = data.features || [];
+  const sorted = React.useMemo(
+    () => [...features].sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0)),
+    [features, sortKey]
+  );
+
+  if (cs.loading) return <div className="container"><Loading what="case study 03 transfer summary" /></div>;
   if (data.__error) {
     return (
       <div className="container">
@@ -214,13 +223,6 @@ function CaseStudyMetagenomic({ layer, onPickFeature }) {
       </div>
     );
   }
-
-  const t = data.table4 || {};
-  const features = data.features || [];
-  const sorted = React.useMemo(
-    () => [...features].sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0)),
-    [features, sortKey]
-  );
 
   return (
     <div className="container">
@@ -273,7 +275,7 @@ function CaseStudyMetagenomic({ layer, onPickFeature }) {
 
       <CS3FeatureTable
         rows={sorted.slice(0, 200)}
-        onPickFeature={(fid) => onPickFeature(layer, fid)}
+        onPickFeature={onPickFeature}
       />
     </div>
   );
@@ -325,6 +327,17 @@ function CS3FeatureTable({ rows, onPickFeature }) {
   return (
     <div className="ftable-wrap" style={{ borderTop: '1px solid var(--rule)' }}>
       <table className="ftable">
+        {/* Explicit column widths — without these the inherited `max-width: 0`
+            on .ftable tbody td clips everything (e.g. f/337 → f/3). */}
+        <colgroup>
+          <col style={{ width: 88 }} />
+          <col style={{ width: 64 }} />
+          <col style={{ width: 64 }} />
+          <col style={{ width: 90 }} />
+          <col style={{ width: 110 }} />
+          <col style={{ width: 130 }} />
+          <col />
+        </colgroup>
         <thead>
           <tr>
             <th>ID</th>
@@ -718,7 +731,308 @@ function CS2SharedProteinOverlay({ features, geomDetails }) {
   );
 }
 
-window.CaseStudyGeometry      = CaseStudyGeometry;
-window.CaseStudyGranularity   = CaseStudyGranularity;
-window.CaseStudyMetagenomic   = CaseStudyMetagenomic;
-window.CaseStudyFamilyDetail  = CaseStudyFamilyDetail;
+// ────────────────────────────────────────────────────────────────────────
+// Case study 03 — per-feature side-by-side SwissProt vs NMPFam detail
+// (the visual idiom in the paper's Figure 4: a Swiss-Prot reference
+//  protein on the left, a metagenomic NMPFam family on the right, each
+//  with structure on top and per-residue activation + geom probability
+//  on the bottom). Picks the strongest hit by default and lets the user
+//  scrub to other strong hits via dropdowns.
+// ────────────────────────────────────────────────────────────────────────
+function CaseStudyMetagenomicDetail({ layer, featureId, onBack, onOpenFeaturePage }) {
+  const transfer = useFetch(() => API.nmpfamTransferSummary(layer).catch(() => null), [layer]);
+  const geom = useFetch(() => API.geometry(layer, featureId).catch(() => null), [layer, featureId]);
+  const nmp  = useFetch(() => API.nmpfam(layer, featureId).catch(() => null),   [layer, featureId]);
+  const sig  = useFetch(() => API.significance(layer, featureId).catch(() => null), [layer, featureId]);
+
+  if (transfer.loading || geom.loading || nmp.loading || sig.loading) {
+    return <div className="container"><Loading what={`f/${featureId} transfer detail`} /></div>;
+  }
+  const featAgg = (transfer.data?.features || []).find(f => f.feature_id === featureId);
+  const swissProteins = geom.data?.plot_data?.top_proteins || [];
+  const nmpHits = nmp.data?.nmpfam_hits || [];
+  // Prefer hits with definable PR-AUC, sorted by max PR-AUC. Fall back to
+  // raw enrichment order if our transfer summary doesn't have this feature.
+  const ranked = [...nmpHits].sort((a, b) => (b.max_geom_prob || 0) - (a.max_geom_prob || 0));
+
+  return (
+    <div className="container">
+      <div style={{ padding: '24px 0 12px' }}>
+        <a onClick={onBack} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-2)', cursor: 'pointer' }}>
+          ← back to feature list
+        </a>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginTop: 12 }}>
+          <span className="eyebrow">Case study · 03 · Layer {layer} · §4.3</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-3)' }}>f/{featureId}</span>
+        </div>
+        <h2 style={{ fontFamily: 'var(--serif)', fontSize: 36, fontWeight: 500, letterSpacing: '-0.02em', margin: '8px 0 12px', lineHeight: 1.05 }}>
+          Geometric annotation transfer · f/{featureId}
+        </h2>
+        <p style={{ fontFamily: 'var(--serif)', fontSize: 16, color: 'var(--ink-2)', maxWidth: '70ch', lineHeight: 1.5, fontStyle: 'italic' }}>
+          Side-by-side: a Swiss-Prot reference protein the SAE feature was originally trained on,
+          and an NMPFam metagenomic family it transfers to. Each panel shows the predicted
+          structure (coloured by activation intensity) and the per-residue SAE activation against
+          the Swiss-Prot-trained GBM's geometric probability.
+        </p>
+      </div>
+
+      {/* Per-feature transfer aggregates */}
+      {featAgg && (
+        <div className="cs-stat-tiles" style={{ margin: '16px 0 24px' }}>
+          <div className="cs-stat-tile">
+            <div className="lbl">Max PR-AUC</div>
+            <div className="v geom">{fmt(featAgg.max_prauc, 3)}</div>
+            <div className="sub">best metagenomic transfer</div>
+          </div>
+          <div className="cs-stat-tile">
+            <div className="lbl">Median PR-AUC</div>
+            <div className="v">{fmt(featAgg.median_prauc, 3)}</div>
+            <div className="sub">across {featAgg.n_hits.toLocaleString()} NMPFam hits ({featAgg.n_strong} strong)</div>
+          </div>
+          <div className="cs-stat-tile">
+            <div className="lbl">Sequences annotated</div>
+            <div className="v geom">{(featAgg.sequences_annotated || 0).toLocaleString()}</div>
+            <div className="sub">across families with PR-AUC &gt; 0.5</div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-2)' }}>
+        <a onClick={() => onOpenFeaturePage(featureId)}
+           style={{ color: 'var(--ink)', cursor: 'pointer' }}>
+          → open the full feature page (top SwissProt proteins + activation bins + all NMPFam hits)
+        </a>
+      </div>
+
+      {/* Side-by-side comparison */}
+      <CS3SideBySide
+        swissProteins={swissProteins}
+        nmpHits={ranked}
+        featureMaxAct={geom.data?.feature_max_activation}
+        nmpThreshold={nmp.data?.activation_threshold_sae}
+        feat={sig.data}
+      />
+    </div>
+  );
+}
+
+function CS3SideBySide({ swissProteins, nmpHits, featureMaxAct, nmpThreshold, feat }) {
+  const [swissIdx, setSwissIdx] = React.useState(0);
+  const [nmpIdx,   setNmpIdx]   = React.useState(0);
+
+  const swiss = swissProteins[swissIdx] || null;
+  const hit   = nmpHits[nmpIdx] || null;
+
+  if (!swiss && !hit) {
+    return (
+      <div className="panel" style={{ padding: 14, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-3)' }}>
+        No SwissProt top proteins or NMPFam hits available for this feature.
+      </div>
+    );
+  }
+
+  // The SwissProt threshold lives on the geometry payload (geometric_residue_level
+  // .activation_threshold) but we only need it to draw the truth band; the Swiss
+  // panel here just shows act vs geom_prob from the pre-computed plot_data, so
+  // we don't need to recompute confusion.
+  return (
+    <div className="cs3-sbs">
+      <CS3Panel
+        kind="swiss"
+        title="Swiss-Prot reference"
+        proteins={swissProteins}
+        idx={swissIdx}
+        setIdx={setSwissIdx}
+        protein={swiss}
+        featureMaxAct={featureMaxAct}
+        feat={feat}
+      />
+      <CS3Panel
+        kind="nmpfam"
+        title="NMPFam metagenomic family"
+        proteins={nmpHits}
+        idx={nmpIdx}
+        setIdx={setNmpIdx}
+        protein={hit}
+        featureMaxAct={featureMaxAct}
+        feat={feat}
+        nmpThreshold={nmpThreshold}
+      />
+    </div>
+  );
+}
+
+function CS3Panel({ kind, title, proteins, idx, setIdx, protein, featureMaxAct, feat, nmpThreshold }) {
+  const containerRef = React.useRef(null);
+  const plotRef = React.useRef(null);
+
+  // Lazy 3D viewer (white→orange activation intensity, same scheme used elsewhere).
+  React.useEffect(() => {
+    if (!protein || !containerRef.current) return;
+    const acc = kind === "swiss" ? protein.accession : protein.family_id;
+    if (!acc) return;
+    let observer, initialized = false;
+    const init = () => {
+      if (initialized || !containerRef.current) return;
+      initialized = true;
+      const acts = (kind === "swiss" ? protein.sae_activation_profile : protein.sae_activation_profile) || [];
+      const norm = featureMaxAct && featureMaxAct > 0
+        ? featureMaxAct
+        : Math.max(...acts, 0.001);
+      const colorMap = buildActivationColorMap(acts, norm);
+      const url = kind === "swiss"
+        ? `/api/pdb/${acc}`
+        : `/api/nmpfam-pdb/${acc}`;
+      init3DViewerWithMap(containerRef.current, url, colorMap);
+    };
+    if ("IntersectionObserver" in window) {
+      observer = new IntersectionObserver((entries) => {
+        for (const e of entries) if (e.isIntersecting) { init(); observer.disconnect(); break; }
+      }, { rootMargin: "120px" });
+      observer.observe(containerRef.current);
+    } else {
+      init();
+    }
+    return () => { if (observer) observer.disconnect(); };
+  }, [protein, kind, featureMaxAct]);
+
+  // Per-residue dual-axis line plot: SAE activation (orange, left axis) +
+  // geom probability (blue, right axis). Vertical band on residues above
+  // the SAE truth threshold so the reader sees where geometry should fire.
+  React.useEffect(() => {
+    if (!plotRef.current || !window.Plotly) return;
+    if (!protein) { plotRef.current.innerHTML = ''; return; }
+    const acts = protein.sae_activation_profile || [];
+    const probs = protein.geom_prob_profile || [];
+    const x = Array.from({ length: acts.length }, (_, i) => i + 1);
+    const traces = [
+      {
+        x, y: acts, name: 'SAE activation',
+        type: 'scatter', mode: 'lines',
+        line: { color: '#C97A00', width: 1.6 },
+        yaxis: 'y',
+      },
+      {
+        x, y: probs, name: 'Geom probability',
+        type: 'scatter', mode: 'lines',
+        line: { color: '#5C82BD', width: 1.6, dash: 'dash' },
+        yaxis: 'y2',
+      },
+    ];
+    // Truth band: residues above the SAE threshold get a faint orange shade.
+    let threshold = 0;
+    if (kind === 'swiss') {
+      // SwissProt threshold isn't in the geometry payload's plot_data,
+      // approximate with feature-level max × 0.5 (consistent with other places
+      // we don't have the exact value).
+      threshold = (featureMaxAct || 0) * 0.5;
+    } else {
+      threshold = nmpThreshold ?? 0;
+    }
+    const shapes = [];
+    if (threshold > 0) {
+      let bandStart = null;
+      for (let i = 0; i < acts.length; i++) {
+        const above = acts[i] > threshold;
+        if (above && bandStart === null) bandStart = i;
+        if ((!above || i === acts.length - 1) && bandStart !== null) {
+          const bandEnd = above ? i : i - 1;
+          shapes.push({
+            type: 'rect', xref: 'x', yref: 'paper',
+            x0: bandStart + 1, x1: bandEnd + 1,
+            y0: 0, y1: 1,
+            fillcolor: '#C97A00', opacity: 0.10, line: { width: 0 },
+          });
+          bandStart = null;
+        }
+      }
+    }
+    const layout = {
+      height: 220,
+      margin: { l: 50, r: 50, t: 10, b: 36 },
+      xaxis: { title: 'Residue', tickfont: { family: 'IBM Plex Mono', size: 10 } },
+      yaxis: { title: 'SAE act', side: 'left',
+               tickfont: { family: 'IBM Plex Mono', size: 10 } },
+      yaxis2: { title: 'Geom prob', side: 'right', overlaying: 'y',
+                range: [0, 1],
+                tickfont: { family: 'IBM Plex Mono', size: 10 } },
+      legend: { orientation: 'h', x: 0, y: -0.32, font: { size: 10, family: 'IBM Plex Mono' } },
+      font: { family: 'IBM Plex Sans' },
+      shapes,
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+    };
+    Plotly.react(plotRef.current, traces, layout, { displayModeBar: false, responsive: true });
+  }, [protein, kind, featureMaxAct, nmpThreshold]);
+
+  if (!protein) {
+    return (
+      <div className="cs3-panel">
+        <div className="cs3-panel-head">
+          <span className="eyebrow">{title}</span>
+        </div>
+        <div className="spinner">No {kind === 'swiss' ? 'SwissProt' : 'NMPFam'} protein available.</div>
+      </div>
+    );
+  }
+
+  const acc = kind === 'swiss' ? protein.accession : protein.family_id;
+  const len = (protein.sequence || '').length;
+  const maxAct = protein.max_sae_activation
+                ?? Math.max(...(protein.sae_activation_profile || [0]));
+
+  return (
+    <div className="cs3-panel">
+      <div className="cs3-panel-head">
+        <span className="eyebrow">{title}</span>
+        <select
+          value={idx}
+          onChange={(e) => setIdx(parseInt(e.target.value, 10))}
+          style={{
+            fontFamily: 'var(--mono)', fontSize: 11, padding: '4px 8px',
+            border: '1px solid var(--rule)', background: 'var(--paper)', marginLeft: 'auto',
+          }}
+        >
+          {proteins.map((p, i) => {
+            const labelAcc = kind === 'swiss' ? p.accession : p.family_id;
+            const extra = kind === 'swiss'
+              ? ''
+              : ` · ${(p.sequence_count || 0).toLocaleString()} seq`;
+            return (
+              <option key={labelAcc + i} value={i}>
+                {labelAcc}{extra}
+              </option>
+            );
+          })}
+        </select>
+      </div>
+      <div className="cs3-panel-meta">
+        {kind === 'swiss' ? (
+          <span><strong>{acc}</strong> · {len} aa</span>
+        ) : (
+          <span>
+            <strong>{acc}</strong> · {len} aa · {protein.category} · {' '}
+            <a href={protein.nmpfams_url} target="_blank" rel="noreferrer"
+               style={{ color: 'var(--ink-2)' }}>
+              fleming.gr →
+            </a>
+          </span>
+        )}
+        <span style={{ marginLeft: 12, color: 'var(--geom)' }}>max act {fmt(maxAct, 2)}</span>
+      </div>
+      <div ref={containerRef} className="cs3-struc"></div>
+      <div className="cs3-struc-cap">
+        {kind === 'swiss'
+          ? `3Dmol cartoon · /api/pdb/${acc}`
+          : `ESMFold cartoon · /api/nmpfam-pdb/${acc}`}
+      </div>
+      <div ref={plotRef} className="cs3-plot"></div>
+    </div>
+  );
+}
+
+window.CaseStudyGeometry             = CaseStudyGeometry;
+window.CaseStudyGranularity          = CaseStudyGranularity;
+window.CaseStudyMetagenomic          = CaseStudyMetagenomic;
+window.CaseStudyMetagenomicDetail    = CaseStudyMetagenomicDetail;
+window.CaseStudyFamilyDetail         = CaseStudyFamilyDetail;

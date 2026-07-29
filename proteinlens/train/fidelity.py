@@ -8,6 +8,7 @@ Calculate the loss (cross entropy) fidelity metric for a Sparse Autoencoder (SAE
    the loss recovered metric.
 """
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -130,12 +131,29 @@ class ESMFidelityFunction(EvaluationManager):
         self.nnsight_model = NNsight(self.model)
         self.layer_idx = self.layer_idx
 
-        self.orig_loss, self.zero_loss = self._CE_for_orig_and_zero_ablation(
-            self.tokenized_batches
-        )
-        print("Finished initializing ESM Fidelity Function")
+        # The nnsight hidden-state intervention is model-/version-fragile: on some
+        # ESM2 sizes + nnsight versions a layer's `.input` resolves to an args
+        # tuple, so the in-place patch raises. Treat %-loss-recovered as
+        # best-effort — if the baseline/zero-ablation pass fails, disable it and
+        # fall back to the reconstruction metrics (variance_explained, l0) rather
+        # than killing the whole training run.
+        self.fidelity_enabled = True
+        try:
+            self.orig_loss, self.zero_loss = self._CE_for_orig_and_zero_ablation(
+                self.tokenized_batches
+            )
+            print("Finished initializing ESM Fidelity Function")
+        except Exception as e:
+            self.fidelity_enabled = False
+            self.orig_loss = self.zero_loss = None
+            warnings.warn(
+                f"ESM fidelity eval disabled ({type(e).__name__}: {e}); training "
+                "continues with reconstruction metrics only (variance_explained, l0)."
+            )
 
-    def _calculate_fidelity(self, sae_model) -> dict:
+    def _calculate_fidelity(self, sae_model) -> dict | None:
+        if not getattr(self, "fidelity_enabled", True):
+            return None
         sae_loss = self._CE_from_sae_recon(self.tokenized_batches, sae_model)
 
         loss_recovered = calculate_loss_recovered(

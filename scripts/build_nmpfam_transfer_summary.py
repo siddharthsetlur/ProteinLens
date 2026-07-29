@@ -30,7 +30,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
+from multiprocessing import Pool, cpu_count
 from pathlib import Path
 
 import numpy as np
@@ -60,6 +62,16 @@ def _per_hit_prauc(hit: dict, threshold: float) -> float | None:
     if n_pos == 0 or n_pos == truth.size:
         return None
     return float(average_precision_score(truth, probs))
+
+
+def _summarise_one_file(fpath_str: str) -> dict | None:
+    """Worker entry point — load one nmpfam enrichment JSON and aggregate."""
+    try:
+        with open(fpath_str) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    return _summarise_feature(data)
 
 
 def _summarise_feature(payload: dict) -> dict | None:
@@ -107,6 +119,12 @@ def _summarise_feature(payload: dict) -> dict | None:
         "sequences_annotated": sequences_annotated,
         "activation_threshold_sae": threshold,
         "top_hits": top_hits,
+        # All strong-hit family IDs + their sequence counts. Used by the main
+        # process to compute the deduplicated Table 4 column 4 / 5 totals;
+        # not echoed back to the SPA (it only reads top_hits).
+        "_strong_families": [
+            (h["family_id"], h["sequence_count"]) for h in strong
+        ],
     }
 
 
@@ -141,30 +159,34 @@ def build_summary(analysis_dir: Path) -> dict:
         n_features_total = len(geom_q) or sum(1 for _ in enrichment_dir.glob("*.json"))
 
     files = sorted(enrichment_dir.glob("*.json"))
-    logger.info("scanning %d nmpfam enrichment files in %s", len(files), enrichment_dir)
+    workers = max(1, min(cpu_count() - 1, 8))
+    logger.info(
+        "scanning %d nmpfam enrichment files in %s (using %d workers)",
+        len(files), enrichment_dir, workers,
+    )
 
     n_with_hits = 0
     n_qsig_with_hits = 0
     feature_records: list[dict] = []
 
-    for i, fpath in enumerate(files):
-        try:
-            with open(fpath) as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            continue
-        rec = _summarise_feature(data)
-        if rec is None:
-            continue
-        n_with_hits += 1
-        q = geom_q.get(rec["feature_id"])
-        rec["geometry_padj"] = q
-        rec["geom_qsig"] = (q is not None and q < Q_SIG)
-        if rec["geom_qsig"]:
-            n_qsig_with_hits += 1
-        feature_records.append(rec)
-        if (i + 1) % 1000 == 0:
-            logger.info("  scanned %d / %d features", i + 1, len(files))
+    # Per-file workers run independently; main process attaches q-values
+    # afterwards and counts. Chunksize tuned for the file-size variance.
+    with Pool(workers) as pool:
+        results_iter = pool.imap_unordered(
+            _summarise_one_file, [str(f) for f in files], chunksize=20
+        )
+        for i, rec in enumerate(results_iter):
+            if (i + 1) % 1000 == 0:
+                logger.info("  scanned %d / %d features", i + 1, len(files))
+            if rec is None:
+                continue
+            n_with_hits += 1
+            q = geom_q.get(rec["feature_id"])
+            rec["geometry_padj"] = q
+            rec["geom_qsig"] = (q is not None and q < Q_SIG)
+            if rec["geom_qsig"]:
+                n_qsig_with_hits += 1
+            feature_records.append(rec)
 
     # Table 4 column 3: geom q-sig AND median PR-AUC > 0.5
     gated = [
@@ -173,18 +195,23 @@ def build_summary(analysis_dir: Path) -> dict:
     ]
     gated.sort(key=lambda r: -r["max_prauc"])
 
-    # Cluster matched: # of NMPFam families that have *any* feature with
-    # PR-AUC > 0.5 firing on them (deduplicated). Sequences annotated is the
-    # union sequence_count across those distinct families.
+    # Table 4 columns 4 / 5: # of distinct NMPFam families (and their union
+    # sequence count) hit at PR-AUC > 0.5 by *the gated feature set*. We use
+    # `_strong_families` (the full strong-hit list per feature, not the top-25
+    # truncation) so a high-breadth feature like f/8518 contributes every
+    # matching family.
     matched_families: dict[str, int] = {}
-    for r in feature_records:
-        for h in r["top_hits"]:
-            if h["prauc"] > PRAUC_GATE:
-                fam = h.get("family_id")
-                if fam and fam not in matched_families:
-                    matched_families[fam] = h.get("sequence_count") or 0
+    for r in gated:
+        for fam, seq_count in r.get("_strong_families", []):
+            if fam and fam not in matched_families:
+                matched_families[fam] = seq_count or 0
     n_families_matched = len(matched_families)
     n_sequences_annotated = sum(matched_families.values())
+
+    # Drop the helper field before serialising — it was only needed for the
+    # aggregation above.
+    for r in feature_records:
+        r.pop("_strong_families", None)
 
     table4 = {
         "n_features_total": n_features_total,

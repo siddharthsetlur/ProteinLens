@@ -1439,6 +1439,59 @@ footer.foot {
   font-size: 12px;
 }
 
+/* Case study 03 — Figure 4 side-by-side SwissProt vs NMPFam viewer */
+.cs3-sbs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 16px;
+}
+.cs3-panel {
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  display: flex;
+  flex-direction: column;
+}
+.cs3-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--rule);
+}
+.cs3-panel-meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--rule-2);
+}
+.cs3-panel-meta strong { color: var(--ink); font-weight: 600; }
+.cs3-struc {
+  height: 320px;
+  position: relative;
+  background: var(--paper-2);
+}
+.cs3-struc canvas {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+.cs3-struc-cap {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 14px;
+  border-top: 1px solid var(--rule-2);
+  border-bottom: 1px solid var(--rule-2);
+}
+.cs3-plot {
+  padding: 10px;
+}
+
 /* utility */
 .hidden { display: none !important; }
 

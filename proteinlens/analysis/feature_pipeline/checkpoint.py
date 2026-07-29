@@ -7,6 +7,7 @@ so that a crashed run can be restarted without re-doing finished work.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -66,8 +67,13 @@ class PipelineState:
         Writes to a temporary file first, then renames.  This guarantees
         that a concurrent reader always sees a complete JSON file even if
         the process is killed between write and rename.
+
+        The temp file name carries this process's PID so that two pipeline
+        processes sharing one ``output_dir`` (the parallel branch jobs —
+        InterPro / geometry / sequence) cannot write the same scratch path
+        and interleave bytes into each other's JSON.
         """
-        tmp_path = self.state_path.with_suffix(".tmp")
+        tmp_path = self.state_path.with_suffix(f".{os.getpid()}.tmp")
         with open(tmp_path, "w") as f:
             json.dump(self.data, f, indent=2)
         tmp_path.rename(self.state_path)
@@ -90,11 +96,29 @@ class PipelineState:
     def mark_stage_complete(self, stage_name: str) -> None:
         """Record that *stage_name* finished successfully and persist.
 
+        Before writing, the on-disk ``completed_stages`` list is merged into
+        the in-memory one.  Without this merge, two pipeline processes
+        sharing an ``output_dir`` would each save the snapshot they loaded at
+        startup, and whichever finished last would silently erase the other's
+        completion marks — which then re-runs finished stages on resume.
+        Only this one list is merged: every other field is written by a
+        single stage, so there is nothing to reconcile.
+
         Args:
             stage_name: An identifier like ``"stage_0a"`` or ``"survey"``.
         """
-        if stage_name not in self.data.setdefault("completed_stages", []):
-            self.data["completed_stages"].append(stage_name)
+        completed = self.data.setdefault("completed_stages", [])
+        if self.state_path.exists():
+            try:
+                with open(self.state_path, "r") as f:
+                    on_disk = json.load(f).get("completed_stages", [])
+            except (json.JSONDecodeError, OSError):
+                on_disk = []
+            for other in on_disk:
+                if other not in completed:
+                    completed.append(other)
+        if stage_name not in completed:
+            completed.append(stage_name)
         self.save()
 
     # ------------------------------------------------------------------

@@ -20,7 +20,6 @@ from proteinlens.analysis.feature_pipeline.collection import (
     run_collection,
 )
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
-from proteinlens.embedders.esm import ESM
 from proteinlens.sae.inference import load_sae
 from proteinlens.utils import get_device
 
@@ -43,6 +42,8 @@ class TestComputeResidueActivations:
     @pytest.fixture(scope="class")
     def models(self):
         """Load ESM and SAE once for the class (expensive)."""
+        from proteinlens.embedders.esm import ESM
+
         device = get_device()
         esm = ESM(model_name="facebook/esm2_t6_8M_UR50D", device=device)
         sae = load_sae(SAE_DIR, device=device)
@@ -76,6 +77,7 @@ class TestComputeResidueActivations:
         assert activations.max() > 0, "All activations are zero — something is wrong"
 
 
+@pytest.mark.integration
 class TestFetchAlphafoldPdb:
     """Tests for PDB fetching from the real AlphaFold API."""
 

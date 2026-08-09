@@ -33,6 +33,7 @@ def interpro_selection_setup(tmp_path):
     config = PipelineConfig(
         output_dir=tmp_path,
         interpro_n_per_bin=3,
+        interpro_collect_residue_activations=False,
     )
 
     n_proteins = 200

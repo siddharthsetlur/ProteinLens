@@ -110,8 +110,8 @@ def main():
     # WandB already initialized by sweep agent
     wandb_cfg = WandbConfig(
         use_wandb=True,
-        wandb_entity="s-setlur-university-of-edinburgh",
-        wandb_project="protein-sae-eidf",
+        wandb_entity="<YOUR_WANDB_ENTITY>",
+        wandb_project="proteinlens-sae",
         wandb_name=wandb.run.name,  # Use default name from sweep
         log_steps=100,
     )

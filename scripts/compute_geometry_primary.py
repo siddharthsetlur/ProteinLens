@@ -7,12 +7,14 @@ structure rather than sequence-level features.
 
 **Method:**
 
-1. Estimate empirical null p95 for each sequence metric from features with
-   <1% protein activation (which should have no real signal).
-2. A feature is "geometry-primary" if its geometry PR-AUC exceeds 0.3 (well
-   above the random baseline of ~0.038) AND all sequence metrics fall below
-   their respective null p95 thresholds.
-3. Features are ranked by a composite score:
+1. In primary fixed mode, apply BH independently to fixed-score permutation
+   p-values. A feature is geometry-primary when geometry q < 0.05 and all
+   sequence-side q-values are not significant. Missing values exclude it.
+2. Optional refit mode uses only the separately corrected refit-GBM geometry
+   null as a robustness analysis. Modes never fall back feature-by-feature.
+3. Without permutation outputs, a labelled legacy fallback estimates p95
+   thresholds from features with <1% activation.
+4. Features are ranked by a composite score:
    ``PR-AUC * (1 - seq_feature_fraction) * sqrt(concordance_F1)``
    which rewards high geometry quality, low sequence-composition leakage,
    and good spatial concordance.
@@ -193,10 +195,8 @@ def _load_permutation_pvalues(data_dir: Path) -> dict | None:
     run — pooling would invalidate the FDR guarantee for features on
     either side.
 
-    Downstream (``_classify_features``) prefers the refit q-value when a
-    feature has one, falling back to the fixed q-value otherwise. Each
-    feature's source is recorded on its per-feature analysis entry so
-    paper tables can stratify by method.
+    Downstream selects one pool globally through the geometry-null-mode CLI.
+    It never falls back between pools feature-by-feature.
 
     Provenance keyed with underscore-prefixed fields:
 
@@ -334,7 +334,12 @@ def _compute_null_thresholds(
     }
 
 
-def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict | None = None) -> dict:
+def _classify_features(
+    scores: dict,
+    null_thresholds: dict,
+    perm_pvalues: dict | None = None,
+    geometry_null_mode: str = "fixed",
+) -> dict:
     """Classify each feature and compute composite scores."""
     geom = scores["geom"]
     motif = scores["motif"]
@@ -379,18 +384,15 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
         if perm_pvalues is not None:
             geom_padj_refit = perm_pvalues.get("geometry_prauc_refit", {}).get(fid)
             geom_padj_fixed = perm_pvalues["geometry_prauc"].get(fid)
-            # Refit is preferred where available — it is the statistically
-            # clean test; the fixed-GBM q-value is retained alongside for
-            # provenance but the two q-values come from SEPARATE BH pools
-            # and are never pooled for FDR (see _load_permutation_pvalues).
-            if geom_padj_refit is not None:
-                geom_q = geom_padj_refit
-                geom_padj_source = "refit"
-            elif geom_padj_fixed is not None:
+            # The paper's primary analysis uses the fixed-score permutation
+            # null. Refit is an explicitly selected robustness analysis; never
+            # fall back feature-by-feature because that mixes estimands.
+            if geometry_null_mode == "fixed":
                 geom_q = geom_padj_fixed
                 geom_padj_source = "fixed"
             else:
-                geom_q = None
+                geom_q = geom_padj_refit
+                geom_padj_source = "refit"
 
             fdr_threshold = 0.05
             # Defaults in .get() below: geometry q=1.0 (treated as
@@ -422,10 +424,9 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
         if is_primary:
             n_primary += 1
 
-        # Preferred geometry q (refit > fixed) for display; both reported
-        # for transparency. Paper tables should cite whichever is the
-        # source of truth for the classification (see geometry_prauc_source).
-        geom_padj_display = geom_padj_refit if geom_padj_refit is not None else geom_padj_fixed
+        geom_padj_display = (
+            geom_padj_fixed if geometry_null_mode == "fixed" else geom_padj_refit
+        )
 
         features[str(fid)] = {
             "composite_score": round(score, 4),
@@ -443,9 +444,9 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
             "top_geometric_feature": top_feat,
             "structural_category": category,
             "is_geometry_primary": is_primary,
-            # Permutation p-values (None if not available). Geometry
-            # reports the preferred q-value (refit > fixed) plus both
-            # raw values and the source, so consumers can choose.
+            # Permutation q-values (None if unavailable). The unsuffixed
+            # geometry field is the globally selected pool; both pools remain
+            # available for explicit robustness comparisons.
             "geometry_prauc_padj": geom_padj_display,
             "geometry_prauc_padj_refit": geom_padj_refit,
             "geometry_prauc_padj_fixed": geom_padj_fixed,
@@ -460,7 +461,11 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
 
 
 def _write_case_studies(
-    features: dict, geom_scores: dict, null_thresholds: dict, out_path: Path
+    features: dict,
+    geom_scores: dict,
+    null_thresholds: dict,
+    out_path: Path,
+    classification_method: str,
 ) -> None:
     """Write top 20 geometry-primary features as a Markdown case study list."""
     primary = [
@@ -475,15 +480,16 @@ def _write_case_studies(
         "",
         "## Method",
         "",
-        "A feature is **geometry-primary** if:",
-        f"- Geometry PR-AUC > {GEOM_PR_AUC_THRESHOLD} (random baseline ~0.038)",
-        f"- Motif PR-AUC <= {null_thresholds['motif_pr_auc']:.3f} (null p95)",
-        f"- Position F1 <= {null_thresholds['position_f1']:.3f} (null p95)",
-        f"- InterPro Residue F1 <= {null_thresholds['interpro_res_f1']:.3f} (null p95)",
-        f"- CATH Residue F1 <= {null_thresholds['cath_res_f1']:.3f} (null p95)",
+        f"Classification method: **{classification_method}**.",
         "",
-        "Null thresholds estimated from features with <1% protein activation "
-        f"(N={null_thresholds.get('n_sparse_features', '?')}).",
+        (
+            "Permutation mode: geometry q < 0.05 and every sequence-side q "
+            "is >= 0.05. Missing q-values conservatively exclude a feature."
+            if classification_method.startswith("permutation_")
+            else
+            "Fallback mode: geometry PR-AUC > 0.3 and sequence metrics do not "
+            "exceed sparse-feature empirical p95 thresholds."
+        ),
         "",
         f"**{len(primary)} geometry-primary features** out of {len(features)} "
         "with geometry data.",
@@ -497,6 +503,21 @@ def _write_case_studies(
     ]
 
     for rank, (fid, f) in enumerate(primary[:20], 1):
+        if classification_method.startswith("permutation_"):
+            def metric_note(q_key: str) -> str:
+                q_value = f.get(q_key)
+                return f"q={q_value:.4g}" if q_value is not None else "q=missing"
+
+            motif_note = metric_note("motif_pr_auc_padj")
+            position_note = metric_note("position_f1_padj")
+            interpro_note = metric_note("interpro_res_f1_padj")
+            cath_note = metric_note("cath_res_f1_padj")
+        else:
+            motif_note = f"null p95={null_thresholds['motif_pr_auc']:.3f}"
+            position_note = f"null p95={null_thresholds['position_f1']:.3f}"
+            interpro_note = f"null p95={null_thresholds['interpro_res_f1']:.3f}"
+            cath_note = f"null p95={null_thresholds['cath_res_f1']:.3f}"
+
         g = geom_scores.get(int(fid), {})
         rules = g.get("rules", "")
         first_rule = ""
@@ -521,10 +542,10 @@ def _write_case_studies(
             f"| Concordance F1 | {f['concordance_f1']:.3f} |",
             f"| Concordance IoU | {f['concordance_iou']:.3f} |",
             f"| Concordance P / R | {f['concordance_precision']:.3f} / {f['concordance_recall']:.3f} |",
-            f"| Motif PR-AUC | {f['motif_pr_auc']:.3f} (null p95: {null_thresholds['motif_pr_auc']:.3f}) |",
-            f"| Position F1 | {f['position_f1']:.3f} (null p95: {null_thresholds['position_f1']:.3f}) |",
-            f"| InterPro Res F1 | {f['interpro_res_f1']:.3f} (null p95: {null_thresholds['interpro_res_f1']:.3f}) |",
-            f"| CATH Res F1 | {f['cath_res_f1']:.3f} (null p95: {null_thresholds['cath_res_f1']:.3f}) |",
+            f"| Motif PR-AUC | {f['motif_pr_auc']:.3f} ({motif_note}) |",
+            f"| Position F1 | {f['position_f1']:.3f} ({position_note}) |",
+            f"| InterPro Res F1 | {f['interpro_res_f1']:.3f} ({interpro_note}) |",
+            f"| CATH Res F1 | {f['cath_res_f1']:.3f} ({cath_note}) |",
             f"| Seq-derived fraction | {f['seq_feature_fraction']:.3f} |",
             f"| Structural category | {f['structural_category']} |",
             "",
@@ -547,6 +568,16 @@ def main() -> None:
         type=Path,
         default=Path("feature_data_cluster"),
         help="Path to the pipeline output directory",
+    )
+    parser.add_argument(
+        "--geometry-null-mode",
+        choices=("fixed", "refit"),
+        default="fixed",
+        help=(
+            "Geometry permutation estimand. 'fixed' is the paper primary "
+            "analysis; 'refit' is a separate robustness analysis. No "
+            "feature-wise fallback is performed."
+        ),
     )
     args = parser.parse_args()
     data_dir = args.data_dir
@@ -573,14 +604,23 @@ def main() -> None:
         print("  No permutation data found, using sparse-feature null thresholds")
 
     print("Classifying features ...")
-    features, n_primary = _classify_features(scores, null_thresholds, perm_pvalues)
+    features, n_primary = _classify_features(
+        scores,
+        null_thresholds,
+        perm_pvalues,
+        geometry_null_mode=args.geometry_null_mode,
+    )
     print(
         f"  {n_primary} geometry-primary out of {len(features)} "
         f"with geometry data ({100*n_primary/max(len(features),1):.1f}%)"
     )
 
     analysis = {
-        "method": "permutation" if perm_pvalues else "sparse_null",
+        "method": (
+            f"permutation_{args.geometry_null_mode}"
+            if perm_pvalues
+            else "sparse_null"
+        ),
         "null_thresholds": {
             k: round(v, 4) if isinstance(v, float) else v
             for k, v in null_thresholds.items()
@@ -597,7 +637,8 @@ def main() -> None:
         # _load_permutation_pvalues for the separate-BH policy.
         gp_mode = perm_pvalues.get("_geometry_prauc_mode")
         if gp_mode is not None:
-            analysis["geometry_prauc_mode"] = gp_mode
+            analysis["geometry_prauc_available_pools"] = gp_mode
+        analysis["geometry_prauc_selected_pool"] = args.geometry_null_mode
         refit_fids = perm_pvalues.get("_refit_fids")
         fixed_fids = perm_pvalues.get("_fixed_fids")
         if refit_fids is not None:
@@ -611,7 +652,13 @@ def main() -> None:
     print(f"Wrote analysis to {out_path}")
 
     case_study_path = data_dir / "geometry_primary_case_studies.md"
-    _write_case_studies(features, scores["geom"], null_thresholds, case_study_path)
+    _write_case_studies(
+        features,
+        scores["geom"],
+        null_thresholds,
+        case_study_path,
+        analysis["method"],
+    )
 
 
 if __name__ == "__main__":

@@ -10,11 +10,11 @@ domain boundaries often occur at consistent relative positions.  This
 stage discovers such positional biases in SAE feature activations.
 
 **Approach:**
-We define 21 binary position predicates (e.g. ``first_10``,
+We define 22 binary position predicates (e.g. ``first_10``,
 ``pct_0_10``, ``third_N``) that map ``(residue_position,
 sequence_length)`` to True/False.  For each predicate we reuse the
 same vectorised F1 threshold-sweep from Stage 7 (motif enrichment):
-sweep 50 evenly-spaced activation thresholds and report the threshold
+sweep 100 evenly-spaced activation thresholds and report the threshold
 that maximises F1.
 
 **Predicate categories:**

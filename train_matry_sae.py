@@ -112,8 +112,8 @@ def main():
     # W&B config (disabled for walkthrough)
     wandb_cfg = WandbConfig(
         use_wandb=True,
-        wandb_entity="s-setlur-university-of-edinburgh",      # Your wandb username
-        wandb_project="protein-sae-demo-eidf",  # Project name (creates if doesn't exist)
+        wandb_entity="<YOUR_WANDB_ENTITY>",      # Your wandb username
+        wandb_project="proteinlens-sae",  # Project name (creates if doesn't exist)
         wandb_name="MatryoshkaBatchTopK_base",      # This specific run's name
         log_steps=100,                     # Log metrics to wandb every 100 steps
     )

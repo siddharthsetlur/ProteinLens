@@ -1,0 +1,69 @@
+schema_version: 1
+paper:
+  title: Interpreting Latent Protein Representations
+  local_pdf: docs/28622_Interpreting_Latent_Prot.pdf
+  model: facebook/esm2_t6_8M_UR50D
+  reported_layers: [2, 4, 6]
+  q_threshold: 0.05
+  comparison_tolerance_percentage_points: 1.0
+  primary_geometry_null: fixed_score_permutation
+  threshold_steps: 100
+  nmpfam_families: 50000
+  nmpfam_sequences: 10000000
+
+artifact_release:
+  status: unresolved
+  snapshot_id: null
+  note: >-
+    Local analyses are candidate artifacts, not a verified paper release.
+    Populate snapshot_id and sha256 values from the collaborator/data release
+    before claiming exact reproduction.
+
+layers:
+  2:
+    sae_run: firm-sweep-3
+    sae_dir: trained_models/layer_2/firm-sweep-3
+    analysis_dir: trained_models/layer_2/firm-sweep-3/analysis
+    dictionary_size: 10240
+    sha256: {}
+  4:
+    sae_run: frosty-sweep-15
+    sae_dir: trained_models/layer_4/frosty-sweep-15
+    analysis_dir: trained_models/layer_4/frosty-sweep-15/analysis
+    dictionary_size: 10240
+    sha256: {}
+  6:
+    sae_run: major-sweep-15
+    sae_dir: trained_models/layer_6/major-sweep-15
+    analysis_dir: trained_models/layer_6/major-sweep-15/analysis
+    dictionary_size: 10240
+    sha256: {}
+
+figures:
+  1:
+    status: editable_source_unavailable
+    features: [{layer: 4, feature_id: 670}]
+  2:
+    status: examples_partially_identified
+    features: [{layer: 4, feature_id: 894}]
+  3:
+    status: data_available
+    protein: Q15120
+    features:
+      - {layer: 4, feature_id: 6775}
+      - {layer: 4, feature_id: 5508}
+      - {layer: 4, feature_id: 8254}
+      - {layer: 4, feature_id: 9608}
+  4:
+    status: data_available
+    swissprot_protein: P37016
+    nmpfam_family: F011972
+    features: [{layer: 4, feature_id: 8518}]
+  5:
+    status: external_collaborator_code_unavailable
+    note: Contact-map ablation intentionally excluded from this refactor.
+  6:
+    status: generator_available
+    layer: 4
+    pr_auc_threshold: 0.3
+    importance_threshold: 0.1

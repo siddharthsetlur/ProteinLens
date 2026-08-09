@@ -457,14 +457,7 @@ def train_motif_classifier(
     n_pos = int(y.sum())
     n_neg = int((1 - y).sum())
 
-    gbm = GradientBoostingClassifier(
-        n_estimators=80,
-        max_depth=3,
-        learning_rate=0.1,
-        subsample=0.8,
-        min_samples_leaf=max(5, int(0.02 * len(X))),
-        random_state=42,
-    )
+    gbm = GradientBoostingClassifier(**paper_gbm_parameters(len(X)))
     gbm.fit(X, y)
 
     # -- 3. Cross-validated metrics + threshold calibration --
@@ -531,12 +524,7 @@ def train_motif_classifier(
             if len(np.unique(y[train_idx])) < 2:
                 all_probs[val_idx] = 0.5
                 continue
-            gbm_cv = GradientBoostingClassifier(
-                n_estimators=80, max_depth=3, learning_rate=0.1,
-                subsample=0.8,
-                min_samples_leaf=max(5, int(0.02 * len(X))),
-                random_state=42,
-            )
+            gbm_cv = GradientBoostingClassifier(**paper_gbm_parameters(len(X)))
             gbm_cv.fit(X[train_idx], y[train_idx])
             probs = gbm_cv.predict_proba(X[val_idx])
             all_probs[val_idx] = probs[:, 1] if probs.shape[1] > 1 else probs[:, 0]
@@ -935,3 +923,18 @@ def format_monomial(
             terms.append(f"+ {intercept_raw:.4g}")
 
     return "y_hat = " + " ".join(terms)
+PAPER_GBM_HYPERPARAMETERS = {
+    "n_estimators": 80,
+    "max_depth": 3,
+    "learning_rate": 0.1,
+    "subsample": 0.8,
+    "random_state": 42,
+}
+
+
+def paper_gbm_parameters(n_samples: int) -> dict:
+    """Appendix Table 7 parameters, including its sample-size leaf rule."""
+    return {
+        **PAPER_GBM_HYPERPARAMETERS,
+        "min_samples_leaf": max(5, int(0.02 * n_samples)),
+    }

@@ -50,7 +50,10 @@ class PipelineConfig:
     """
 
     # --- Paths ---
-    sae_dir: Path = Path("trained_models/fiery-sweep")
+    # These class defaults are intentionally generic for programmatic/test use.
+    # The CLI does not silently use them: paper runs must select a named layer
+    # profile and ad-hoc runs must pass their model/layer explicitly.
+    sae_dir: Path = Path("trained_models/UNSPECIFIED")
     output_dir: Path = Path("feature_data")
 
     # --- Dataset scope ---
@@ -59,7 +62,7 @@ class PipelineConfig:
 
     # --- Model settings (must match how the SAE was trained) ---
     esm_model_name: str = "facebook/esm2_t6_8M_UR50D"
-    esm_layer: int = 3
+    esm_layer: int = 0
     max_seq_len: int = 1024
 
     # --- Survey / selection knobs ---
@@ -87,12 +90,14 @@ class PipelineConfig:
     """Max proteins to sample per activation bin per feature."""
     interpro_api_rate_limit: float = 5.0
     """Maximum InterPro API requests per second."""
-    interpro_f1_threshold_steps: int = 50
+    interpro_f1_threshold_steps: int = 100
     """Number of evenly-spaced thresholds to sweep when computing F1."""
     interpro_top_annotations: int = 5
     """Number of top annotations to keep per feature (by protein-level F1)."""
     interpro_min_proteins: int = 3
     """Minimum proteins with an annotation for it to be tested."""
+    interpro_collect_residue_activations: bool = True
+    """Collect missing selected-protein activations after Stage 5a selection."""
 
     # --- Sequence motif enrichment (Stage 7) ---
     motif_kmer_k: int = 3
@@ -108,7 +113,7 @@ class PipelineConfig:
     K-mers appearing fewer than this many times produce unreliable F1
     scores.  The count is reported alongside F1 for user judgement.
     """
-    motif_f1_threshold_steps: int = 50
+    motif_f1_threshold_steps: int = 100
     """Number of evenly-spaced activation thresholds to sweep.
 
     Thresholds are sampled from 0 to the feature's global max.
@@ -132,7 +137,7 @@ class PipelineConfig:
     """MEME --maxw: maximum motif width."""
     motif_pwm_meme_nmotifs: int = 3
     """MEME --nmotifs: number of motifs to discover per feature."""
-    motif_pwm_f1_threshold_steps: int = 50
+    motif_pwm_f1_threshold_steps: int = 100
     """Number of evenly-spaced PWM log-odds thresholds to sweep for F1."""
     motif_pwm_min_windows: int = 10
     """Skip feature if fewer than this many windows were extracted."""
@@ -152,7 +157,7 @@ class PipelineConfig:
     """
 
     # --- Sequence position enrichment (Stage 8) ---
-    position_f1_threshold_steps: int = 50
+    position_f1_threshold_steps: int = 100
     """Number of evenly-spaced activation thresholds to sweep.
 
     Consistent with motif and InterPro enrichment sweep strategies.
@@ -166,7 +171,7 @@ class PipelineConfig:
     position_top_n: int = 5
     """Number of top position predicates to keep per feature (ranked by best F1).
 
-    21 predicates are tested; keeping the top 5 provides sufficient detail
+    22 predicates are tested; keeping the top 5 provides sufficient detail
     without bloating per-feature JSON files.
     """
 

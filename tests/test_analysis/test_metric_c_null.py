@@ -105,7 +105,7 @@ def test_summary_handles_partial_features():
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def synth_analysis_dir(tmp_path_factory) -> Path | None:
-    src = Path("/home/s2721407/Desktop/ProteinLens/feature_data_test_500")
+    src = Path(__file__).resolve().parents[2] / "feature_data_test_500"
     if not src.is_dir():
         return None
     if not (src / "geometry_residue_profiles").is_dir():

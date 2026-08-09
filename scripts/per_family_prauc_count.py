@@ -155,16 +155,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--layer", type=int, required=True, choices=[2, 4, 6])
     ap.add_argument("--threshold", type=float, default=0.6)
+    repo_root = Path(__file__).resolve().parent.parent
     ap.add_argument("--out-dir", type=Path,
-                    default=Path("/home/s2721407/Desktop/ProteinLens/per_family_prauc_cache"))
+                    default=repo_root / "per_family_prauc_cache")
     ap.add_argument("--summarize-only", action="store_true",
                     help="Skip computation, just summarize existing CSV.")
     args = ap.parse_args()
 
+    trained_models = repo_root / "trained_models"
     bases = {
-        2: Path("/home/s2721407/Desktop/ProteinLens/trained_models/layer_2/firm-sweep-3"),
-        4: Path("/home/s2721407/Desktop/ProteinLens/trained_models/layer_4/frosty-sweep-15"),
-        6: Path("/home/s2721407/Desktop/ProteinLens/trained_models/layer_6/major-sweep-15"),
+        2: trained_models / "layer_2" / "firm-sweep-3",
+        4: trained_models / "layer_4" / "frosty-sweep-15",
+        6: trained_models / "layer_6" / "major-sweep-15",
     }
 
     if not args.summarize_only:

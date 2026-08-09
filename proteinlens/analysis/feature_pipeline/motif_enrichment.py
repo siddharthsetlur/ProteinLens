@@ -8,7 +8,7 @@ position.
 For every feature we pool all proteins (from ``top_sequences`` and every
 ``activation_bins`` bucket), extract overlapping k-mers at each residue
 position, then ask: "does the k-mer at position *i* predict that
-activation[i] exceeds a threshold?"  We sweep 50 evenly-spaced
+activation[i] exceeds a threshold?"  We sweep 100 evenly-spaced
 thresholds from 0 to the feature's global max and report the threshold
 that maximises F1 for each k-mer.
 

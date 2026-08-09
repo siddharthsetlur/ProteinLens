@@ -1,9 +1,49 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Heavy artifacts — distributed via HF/Zenodo, not git
+# ─────────────────────────────────────────────────────────────────────────────
+trained_models/
+analysis/                                # symlinks into trained_models/layer_*/{run}/analysis/
+feature_data_test_20/
+feature_data_test_500/
+feature_data_cluster/
+feature_data_matryoshka_l4/
+results/
+reproduction_outputs/
 models/
 data/
-explainer/_build/
-*.txt
-*.png
-*.npy
-*.yaml
+wandb/
+
+# Local PDB / motif caches
 protein_results/alphafold_analysis/pdb_cache/
 protein_results/residue_motifs/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Build / cache / IDE / OS
+# ─────────────────────────────────────────────────────────────────────────────
+*.egg-info/
+.pytest_cache/
+.DS_Store
+__pycache__/
+*.pyc
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Runtime logs and binary scratch outputs
+# ─────────────────────────────────────────────────────────────────────────────
+nohup.out
+*.log
+*.npy
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cluster job manifests are templated per-run and never committed
+# (Dockerfile.pipeline and INSTRUCTIONS.md remain tracked.)
+# ─────────────────────────────────────────────────────────────────────────────
+k8s/*.yaml
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Other YAML configs are local — only the canonical training sweep
+# configs are tracked.
+# ─────────────────────────────────────────────────────────────────────────────
+*.yaml
+!relu_sweep.yaml
+!matryoshka_sweep_config.yaml
+!paper_manifest.yaml

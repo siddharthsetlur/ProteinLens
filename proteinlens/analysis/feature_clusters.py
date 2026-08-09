@@ -68,7 +68,6 @@ def _get_decoder_weights(sae) -> torch.Tensor:
 
     Handles:
     * ReLUSAE         – decoder weights live in sae.decoder.weight
-    * JumpReLUSAE     – weights live in sae.W_dec
     * MatryoshkaBatchTopKSAE – weights live in sae.W_dec
     """
     if hasattr(sae, "W_dec"):
@@ -180,7 +179,7 @@ class FeatureClusters:
         """Build clusters by running spectral clustering on W_dec.
 
         Args:
-            sae:        Loaded SAE model (ReLUSAE, JumpReLUSAE, or Matryoshka).
+            sae:        Loaded SAE model (ReLUSAE or Matryoshka).
             n_clusters: Number of clusters.
             chunk_size: Chunk size for similarity matrix construction.
             verbose:    Print progress.

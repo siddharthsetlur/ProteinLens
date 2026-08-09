@@ -249,12 +249,12 @@ tried. The corrected JSON SHA-256 is
 ```text
 python scripts/verify_paper_manifest.py --output reproduction_outputs/artifact_identity.json
 python scripts/verify_paper_manifest.py --strict --output reproduction_outputs/artifact_identity_strict.json
-/home/s2721407/miniconda3/envs/interplm/bin/python scripts/paper_tables.py --output reproduction_outputs/tables_1_2.json
-/home/s2721407/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table3.json
-/home/s2721407/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_4/frosty-sweep-15/analysis --output reproduction_outputs/layer4_table3.json
-/home/s2721407/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_6/major-sweep-15/analysis --output reproduction_outputs/layer6_table3.json
-/home/s2721407/miniconda3/envs/interplm/bin/python scripts/build_nmpfam_transfer_summary.py --analysis-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table4.json
-/home/s2721407/miniconda3/envs/interplm/bin/python scripts/figure6_descriptor_counts.py --analysis-dir trained_models/layer_4/frosty-sweep-15/analysis --output-dir reproduction_outputs
+~/miniconda3/envs/interplm/bin/python scripts/paper_tables.py --output reproduction_outputs/tables_1_2.json
+~/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table3.json
+~/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_4/frosty-sweep-15/analysis --output reproduction_outputs/layer4_table3.json
+~/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_6/major-sweep-15/analysis --output reproduction_outputs/layer6_table3.json
+~/miniconda3/envs/interplm/bin/python scripts/build_nmpfam_transfer_summary.py --analysis-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table4.json
+~/miniconda3/envs/interplm/bin/python scripts/figure6_descriptor_counts.py --analysis-dir trained_models/layer_4/frosty-sweep-15/analysis --output-dir reproduction_outputs
 sha256sum reproduction_outputs/figure6_descriptor_counts.json reproduction_outputs/figure6_descriptor_counts.csv
 ```
 

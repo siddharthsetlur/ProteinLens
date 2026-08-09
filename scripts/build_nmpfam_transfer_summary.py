@@ -8,7 +8,7 @@ per-metagenomic-protein PR-AUC of the pre-trained Swiss-Prot GBM
 We then aggregate to a single record per feature:
 
     {feature_id, n_hits, n_strong, max_prauc, median_prauc,
-     sequences_annotated, geometry_padj, top_hits[10]}
+     sequences_annotated, geometry_padj, top_hits[25]}
 
 The ``features`` list in the output is gated to match Table 4 column 3:
 *geometry q-significant AND median PR-AUC > 0.5*. The ``table4`` block
@@ -43,6 +43,29 @@ logger = logging.getLogger(__name__)
 
 Q_SIG = 0.05          # BH significance gate
 PRAUC_GATE = 0.5      # Table 4 column 3 threshold + per-hit "strong" cutoff
+
+
+def _fixed_geometry_qvalues(analysis_dir: Path) -> dict[int, float]:
+    """BH-correct fixed-score geometry p-values from the raw null snapshot."""
+    raw: dict[int, float] = {}
+    for path in sorted((analysis_dir / "permutation_null").glob("*.json")):
+        try:
+            payload = json.loads(path.read_text())
+            value = payload["p_values"].get("geometry_prauc")
+            if value is not None:
+                raw[int(payload["feature_id"])] = float(value)
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+    if not raw:
+        raise SystemExit("No fixed-score geometry permutation p-values found")
+    ordered = sorted(raw, key=raw.get)
+    adjusted: dict[int, float] = {}
+    running = 1.0
+    for index in range(len(ordered) - 1, -1, -1):
+        fid = ordered[index]
+        running = min(running, raw[fid] * len(ordered) / (index + 1), 1.0)
+        adjusted[fid] = running
+    return adjusted
 
 
 def _per_hit_prauc(hit: dict, threshold: float) -> float | None:
@@ -107,25 +130,29 @@ def _summarise_feature(payload: dict) -> dict | None:
         "sequences_annotated": sequences_annotated,
         "activation_threshold_sae": threshold,
         "top_hits": top_hits,
+        # Internal full list used for the table union. Removed before output.
+        "_strong_hits": strong,
     }
 
 
-def build_summary(analysis_dir: Path) -> dict:
+def build_summary(
+    analysis_dir: Path,
+    n_nmpfam_families: int = 50_000,
+    n_nmpfam_sequences: int = 10_000_000,
+) -> dict:
     enrichment_dir = analysis_dir / "nmpfam" / "nmpfam_enrichment"
     if not enrichment_dir.is_dir():
         raise SystemExit(f"NMPFam enrichment dir missing: {enrichment_dir}")
 
-    # geometry_primary_analysis.json gives us the q-values for the geometry
-    # method (per Table 4 column 2's "q-significant" filter).
+    # Recompute the paper-primary fixed-score geometry q-values from the raw
+    # null snapshot. geometry_primary_analysis.json may be stale or may have
+    # been generated in the separate refit robustness mode.
     gp_path = analysis_dir / "geometry_primary_analysis.json"
     if not gp_path.exists():
         raise SystemExit(f"geometry_primary_analysis.json missing in {analysis_dir}")
     with open(gp_path) as f:
         gp = json.load(f)
-    geom_q = {
-        int(fid): (entry.get("geometry_prauc_padj"))
-        for fid, entry in (gp.get("features") or {}).items()
-    }
+    geom_q = _fixed_geometry_qvalues(analysis_dir)
     # n_features_total isn't always recorded in geometry_primary_analysis.json;
     # fall back to dataset_stats.num_features (== SAE dictionary size).
     n_features_total = gp.get("n_features_total")
@@ -178,11 +205,18 @@ def build_summary(analysis_dir: Path) -> dict:
     # union sequence_count across those distinct families.
     matched_families: dict[str, int] = {}
     for r in feature_records:
-        for h in r["top_hits"]:
-            if h["prauc"] > PRAUC_GATE:
-                fam = h.get("family_id")
-                if fam and fam not in matched_families:
-                    matched_families[fam] = h.get("sequence_count") or 0
+        for h in r["_strong_hits"]:
+            fam = h.get("family_id")
+            if not fam:
+                continue
+            sequence_count = h.get("sequence_count") or 0
+            previous = matched_families.get(fam)
+            if previous is not None and previous != sequence_count:
+                raise ValueError(
+                    f"inconsistent sequence_count for NMPFam {fam}: "
+                    f"{previous} versus {sequence_count}"
+                )
+            matched_families[fam] = sequence_count
     n_families_matched = len(matched_families)
     n_sequences_annotated = sum(matched_families.values())
 
@@ -193,12 +227,25 @@ def build_summary(analysis_dir: Path) -> dict:
         "n_features_median_prauc_above_gate": len(gated),
         "n_families_matched": n_families_matched,
         "n_sequences_annotated": n_sequences_annotated,
+        "n_nmpfam_families": n_nmpfam_families,
+        "n_nmpfam_sequences": n_nmpfam_sequences,
         "pct_with_nmpfam_hits": round(100 * n_with_hits / max(n_features_total, 1), 2),
         "pct_qsig_of_with_hits": round(100 * n_qsig_with_hits / max(n_with_hits, 1), 2),
         "pct_features_median_above_gate": round(100 * len(gated) / max(n_features_total, 1), 2),
+        "pct_families_matched": round(
+            100 * n_families_matched / max(n_nmpfam_families, 1), 2
+        ),
+        "pct_sequences_annotated": round(
+            100 * n_sequences_annotated / max(n_nmpfam_sequences, 1), 2
+        ),
         "prauc_gate": PRAUC_GATE,
         "q_gate": Q_SIG,
+        "q_source": "fixed_score_permutation_raw_p",
+        "n_geometry_q_tested": len(geom_q),
     }
+
+    for record in feature_records:
+        record.pop("_strong_hits", None)
 
     return {
         "table4": table4,
@@ -211,11 +258,28 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(name)s | %(message)s")
     p = argparse.ArgumentParser()
     p.add_argument("--analysis-dir", required=True, type=Path)
+    p.add_argument(
+        "--n-nmpfam-families", type=int, default=50_000,
+        help="Table 4 family denominator (paper release: 50,000)",
+    )
+    p.add_argument(
+        "--n-nmpfam-sequences", type=int, default=10_000_000,
+        help="Table 4 sequence denominator (paper release: 10,000,000)",
+    )
+    p.add_argument(
+        "--output", type=Path, default=None,
+        help="Output path (default: ANALYSIS_DIR/nmpfam_transfer_summary.json)",
+    )
     args = p.parse_args()
 
     analysis = args.analysis_dir.resolve()
-    out = analysis / "nmpfam_transfer_summary.json"
-    summary = build_summary(analysis)
+    out = args.output or (analysis / "nmpfam_transfer_summary.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    summary = build_summary(
+        analysis,
+        n_nmpfam_families=args.n_nmpfam_families,
+        n_nmpfam_sequences=args.n_nmpfam_sequences,
+    )
     out.write_text(json.dumps(summary, separators=(",", ":")))
     logger.info(
         "wrote %s · %d gated features · matched %d families · %d sequences",

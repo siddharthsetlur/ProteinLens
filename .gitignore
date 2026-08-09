@@ -45,3 +45,4 @@ k8s/*.yaml
 *.yaml
 !relu_sweep.yaml
 !matryoshka_sweep_config.yaml
+!paper_manifest.yaml

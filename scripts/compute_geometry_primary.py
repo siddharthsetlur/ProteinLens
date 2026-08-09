@@ -334,7 +334,12 @@ def _compute_null_thresholds(
     }
 
 
-def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict | None = None) -> dict:
+def _classify_features(
+    scores: dict,
+    null_thresholds: dict,
+    perm_pvalues: dict | None = None,
+    geometry_null_mode: str = "fixed",
+) -> dict:
     """Classify each feature and compute composite scores."""
     geom = scores["geom"]
     motif = scores["motif"]
@@ -379,18 +384,15 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
         if perm_pvalues is not None:
             geom_padj_refit = perm_pvalues.get("geometry_prauc_refit", {}).get(fid)
             geom_padj_fixed = perm_pvalues["geometry_prauc"].get(fid)
-            # Refit is preferred where available — it is the statistically
-            # clean test; the fixed-GBM q-value is retained alongside for
-            # provenance but the two q-values come from SEPARATE BH pools
-            # and are never pooled for FDR (see _load_permutation_pvalues).
-            if geom_padj_refit is not None:
-                geom_q = geom_padj_refit
-                geom_padj_source = "refit"
-            elif geom_padj_fixed is not None:
+            # The paper's primary analysis uses the fixed-score permutation
+            # null. Refit is an explicitly selected robustness analysis; never
+            # fall back feature-by-feature because that mixes estimands.
+            if geometry_null_mode == "fixed":
                 geom_q = geom_padj_fixed
                 geom_padj_source = "fixed"
             else:
-                geom_q = None
+                geom_q = geom_padj_refit
+                geom_padj_source = "refit"
 
             fdr_threshold = 0.05
             # Defaults in .get() below: geometry q=1.0 (treated as
@@ -422,10 +424,9 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
         if is_primary:
             n_primary += 1
 
-        # Preferred geometry q (refit > fixed) for display; both reported
-        # for transparency. Paper tables should cite whichever is the
-        # source of truth for the classification (see geometry_prauc_source).
-        geom_padj_display = geom_padj_refit if geom_padj_refit is not None else geom_padj_fixed
+        geom_padj_display = (
+            geom_padj_fixed if geometry_null_mode == "fixed" else geom_padj_refit
+        )
 
         features[str(fid)] = {
             "composite_score": round(score, 4),
@@ -460,7 +461,11 @@ def _classify_features(scores: dict, null_thresholds: dict, perm_pvalues: dict |
 
 
 def _write_case_studies(
-    features: dict, geom_scores: dict, null_thresholds: dict, out_path: Path
+    features: dict,
+    geom_scores: dict,
+    null_thresholds: dict,
+    out_path: Path,
+    classification_method: str,
 ) -> None:
     """Write top 20 geometry-primary features as a Markdown case study list."""
     primary = [
@@ -475,15 +480,16 @@ def _write_case_studies(
         "",
         "## Method",
         "",
-        "A feature is **geometry-primary** if:",
-        f"- Geometry PR-AUC > {GEOM_PR_AUC_THRESHOLD} (random baseline ~0.038)",
-        f"- Motif PR-AUC <= {null_thresholds['motif_pr_auc']:.3f} (null p95)",
-        f"- Position F1 <= {null_thresholds['position_f1']:.3f} (null p95)",
-        f"- InterPro Residue F1 <= {null_thresholds['interpro_res_f1']:.3f} (null p95)",
-        f"- CATH Residue F1 <= {null_thresholds['cath_res_f1']:.3f} (null p95)",
+        f"Classification method: **{classification_method}**.",
         "",
-        "Null thresholds estimated from features with <1% protein activation "
-        f"(N={null_thresholds.get('n_sparse_features', '?')}).",
+        (
+            "Permutation mode: geometry q < 0.05 and every sequence-side q "
+            "is >= 0.05. Missing q-values conservatively exclude a feature."
+            if classification_method.startswith("permutation_")
+            else
+            "Fallback mode: geometry PR-AUC > 0.3 and sequence metrics do not "
+            "exceed sparse-feature empirical p95 thresholds."
+        ),
         "",
         f"**{len(primary)} geometry-primary features** out of {len(features)} "
         "with geometry data.",
@@ -548,6 +554,16 @@ def main() -> None:
         default=Path("feature_data_cluster"),
         help="Path to the pipeline output directory",
     )
+    parser.add_argument(
+        "--geometry-null-mode",
+        choices=("fixed", "refit"),
+        default="fixed",
+        help=(
+            "Geometry permutation estimand. 'fixed' is the paper primary "
+            "analysis; 'refit' is a separate robustness analysis. No "
+            "feature-wise fallback is performed."
+        ),
+    )
     args = parser.parse_args()
     data_dir = args.data_dir
 
@@ -573,14 +589,23 @@ def main() -> None:
         print("  No permutation data found, using sparse-feature null thresholds")
 
     print("Classifying features ...")
-    features, n_primary = _classify_features(scores, null_thresholds, perm_pvalues)
+    features, n_primary = _classify_features(
+        scores,
+        null_thresholds,
+        perm_pvalues,
+        geometry_null_mode=args.geometry_null_mode,
+    )
     print(
         f"  {n_primary} geometry-primary out of {len(features)} "
         f"with geometry data ({100*n_primary/max(len(features),1):.1f}%)"
     )
 
     analysis = {
-        "method": "permutation" if perm_pvalues else "sparse_null",
+        "method": (
+            f"permutation_{args.geometry_null_mode}"
+            if perm_pvalues
+            else "sparse_null"
+        ),
         "null_thresholds": {
             k: round(v, 4) if isinstance(v, float) else v
             for k, v in null_thresholds.items()
@@ -597,7 +622,8 @@ def main() -> None:
         # _load_permutation_pvalues for the separate-BH policy.
         gp_mode = perm_pvalues.get("_geometry_prauc_mode")
         if gp_mode is not None:
-            analysis["geometry_prauc_mode"] = gp_mode
+            analysis["geometry_prauc_available_pools"] = gp_mode
+        analysis["geometry_prauc_selected_pool"] = args.geometry_null_mode
         refit_fids = perm_pvalues.get("_refit_fids")
         fixed_fids = perm_pvalues.get("_fixed_fids")
         if refit_fids is not None:
@@ -611,7 +637,13 @@ def main() -> None:
     print(f"Wrote analysis to {out_path}")
 
     case_study_path = data_dir / "geometry_primary_case_studies.md"
-    _write_case_studies(features, scores["geom"], null_thresholds, case_study_path)
+    _write_case_studies(
+        features,
+        scores["geom"],
+        null_thresholds,
+        case_study_path,
+        analysis["method"],
+    )
 
 
 if __name__ == "__main__":

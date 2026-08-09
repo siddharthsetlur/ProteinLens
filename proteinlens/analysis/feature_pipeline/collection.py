@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Dict, List, Optional, Set
 
 import numpy as np
 import requests
@@ -32,9 +32,11 @@ from tqdm import tqdm
 
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
 from proteinlens.analysis.feature_pipeline.data_acquisition import _parse_fasta
-from proteinlens.embedders.esm import ESM
 from proteinlens.sae.inference import load_sae
 from proteinlens.utils import get_device
+
+if TYPE_CHECKING:
+    from proteinlens.embedders.esm import ESM
 
 # AlphaFold API endpoint for discovering the PDB download URL
 ALPHAFOLD_API_URL = "https://alphafold.ebi.ac.uk/api/prediction/{acc}"
@@ -99,6 +101,8 @@ def run_collection(config: PipelineConfig) -> None:
     sae = None
     esm_model = None
     if todo_npz:
+        from proteinlens.embedders.esm import ESM
+
         print(f"[collection] Loading SAE from {config.sae_dir} ...")
         sae = load_sae(config.sae_dir, device=device)
         print(f"[collection] Loading ESM model {config.esm_model_name} ...")

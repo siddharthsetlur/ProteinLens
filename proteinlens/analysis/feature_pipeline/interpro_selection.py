@@ -178,8 +178,11 @@ def run_interpro_selection(config: PipelineConfig) -> Dict:
         "interpro_selection/num_features": num_features,
     })
 
-    # ── 2.2: Per-residue activation collection for new proteins ──
-    _collect_missing_residue_activations(config, all_selected)
+    # ── 2.2: Optional per-residue activation collection for new proteins ──
+    # Keeping this switch explicit allows selection logic to be audited and
+    # tested independently of GPU/model availability.
+    if config.interpro_collect_residue_activations:
+        _collect_missing_residue_activations(config, all_selected)
 
     return selection
 

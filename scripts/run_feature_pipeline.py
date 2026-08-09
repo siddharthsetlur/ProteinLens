@@ -278,6 +278,12 @@ STAGES = [
 ]
 STAGE_NAMES = [name for name, _ in STAGES]
 
+PAPER_LAYER_PROFILES = {
+    2: Path("trained_models/layer_2/firm-sweep-3"),
+    4: Path("trained_models/layer_4/frosty-sweep-15"),
+    6: Path("trained_models/layer_6/major-sweep-15"),
+}
+
 
 # ===================================================================
 # CLI
@@ -299,14 +305,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sae-dir",
         type=Path,
-        default=Path("trained_models/fiery-sweep"),
-        help="Path to trained SAE directory (default: trained_models/fiery-sweep)",
+        default=None,
+        help="Path to a trained SAE directory (required for an ad-hoc run)",
+    )
+    parser.add_argument(
+        "--paper-layer",
+        type=int,
+        choices=sorted(PAPER_LAYER_PROFILES),
+        default=None,
+        help="Select the canonical paper SAE for layer 2, 4, or 6",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("feature_data"),
-        help="Output directory for pipeline results (default: feature_data/)",
+        default=None,
+        help="Output directory (default: reproduction_work/layer_N for a paper profile)",
     )
     parser.add_argument(
         "--organism-taxid",
@@ -351,8 +364,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--esm-layer",
         type=int,
-        default=3,
-        help="ESM layer to extract embeddings from (default: 3)",
+        default=None,
+        help="ESM layer (required for an ad-hoc run; inferred for --paper-layer)",
     )
     parser.add_argument(
         "--device",
@@ -382,6 +395,19 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     args = parser.parse_args()
+    if args.paper_layer is not None and args.sae_dir is not None:
+        parser.error("--paper-layer and --sae-dir are mutually exclusive")
+    if args.paper_layer is not None and args.esm_layer is not None:
+        parser.error("--esm-layer is inferred by --paper-layer")
+    if args.paper_layer is None and (args.sae_dir is None or args.esm_layer is None):
+        parser.error("use --paper-layer, or provide both --sae-dir and --esm-layer")
+    if args.paper_layer is not None:
+        args.sae_dir = PAPER_LAYER_PROFILES[args.paper_layer]
+        args.esm_layer = args.paper_layer
+        if args.output_dir is None:
+            args.output_dir = Path("reproduction_work") / f"layer_{args.paper_layer}"
+    elif args.output_dir is None:
+        args.output_dir = Path("feature_data")
     if args.end_stage and not args.start_stage:
         parser.error("--end-stage requires --start-stage")
     if args.start_stage and args.end_stage:

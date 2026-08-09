@@ -21,6 +21,9 @@ Trained SAE checkpoints and pre-computed analysis artifacts are released
 separately (see [Data release](#data-release)) — the repo itself does
 not carry them.
 
+See [the paper reproduction guide](docs/paper_reproduction.md) for provenance
+checks, the comparison tolerance, commands, and known missing inputs.
+
 ## Install
 
 Requires CUDA-capable GPU and Conda.
@@ -95,20 +98,20 @@ Run the whole pipeline:
 
 ```bash
 python scripts/run_feature_pipeline.py \
-    --sae-dir <path-to-trained-SAE> \
+    --paper-layer 4 \
     --output-dir <output-data-dir>
 ```
 
 A specific stage:
 
 ```bash
-python scripts/run_feature_pipeline.py --stage geometry_features
+python scripts/run_feature_pipeline.py --paper-layer 4 --stage geometry_features
 ```
 
 A small local test (50 proteins):
 
 ```bash
-python scripts/run_feature_pipeline.py --max-proteins 50
+python scripts/run_feature_pipeline.py --paper-layer 4 --max-proteins 50
 ```
 
 Other paper-specific scripts under `scripts/` produce supplementary

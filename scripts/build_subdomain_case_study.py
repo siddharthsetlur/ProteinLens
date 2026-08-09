@@ -3,7 +3,7 @@
 
 Identifies **residue-level** DB annotations (InterPro and CATH) where multiple
 geometry-significant SAE features fire on the same residue annotation but
-capture distinct geometric sub-structures. The automated analog of Figure 5
+capture distinct geometric sub-structures. The automated analog of Figure 3
 in the paper: the SAE decomposes a single residue-level annotation into
 fine-grained structural components.
 
@@ -32,7 +32,7 @@ Reads from:
   - {data_dir}/survey_coverage.json
   - {data_dir}/interpro_enrichment/*.json
   - {data_dir}/geometry_enrichment/*.json
-  - {data_dir}/motif_enrichment/*.json
+  - {data_dir}/motif_pwm_enrichment/*.json
   - {data_dir}/cath_enrichment/*.json
 
 Writes:
@@ -54,6 +54,29 @@ from pathlib import Path
 import numpy as np
 
 Q_SIG = 0.05
+
+
+def _fixed_qvalues(data_dir: Path, metric: str) -> dict[str, float]:
+    """BH-correct one fixed-score metric directly from raw permutation files."""
+    raw: dict[int, float] = {}
+    for path in sorted((data_dir / "permutation_null").glob("*.json")):
+        try:
+            payload = json.loads(path.read_text())
+            value = payload["p_values"].get(metric)
+            if value is not None:
+                raw[int(payload["feature_id"])] = float(value)
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+    if not raw:
+        raise SystemExit(f"No raw permutation p-values found for {metric}")
+    ordered = sorted(raw, key=raw.get)
+    adjusted: dict[str, float] = {}
+    running = 1.0
+    for index in range(len(ordered) - 1, -1, -1):
+        fid = ordered[index]
+        running = min(running, raw[fid] * len(ordered) / (index + 1), 1.0)
+        adjusted[str(fid)] = running
+    return adjusted
 
 
 def _is_sig(info: dict, padj_key: str) -> bool:
@@ -154,6 +177,12 @@ def main() -> None:
         help="Pipeline output directory",
     )
     parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output path (default: DATA_DIR/subdomain_case_study.json)",
+    )
+    parser.add_argument(
         "--min-features", type=int, default=2,
         help="Minimum features per annotation to form a group (default: 2)",
     )
@@ -180,6 +209,13 @@ def main() -> None:
         print("ERROR: geometry_primary_analysis.json not found.")
         sys.exit(1)
     gpa = json.loads(gpa_path.read_text())
+    fixed_geometry_q = _fixed_qvalues(data_dir, "geometry_prauc")
+    fixed_interpro_q = _fixed_qvalues(data_dir, "interpro_res_f1")
+    for fid, info in gpa.get("features", {}).items():
+        # Explicitly override any cached/mixed q-value fields. Table 3 uses
+        # the paper-primary fixed-score permutation estimand.
+        info["geometry_prauc_padj"] = fixed_geometry_q.get(fid)
+        info["interpro_res_f1_padj"] = fixed_interpro_q.get(fid)
     # Gate: geometry is significant. Broader than "geometry-primary" — other
     # methods may also be significant; the viz separates the axes.
     gp_features = {k: v for k, v in gpa["features"].items() if _is_sig(v, "geometry_prauc_padj")}
@@ -210,7 +246,7 @@ def main() -> None:
 
     ipro_dir = data_dir / "interpro_enrichment"
     geo_dir = data_dir / "geometry_enrichment"
-    motif_dir = data_dir / "motif_enrichment"
+    motif_dir = data_dir / "motif_pwm_enrichment"
     cath_dir = data_dir / "cath_enrichment"
 
     ipro_code_to_feats: dict[str, list[dict]] = defaultdict(list)
@@ -263,7 +299,7 @@ def main() -> None:
         motif_path = motif_dir / f"{padded}.json"
         top_motifs = []
         if motif_path.exists():
-            top_motifs = (json.loads(motif_path.read_text()).get("top_motifs")) or []
+            top_motifs = (json.loads(motif_path.read_text()).get("motifs")) or []
 
         sorted_imps = sorted(importances.items(), key=lambda x: -x[1])[:5]
         motif_len = len(ms.get("per_position_flexibility", []))
@@ -302,7 +338,7 @@ def main() -> None:
             "motif_rmsd_per_pos": round(rmsd_per_pos, 4) if rmsd_per_pos else None,
             "motif_n_fragments": ms.get("n_fragments", 0),
             "motif_length": motif_len,
-            "best_seq_motif": top_motifs[0]["motif"] if top_motifs else None,
+            "best_seq_motif": top_motifs[0].get("consensus") if top_motifs else None,
         }
 
         # InterPro-residue grouping: require the residue-level InterPro to also be significant.
@@ -334,10 +370,12 @@ def main() -> None:
                 code, meta[code]["name"], feats, args.max_features_per_group,
             ))
         out.sort(key=lambda g: (-g["n_features"], -g["mean_geom_pr_auc"]))
-        return out[: args.max_groups_per_source]
+        return out
 
-    interpro_groups = build_groups(ipro_code_to_feats, ipro_meta)
-    cath_groups = build_groups(cath_code_to_feats, cath_meta)
+    all_interpro_groups = build_groups(ipro_code_to_feats, ipro_meta)
+    all_cath_groups = build_groups(cath_code_to_feats, cath_meta)
+    interpro_groups = all_interpro_groups[: args.max_groups_per_source]
+    cath_groups = all_cath_groups[: args.max_groups_per_source]
 
     featured_ids = set()
     for g in interpro_groups:
@@ -351,11 +389,13 @@ def main() -> None:
         "max_pct_activated": args.max_pct_activated,
         "n_interpro_residue_sig": n_with_ipro_res,
         "n_cath_residue_sig": n_with_cath_res,
-        "n_interpro_groups": len(interpro_groups),
-        "n_interpro_features_in_groups": sum(g["n_features"] for g in interpro_groups),
-        "n_cath_groups": len(cath_groups),
-        "n_cath_features_in_groups": sum(g["n_features"] for g in cath_groups),
-        "n_unique_features_in_any_group": len(featured_ids),
+        "n_interpro_groups": len(all_interpro_groups),
+        "n_interpro_groups_shown": len(interpro_groups),
+        "n_interpro_features_in_groups": sum(g["n_features"] for g in all_interpro_groups),
+        "n_cath_groups": len(all_cath_groups),
+        "n_cath_groups_shown": len(cath_groups),
+        "n_cath_features_in_groups": sum(g["n_features"] for g in all_cath_groups),
+        "n_unique_features_in_display_payload": len(featured_ids),
         "grouping_level": "residue",
         "q_gate": Q_SIG,
         "max_groups_per_source": args.max_groups_per_source,
@@ -364,19 +404,40 @@ def main() -> None:
 
     output = {
         "global_stats": global_stats,
+        "table3": {
+            "unit": "eligible InterPro residue annotation group",
+            "cosine_similarity_threshold": 0.5,
+            "n_interpro_groups": len(all_interpro_groups),
+            "n_geom_distinguishable": sum(
+                g["mean_cosine_similarity"] < 0.5 for g in all_interpro_groups
+            ),
+            "pct_geom_distinguishable": round(
+                100
+                * sum(g["mean_cosine_similarity"] < 0.5 for g in all_interpro_groups)
+                / max(len(all_interpro_groups), 1),
+                2,
+            ),
+            "presentation_cap_applied": False,
+            "q_source": "fixed_score_permutation_raw_p",
+            "n_geometry_q_tested": len(fixed_geometry_q),
+            "n_interpro_residue_q_tested": len(fixed_interpro_q),
+        },
         "interpro_groups": interpro_groups,
         "cath_groups": cath_groups,
         # Back-compat alias for older JS consumers that expect `groups`
         "groups": interpro_groups,
     }
 
-    out_path = data_dir / "subdomain_case_study.json"
+    out_path = args.output or (data_dir / "subdomain_case_study.json")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(output, indent=2))
     print(
-        f"Wrote {out_path}: {len(interpro_groups)} InterPro-residue groups "
-        f"({global_stats['n_interpro_features_in_groups']} features), "
-        f"{len(cath_groups)} CATH-residue groups "
-        f"({global_stats['n_cath_features_in_groups']} features)"
+        f"Wrote {out_path}: {len(all_interpro_groups)} InterPro-residue groups "
+        f"({len(interpro_groups)} shown; "
+        f"{global_stats['n_interpro_features_in_groups']} feature memberships), "
+        f"{len(all_cath_groups)} CATH-residue groups "
+        f"({len(cath_groups)} shown; "
+        f"{global_stats['n_cath_features_in_groups']} feature memberships)"
     )
 
     print("\nTop InterPro-residue groups:")

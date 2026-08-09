@@ -78,10 +78,8 @@ from proteinlens.analysis.feature_pipeline.interpro_enrichment import (
 # null distributions exactly (regression-critical for FDR downstream).
 _PROT_RNG_OFFSET = 10_000_000
 
-# Defaults mirror PipelineConfig (interpro_min_proteins=3,
-# interpro_f1_threshold_steps=50) so the observed score here matches the
-# pipeline's stage-5c protein-level F1 bit-for-bit. Keep these in sync if
-# pipeline defaults change.
+# Defaults are passed explicitly from the CLI (whose default is read from
+# PipelineConfig) so observed and null scores use the same threshold grid.
 _INTERPRO_PROTEIN_MIN_PROTEINS = 3
 
 logger = logging.getLogger(__name__)
@@ -785,6 +783,7 @@ def process_feature(
     n_permutations: int,
     seed: int,
     shared: dict | None = None,
+    threshold_steps: int | None = None,
 ) -> dict[str, Any] | None:
     """Run permutation testing for a single feature across all 5 metrics.
 
@@ -799,6 +798,10 @@ def process_feature(
 
     if shared is None:
         shared = {}
+    if threshold_steps is None:
+        threshold_steps = PipelineConfig.__dataclass_fields__[
+            "interpro_f1_threshold_steps"
+        ].default
 
     feature_json_fids = shared.get("feature_json_fids", set())
     if feature_json_fids and fid not in feature_json_fids:
@@ -915,7 +918,7 @@ def process_feature(
 
     # ── Compute observed scores ──
 
-    n_steps = 50
+    n_steps = threshold_steps
     min_count = 5
 
     # Motif F1 (uses k-mer-filtered activation array, not full pooled array)
@@ -1114,6 +1117,8 @@ def process_feature(
     result = {
         "feature_id": fid,
         "n_permutations": n_permutations,
+        "threshold_steps": threshold_steps,
+        "scoring_provenance_version": 1,
         "seed": seed,
         "n_proteins": len(proteins),
         "n_residues": total_residues,
@@ -1209,7 +1214,12 @@ def _worker(fid: int) -> tuple[int, str, dict | None]:
     s = _worker_state
     try:
         result = process_feature(
-            fid, s["data_dir"], s["n_permutations"], s["seed"], s["shared"],
+            fid,
+            s["data_dir"],
+            s["n_permutations"],
+            s["seed"],
+            s["shared"],
+            threshold_steps=s["threshold_steps"],
         )
         if result is None:
             return fid, "skipped", None
@@ -1252,6 +1262,23 @@ def main() -> None:
     parser.add_argument(
         "--n-permutations", type=int, default=100,
         help="Number of permutations per feature (default: 100)",
+    )
+    parser.add_argument(
+        "--threshold-steps",
+        type=int,
+        default=PipelineConfig.__dataclass_fields__[
+            "interpro_f1_threshold_steps"
+        ].default,
+        help=(
+            "Threshold grid used for every F1 observed/null score. The default "
+            "is read from PipelineConfig and is recorded in every output."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Null output directory (default: DATA_DIR/permutation_null)",
     )
     parser.add_argument(
         "--seed", type=int, default=42,
@@ -1307,7 +1334,7 @@ def main() -> None:
         )
 
     data_dir = args.data_dir
-    perm_dir = data_dir / "permutation_null"
+    perm_dir = args.output_dir or (data_dir / "permutation_null")
     perm_dir.mkdir(parents=True, exist_ok=True)
 
     # Discover features
@@ -1322,15 +1349,29 @@ def main() -> None:
     # JSONDecodeError on empty input.
     done_fids = set()
     stale_stubs = 0
+    incompatible_files: list[str] = []
     for fpath in perm_dir.glob("*.json"):
         try:
             if fpath.stat().st_size == 0:
                 stale_stubs += 1
                 continue
+            existing = json.loads(fpath.read_text())
+            if (
+                existing.get("threshold_steps") != args.threshold_steps
+                or existing.get("n_permutations") != args.n_permutations
+            ):
+                incompatible_files.append(fpath.name)
+                continue
             fid = int(fpath.stem)
             done_fids.add(fid)
-        except (ValueError, OSError):
+        except (ValueError, OSError, json.JSONDecodeError):
             pass
+    if incompatible_files:
+        raise SystemExit(
+            f"{len(incompatible_files)} existing null files have missing or "
+            "incompatible threshold_steps/n_permutations metadata. Refusing "
+            "to mix snapshots; choose a fresh --output-dir."
+        )
     if stale_stubs:
         print(f"  Skipping {stale_stubs} zero-byte stub(s) — will recompute")
 
@@ -1454,6 +1495,7 @@ def main() -> None:
     print("=" * 60)
     print(f"  Data dir:        {data_dir}")
     print(f"  N permutations:  {args.n_permutations}")
+    print(f"  Threshold steps: {args.threshold_steps}")
     print(f"  Seed:            {args.seed}")
     print(f"  Workers:         {args.workers}")
     print(f"  Total features:  {len(all_fids)}")
@@ -1473,6 +1515,7 @@ def main() -> None:
         "data_dir": data_dir,
         "perm_dir": perm_dir,
         "n_permutations": args.n_permutations,
+        "threshold_steps": args.threshold_steps,
         "seed": args.seed,
         "shared": shared,
     })

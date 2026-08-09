@@ -8,6 +8,7 @@ feature_data_test_500/
 feature_data_cluster/
 feature_data_matryoshka_l4/
 results/
+reproduction_outputs/
 models/
 data/
 wandb/

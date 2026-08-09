@@ -44,8 +44,9 @@ local artifacts unresolved and does not invent checksums.
 - Table 4 family and sequence unions use all qualifying hits. Top 25 remains a
   display limit only. Conflicting family sequence counts fail loudly, and all
   manuscript percentages and denominators are emitted.
-- Figure 6 has a deterministic generator using strict PR-AUC above 0.3 and
-  descriptor importance above 0.1 rules from its caption.
+- Figure 6 has a deterministic generator using fixed-score q significance,
+  strict PR-AUC above 0.3, the single top descriptor when importance is above
+  0.1, the two PR-AUC stacks, and the three descriptor families.
 - Appendix Table 7 GBM settings are centralized and unit tested.
 - Position documentation reports 22 predicates, and paper pipeline threshold
   defaults are pinned to 100.

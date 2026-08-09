@@ -7,12 +7,14 @@ structure rather than sequence-level features.
 
 **Method:**
 
-1. Estimate empirical null p95 for each sequence metric from features with
-   <1% protein activation (which should have no real signal).
-2. A feature is "geometry-primary" if its geometry PR-AUC exceeds 0.3 (well
-   above the random baseline of ~0.038) AND all sequence metrics fall below
-   their respective null p95 thresholds.
-3. Features are ranked by a composite score:
+1. In primary fixed mode, apply BH independently to fixed-score permutation
+   p-values. A feature is geometry-primary when geometry q < 0.05 and all
+   sequence-side q-values are not significant. Missing values exclude it.
+2. Optional refit mode uses only the separately corrected refit-GBM geometry
+   null as a robustness analysis. Modes never fall back feature-by-feature.
+3. Without permutation outputs, a labelled legacy fallback estimates p95
+   thresholds from features with <1% activation.
+4. Features are ranked by a composite score:
    ``PR-AUC * (1 - seq_feature_fraction) * sqrt(concordance_F1)``
    which rewards high geometry quality, low sequence-composition leakage,
    and good spatial concordance.
@@ -193,10 +195,8 @@ def _load_permutation_pvalues(data_dir: Path) -> dict | None:
     run — pooling would invalidate the FDR guarantee for features on
     either side.
 
-    Downstream (``_classify_features``) prefers the refit q-value when a
-    feature has one, falling back to the fixed q-value otherwise. Each
-    feature's source is recorded on its per-feature analysis entry so
-    paper tables can stratify by method.
+    Downstream selects one pool globally through the geometry-null-mode CLI.
+    It never falls back between pools feature-by-feature.
 
     Provenance keyed with underscore-prefixed fields:
 
@@ -444,9 +444,9 @@ def _classify_features(
             "top_geometric_feature": top_feat,
             "structural_category": category,
             "is_geometry_primary": is_primary,
-            # Permutation p-values (None if not available). Geometry
-            # reports the preferred q-value (refit > fixed) plus both
-            # raw values and the source, so consumers can choose.
+            # Permutation q-values (None if unavailable). The unsuffixed
+            # geometry field is the globally selected pool; both pools remain
+            # available for explicit robustness comparisons.
             "geometry_prauc_padj": geom_padj_display,
             "geometry_prauc_padj_refit": geom_padj_refit,
             "geometry_prauc_padj_fixed": geom_padj_fixed,
@@ -503,6 +503,21 @@ def _write_case_studies(
     ]
 
     for rank, (fid, f) in enumerate(primary[:20], 1):
+        if classification_method.startswith("permutation_"):
+            def metric_note(q_key: str) -> str:
+                q_value = f.get(q_key)
+                return f"q={q_value:.4g}" if q_value is not None else "q=missing"
+
+            motif_note = metric_note("motif_pr_auc_padj")
+            position_note = metric_note("position_f1_padj")
+            interpro_note = metric_note("interpro_res_f1_padj")
+            cath_note = metric_note("cath_res_f1_padj")
+        else:
+            motif_note = f"null p95={null_thresholds['motif_pr_auc']:.3f}"
+            position_note = f"null p95={null_thresholds['position_f1']:.3f}"
+            interpro_note = f"null p95={null_thresholds['interpro_res_f1']:.3f}"
+            cath_note = f"null p95={null_thresholds['cath_res_f1']:.3f}"
+
         g = geom_scores.get(int(fid), {})
         rules = g.get("rules", "")
         first_rule = ""
@@ -527,10 +542,10 @@ def _write_case_studies(
             f"| Concordance F1 | {f['concordance_f1']:.3f} |",
             f"| Concordance IoU | {f['concordance_iou']:.3f} |",
             f"| Concordance P / R | {f['concordance_precision']:.3f} / {f['concordance_recall']:.3f} |",
-            f"| Motif PR-AUC | {f['motif_pr_auc']:.3f} (null p95: {null_thresholds['motif_pr_auc']:.3f}) |",
-            f"| Position F1 | {f['position_f1']:.3f} (null p95: {null_thresholds['position_f1']:.3f}) |",
-            f"| InterPro Res F1 | {f['interpro_res_f1']:.3f} (null p95: {null_thresholds['interpro_res_f1']:.3f}) |",
-            f"| CATH Res F1 | {f['cath_res_f1']:.3f} (null p95: {null_thresholds['cath_res_f1']:.3f}) |",
+            f"| Motif PR-AUC | {f['motif_pr_auc']:.3f} ({motif_note}) |",
+            f"| Position F1 | {f['position_f1']:.3f} ({position_note}) |",
+            f"| InterPro Res F1 | {f['interpro_res_f1']:.3f} ({interpro_note}) |",
+            f"| CATH Res F1 | {f['cath_res_f1']:.3f} ({cath_note}) |",
             f"| Seq-derived fraction | {f['seq_feature_fraction']:.3f} |",
             f"| Structural category | {f['structural_category']} |",
             "",

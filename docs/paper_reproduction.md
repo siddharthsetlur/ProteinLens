@@ -55,7 +55,10 @@ Figure 6:
     python scripts/figure6_descriptor_counts.py \
       --output-dir reproduction_outputs
 
-This writes CSV, JSON, SVG, and PNG using the caption rules.
+This writes CSV, JSON, SVG, and PNG. It fixed-q gates the geometric
+annotations, selects each feature's single highest-importance descriptor
+when its importance exceeds 0.1, and stacks counts by the two reported
+PR-AUC bins.
 
 ## Comparison policy
 

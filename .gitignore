@@ -47,3 +47,7 @@ k8s/*.yaml
 !relu_sweep.yaml
 !matryoshka_sweep_config.yaml
 !paper_manifest.yaml
+
+# HF release build output (staged bundles, sanitized configs, checksums)
+release/
+_hf_release/

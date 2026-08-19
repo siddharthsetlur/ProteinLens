@@ -68,7 +68,7 @@ def is_aa_level_concept(concept_name: str) -> bool:
     return any(aa_concept in concept_name for aa_concept in per_aa_concepts)
 
 
-from interplm.constants import AMINO_ACIDS, AMINO_ACID_LIST, AMINO_ACID_TO_IDX
+from proteinlens.constants import AMINO_ACIDS, AMINO_ACID_LIST, AMINO_ACID_TO_IDX
 
 # For backward compatibility
 amino_acids = AMINO_ACID_LIST

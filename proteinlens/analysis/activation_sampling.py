@@ -5,9 +5,9 @@ from typing import Callable, List, Optional
 import numpy as np
 import torch
 
-from interplm.sae.dictionary import Dictionary
-from interplm.sae.inference import get_sae_feats_in_batches
-from interplm.utils import get_device
+from proteinlens.sae.dictionary import Dictionary
+from proteinlens.sae.inference import get_sae_feats_in_batches
+from proteinlens.utils import get_device
 
 
 def get_random_sample_of_sae_feats(

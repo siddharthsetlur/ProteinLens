@@ -39,7 +39,7 @@ that already holds the two unpublished inputs. No layer-4 substitution was made.
 
 ## Method
 
-Environment: `interplm` cannot run these scripts — its `torch` package reports
+Environment: `geopedia` cannot run these scripts — its `torch` package reports
 2.1.2 while `torch-2.9.1` and `torch-2.11.0` dist-infos also sit in site-packages,
 and `transformers` 4.57 needs `torch.utils._pytree.register_pytree_node` (torch
 ≥ 2.2). Used an isolated venv inheriting `causalab` (torch 2.9.0, transformers

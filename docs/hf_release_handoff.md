@@ -63,7 +63,7 @@ export HF_HUB_ENABLE_HF_TRANSFER=1      # faster large uploads
 hf auth login                            # paste your write token
 ```
 
-Use the repo's Python if there is a conda env set up (`interplm`); otherwise any
+Use the repo's Python if there is a conda env set up (`geopedia`); otherwise any
 Python 3.10+ with `numpy` and `pyyaml` works for the build script.
 
 ---

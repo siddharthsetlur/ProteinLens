@@ -38,7 +38,7 @@ have the controlled comparison.
 
 ## Prerequisites
 
-- CUDA GPU, `conda env create -f environment.yml`, `conda activate interplm`
+- CUDA GPU, `conda env create -f environment.yml`, `conda activate geopedia`
 - MMseqs2 (clustering) and MEME Suite (PWM motifs) on `PATH`
 - Network access to UniProt, InterPro (EBI), and AlphaFold
 - ~40 GB free per layer

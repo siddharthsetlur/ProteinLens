@@ -1,17 +1,17 @@
 # Adding Your Own Protein Embedder
 
-This guide explains how to add support for a new protein embedding model to InterPLM.
+This guide explains how to add support for a new protein embedding model to GeoPedia.
 
 ## Overview
 
-InterPLM uses a plugin architecture where each embedder implements the `BaseEmbedder` interface. This allows the rest of the framework (SAE training, analysis, visualization) to work with any protein embedding model - whether it's a language model (ESM, ProGen), structure prediction model (AlphaFold), or any other type.
+GeoPedia uses a plugin architecture where each embedder implements the `BaseEmbedder` interface. This allows the rest of the framework (SAE training, analysis, visualization) to work with any protein embedding model - whether it's a language model (ESM, ProGen), structure prediction model (AlphaFold), or any other type.
 
 ## Step 1: Create Your Embedder Implementation
 
 Create a new file in this directory (e.g., `my_embedder.py`) that implements the `BaseEmbedder` class:
 
 ```python
-from interplm.embedders.base import BaseEmbedder
+from geopedia.embedders.base import BaseEmbedder
 import numpy as np
 from typing import List, Optional, Dict
 from pathlib import Path
@@ -91,7 +91,7 @@ class MyEmbedder(BaseEmbedder):
 Add your embedder to the factory function in `__init__.py`:
 
 ```python
-from interplm.embedders.my_embedder import MyEmbedder
+from geopedia.embedders.my_embedder import MyEmbedder
 
 def get_embedder(embedder_type: str, **kwargs) -> BaseEmbedder:
     embedder_types = {
@@ -106,7 +106,7 @@ def get_embedder(embedder_type: str, **kwargs) -> BaseEmbedder:
 Create a test script to verify your embedder works correctly:
 
 ```python
-from interplm.embedders import get_embedder
+from geopedia.embedders import get_embedder
 
 # Initialize your embedder
 embedder = get_embedder("my_model", model_name="your_model_name")
@@ -125,14 +125,14 @@ batch_embeddings = embedder.extract_embeddings(sequences, layer=1)
 print(f"Batch embedding shape: {batch_embeddings.shape}")
 ```
 
-## Step 4: Use with InterPLM
+## Step 4: Use with GeoPedia
 
-Once your embedder is implemented, you can use it with all InterPLM features:
+Once your embedder is implemented, you can use it with all GeoPedia features:
 
 ```python
-from interplm.embedders import get_embedder
-from interplm.train import train_sae
-from interplm.feature_analysis import collect_top_activating
+from geopedia.embedders import get_embedder
+from geopedia.train import train_sae
+from geopedia.feature_analysis import collect_top_activating
 
 # Use your embedder for SAE training
 embedder = get_embedder("my_model", model_name="model_name")

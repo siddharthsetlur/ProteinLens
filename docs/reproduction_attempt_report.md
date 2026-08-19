@@ -249,12 +249,12 @@ tried. The corrected JSON SHA-256 is
 ```text
 python scripts/verify_paper_manifest.py --output reproduction_outputs/artifact_identity.json
 python scripts/verify_paper_manifest.py --strict --output reproduction_outputs/artifact_identity_strict.json
-~/miniconda3/envs/interplm/bin/python scripts/paper_tables.py --output reproduction_outputs/tables_1_2.json
-~/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table3.json
-~/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_4/frosty-sweep-15/analysis --output reproduction_outputs/layer4_table3.json
-~/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_6/major-sweep-15/analysis --output reproduction_outputs/layer6_table3.json
-~/miniconda3/envs/interplm/bin/python scripts/build_nmpfam_transfer_summary.py --analysis-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table4.json
-~/miniconda3/envs/interplm/bin/python scripts/figure6_descriptor_counts.py --analysis-dir trained_models/layer_4/frosty-sweep-15/analysis --output-dir reproduction_outputs
+~/miniconda3/envs/geopedia/bin/python scripts/paper_tables.py --output reproduction_outputs/tables_1_2.json
+~/miniconda3/envs/geopedia/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table3.json
+~/miniconda3/envs/geopedia/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_4/frosty-sweep-15/analysis --output reproduction_outputs/layer4_table3.json
+~/miniconda3/envs/geopedia/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_6/major-sweep-15/analysis --output reproduction_outputs/layer6_table3.json
+~/miniconda3/envs/geopedia/bin/python scripts/build_nmpfam_transfer_summary.py --analysis-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table4.json
+~/miniconda3/envs/geopedia/bin/python scripts/figure6_descriptor_counts.py --analysis-dir trained_models/layer_4/frosty-sweep-15/analysis --output-dir reproduction_outputs
 sha256sum reproduction_outputs/figure6_descriptor_counts.json reproduction_outputs/figure6_descriptor_counts.csv
 ```
 
@@ -262,7 +262,7 @@ The strict identity command intentionally exited 1 after writing its report.
 The Table 4 command exited 1 for the missing raw directory; after confirming
 the same absence globally, layers 4 and 6 were not redundantly invoked. The
 base Python resolves a broken namespace-only NumPy, so NumPy-dependent
-generators used the existing `interplm` interpreter (Python 3.11, NumPy
+generators used the existing `geopedia` interpreter (Python 3.11, NumPy
 1.26.4). This changes no data or scientific rule.
 
 No source code was edited during this independent attempt. Generated outputs

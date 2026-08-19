@@ -32,7 +32,7 @@ CPU only. No GPU, no cluster. Budget 30-90 min including downloads.
 ### Step 0 — preflight
 
 ```bash
-conda activate interplm          # the repo's env; the base python has a broken numpy
+conda activate geopedia          # the repo's env; the base python has a broken numpy
 python -c "import numpy, yaml, matplotlib"
 hf auth whoami                   # the repos are PRIVATE until the paper is out
 df -h .                          # check against the target's footprint below
@@ -204,7 +204,7 @@ Three things to know before starting:
 1. Figure 5's inputs are **not in the Hugging Face release**, so this mode only
    works on a machine that already holds `feature_data_cluster/` and
    `trained_models/layer_3/fiery-sweep/`. Check for both and stop if absent.
-2. `interplm` cannot run it (broken torch install). Use an environment with
+2. `geopedia` cannot run it (broken torch install). Use an environment with
    `torch >= 2.2`, `transformers`, `h5py`, `einops`, `biopython`. CPU is fine.
 3. The right panel does not reproduce: 5 features / 20 cases against the paper's
    92 / 495. The 92 came from a curated `--feature-ids-file` that was never

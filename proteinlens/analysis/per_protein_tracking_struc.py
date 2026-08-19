@@ -14,12 +14,12 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
-from interplm.sae.dictionary import Dictionary
-from interplm.sae.inference import get_sae_feats_in_batches, split_up_feature_list
-from interplm.utils import get_device
-from interplm.data_processing.embedding_loader import load_shard_embeddings
+from proteinlens.sae.dictionary import Dictionary
+from proteinlens.sae.inference import get_sae_feats_in_batches, split_up_feature_list
+from proteinlens.utils import get_device
+from proteinlens.data_processing.embedding_loader import load_shard_embeddings
 from transformers import AutoTokenizer, EsmForProteinFolding
-from interplm.analysis.per_protein_tracking import PerProteinActivationTracker
+from proteinlens.analysis.per_protein_tracking import PerProteinActivationTracker
 def load_esmfold_model(device: str):
     """Load and configure ESMFold model for structure prediction."""
     print("Loading ESMFold model for structure prediction...")
@@ -127,7 +127,7 @@ def find_max_examples_with_structures(
         
         # Process features in chunks
         from tqdm import tqdm
-        from interplm.sae.inference import split_up_feature_list, get_sae_feats_in_batches
+        from proteinlens.sae.inference import split_up_feature_list, get_sae_feats_in_batches
         
         for feature_list in tqdm(
             split_up_feature_list(

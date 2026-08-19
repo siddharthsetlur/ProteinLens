@@ -130,7 +130,7 @@ The fidelity evaluation needs a text file with one sequence per line. The traini
 
 ```bash
 export LAYER=4
-export INTERPLM_DATA=data
+export GEOPEDIA_DATA=data
 export MODEL_DIR=models
 python train_basic_sae.py
 ```
@@ -151,9 +151,9 @@ This trains a standard ReLU SAE with these hardcoded defaults (designed for ESM2
 | `DECAY_START` | 400,000 | Start LR decay at 80% |
 
 **Data paths** (derived from environment variables):
-- Training embeddings: `$INTERPLM_DATA/training_embeddings/esm2_8m/layer_$LAYER`
-- Eval sequences: `$INTERPLM_DATA/eval_sequences.txt`
-- Eval FASTA: `$INTERPLM_DATA/eval_shards/shard_0.fasta`
+- Training embeddings: `$GEOPEDIA_DATA/training_embeddings/esm2_8m/layer_$LAYER`
+- Eval sequences: `$GEOPEDIA_DATA/eval_sequences.txt`
+- Eval FASTA: `$GEOPEDIA_DATA/eval_shards/shard_0.fasta`
 - Model output: `$MODEL_DIR/relu/layer_$LAYER`
 
 **What happens during training:**
@@ -171,7 +171,7 @@ This trains a standard ReLU SAE with these hardcoded defaults (designed for ESM2
 
 ```bash
 export LAYER=4
-export INTERPLM_DATA=data
+export GEOPEDIA_DATA=data
 export MODEL_DIR=models
 python train_matry_sae.py
 ```
@@ -221,7 +221,7 @@ wandb sweep relu_sweep.yaml
 
 # 2. Start an agent (runs on your machine)
 export LAYER=4
-export INTERPLM_DATA=data
+export GEOPEDIA_DATA=data
 export MODEL_DIR=models
 wandb agent <your-entity>/<your-project>/<sweep-id>
 ```

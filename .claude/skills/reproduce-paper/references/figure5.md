@@ -55,7 +55,7 @@ changes the model, the dictionary, and the feature's identity.
 
 ## Environment
 
-The `interplm` env cannot run these scripts: its `torch` package reports 2.1.2
+The `geopedia` env cannot run these scripts: its `torch` package reports 2.1.2
 while `torch-2.9.1` and `torch-2.11.0` dist-infos also sit in site-packages, and
 the installed `transformers` needs `torch.utils._pytree.register_pytree_node`,
 added in torch 2.2. It fails at import. This is the env drift

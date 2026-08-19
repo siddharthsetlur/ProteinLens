@@ -21,10 +21,10 @@ import torch
 from scipy import sparse
 from tqdm import tqdm
 
-from interplm.analysis.concepts.concept_constants import is_aa_level_concept
-from interplm.sae.dictionary import Dictionary
-from interplm.sae.inference import get_sae_feats_in_batches, load_sae
-from interplm.data_processing.embedding_loader import load_shard_embeddings
+from proteinlens.analysis.concepts.concept_constants import is_aa_level_concept
+from proteinlens.sae.dictionary import Dictionary
+from proteinlens.sae.inference import get_sae_feats_in_batches, load_sae
+from proteinlens.data_processing.embedding_loader import load_shard_embeddings
 
 
 def count_unique_nonzero_sparse(

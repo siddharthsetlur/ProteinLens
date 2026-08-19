@@ -7,17 +7,17 @@ feature is 1 across the provided dataset.
 from pathlib import Path
 from typing import Optional
 
-from interplm.sae.dictionary import MatryoshkaBatchTopKSAE
+from proteinlens.sae.dictionary import MatryoshkaBatchTopKSAE
 import numpy as np
 import torch
 
-from interplm.sae.inference import (
+from proteinlens.sae.inference import (
     get_sae_feats_in_batches,
     load_sae,
     split_up_feature_list,
 )
-from interplm.utils import get_device
-from interplm.data_processing.embedding_loader import (
+from proteinlens.utils import get_device
+from proteinlens.data_processing.embedding_loader import (
     ShardDataLoader,
     detect_and_create_loader
 )

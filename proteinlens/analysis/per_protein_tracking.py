@@ -14,10 +14,10 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
-from interplm.sae.dictionary import Dictionary
-from interplm.sae.inference import get_sae_feats_in_batches, split_up_feature_list
-from interplm.utils import get_device
-from interplm.data_processing.embedding_loader import load_shard_embeddings
+from proteinlens.sae.dictionary import Dictionary
+from proteinlens.sae.inference import get_sae_feats_in_batches, split_up_feature_list
+from proteinlens.utils import get_device
+from proteinlens.data_processing.embedding_loader import load_shard_embeddings
 
 
 class PerProteinActivationTracker:

@@ -132,7 +132,7 @@ via `--analysis LABEL=PATH` / `--data-dir` / `--analysis-dir`.
 
 `k8s/INSTRUCTIONS.md` and `k8s/Dockerfile.pipeline` are the tracked entry points.
 Per-run job YAMLs are generated locally and deliberately gitignored, so a fresh
-clone will not have them — template from `INSTRUCTIONS.md`.
+clone will not have them — template from `k8s/INSTRUCTIONS.md`.
 
 Cluster conventions that cost real time when missed:
 - Ship new scripts via an image rebuild under a non-`latest` tag plus a Job, not

@@ -174,10 +174,60 @@ sh EXTRACT.sh    # find . -name '*.tar.zst' -execdir tar --zstd -xf {} \; -delet
 
 ## Reproducing the paper
 
-Run `/reproduce-paper` in Claude Code (`.claude/skills/reproduce-paper/`): it
-selects and downloads the artifacts a given table needs, regenerates it, and
-writes a comparison report. Manual instructions, the comparison policy, and the
-known exclusions are in [docs/paper_reproduction.md](docs/paper_reproduction.md).
+The repo ships a Claude Code skill that drives the whole reproduction. In a
+checkout, run:
+
+```
+/reproduce-paper
+```
+
+It asks which result you want, downloads only the artifacts that result needs,
+extracts them, verifies artifact identity, regenerates the number, and writes a
+comparison report to `reproduction_outputs/`. It lives in
+`.claude/skills/reproduce-paper/` and is version-controlled with the code it
+drives.
+
+Say which target you want, e.g. `/reproduce-paper Tables 1 and 2` or
+`/reproduce-paper Table 4, layer 6`. Four modes:
+
+| Mode | What it does | Cost |
+|---|---|---|
+| **A** (default) | Tables 1–4 and Figure 6 from the released artifacts | CPU, 30–90 min, 32 MB – 17 GB depending on target |
+| **B** | Re-run the pipeline from raw sequences | GPU cluster, days–weeks — opt-in only |
+| **C** | ESM2-35M layer 6 generalization check (not a paper claim) | CPU, minutes |
+| **D** | Figure 5 contact-prediction ablation | CPU, ~15 min, needs unreleased inputs |
+
+Download only what you need — the per-target artifact map, with verified sizes
+and expected file counts, is in
+`.claude/skills/reproduce-paper/references/artifacts.md`. Note that Table 3 and
+Figure 6 read from the `geopedia-analysis` repo, not `paper-artifacts`.
+
+### Doing it by hand
+
+The skill runs ordinary scripts, so nothing requires Claude Code.
+[docs/paper_reproduction.md](docs/paper_reproduction.md) has the same commands,
+the comparison policy (1.0 pp tolerance), and the known exclusions.
+
+### What does and does not reproduce
+
+Reproducing the *known discrepancies* is a correct outcome, not a failure. Before
+debugging a mismatch, check
+[docs/reproduction_attempt_report.md](docs/reproduction_attempt_report.md) and the
+skill's *Known discrepancies* section. Currently open:
+
+- **Layer 2, Table 1** runs +1.15 to +2.30 pp high on four of six measures
+  (layers 4 and 6 match). Unresolved snapshot difference.
+- **Table 4, layer 4** cannot be reported — its released NMPFam input holds 284 of
+  ~7,904 per-feature files. The generator does not error, it returns 2.73% where
+  the paper reports 77.78%. Layers 2 and 6 are intact.
+- **Figure 5** reproduces in its left and middle panels but *not from the
+  release*: it uses an unpublished layer-3 SAE (`fiery-sweep`, 5,120 features),
+  not the paper's layer-4 run. Its right panel does not reproduce — the
+  92-feature population came from a curated list that was never published.
+- **Figure 5's** contact-ablation scripts need `torch >= 2.2`; the `interplm` env
+  cannot run them.
+- **Figures 1–4** have no deterministic renderer; **Tables 5–6** need a pinned
+  W&B export that is not identified.
 
 ## Repo layout
 

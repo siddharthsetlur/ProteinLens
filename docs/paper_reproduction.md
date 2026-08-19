@@ -4,6 +4,30 @@ Artifact identity, numerical regeneration, and manuscript comparison are
 separate steps. A close numerical match is not evidence that the right data
 were used.
 
+## Obtain the artifacts
+
+The paper's artifacts are released on Hugging Face — see the *Data release*
+section of the README for the three repos. They are private until publication.
+
+Download into the repo root; the released layout matches what every generator
+expects by default:
+
+```bash
+hf download Sidd2010/proteinlens-paper-artifacts --repo-type dataset --local-dir . \
+  --include "trained_models/*/*/analysis/permutation_null.tar.zst" \
+            "trained_models/*/*/analysis/geometry_primary_analysis.json" \
+            "trained_models/*/*/analysis/dataset_stats.json"
+
+find trained_models -name '*.tar.zst' -print -execdir tar --zstd -xf {} \; -delete
+```
+
+That subset (~95 MB) is enough for Tables 1 and 2. Tables 3 and 4 and Figure 6
+need more, and Table 3 and Figure 6 read `geometry_enrichment/`,
+`cath_enrichment/`, and `survey_coverage.json` from the *geopedia-analysis* repo
+rather than *paper-artifacts*. The per-target download map, with sizes, is in
+`.claude/skills/reproduce-paper/references/artifacts.md`, and `/reproduce-paper`
+drives the whole sequence.
+
 ## Validate candidate artifacts
 
 Run:
@@ -49,6 +73,19 @@ Table 4, repeated per layer:
       --output reproduction_outputs/layer4_table4.json
 
 Family unions use every qualifying hit, not the top-25 display list.
+
+Table 4's `nmpfam/nmpfam_enrichment/` inputs were absent when
+`docs/reproduction_attempt_report.md` was written, which is why that report
+records Table 4 as not regenerable. The release carries them for **layers 2 and
+6** — layer 6 holds 9,313 per-feature files, exactly the paper's 90.95% of
+10,240 — so Table 4 is now reproducible for those layers.
+
+Layer 4 is **not**: its released `nmpfam_enrichment/` holds 284 files covering
+feature ids 8933-10239, against the ~7,904 its own cached
+`nmpfam_transfer_summary.json` was built from. The generator does not fail on the
+partial input; it silently returns 2.73% where the paper reports 77.78%. The
+datastore copy is itself partial, so this is not a transfer defect and re-running
+the transfer will not fix it. Check the file count before trusting the output.
 
 Figure 6:
 

@@ -38,7 +38,7 @@ Main findings:
   modestly lower (for example 255 versus 271), consistent with the unresolved
   local-versus-paper snapshot rather than a changed plotting estimand.
 - Figures 1--4 have underlying artifacts to varying degrees but no exact
-  deterministic renderer. Figure 5 was deliberately ignored.
+  deterministic renderer.
 - Appendix Tables 7 and 8 are supported by source. Tables 5 and 6 are only
   partially supported because pinned W&B/evaluation artifacts are absent.
 

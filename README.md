@@ -22,6 +22,15 @@ Trained SAE checkpoints and pre-computed analysis artifacts are released
 separately (see [Data release](#data-release)) — the repo itself does
 not carry them.
 
+## Try it now — [geopedia.studio](https://geopedia.studio/)
+
+A live GeoPedia instance is running at **<https://geopedia.studio/>**. Explore
+the SAE features across protein structures in the browser — no install, no
+downloads, no artifacts to fetch.
+
+Run it locally only if you want to point it at your own analysis directory; see
+[Load the visualization](#3-load-the-visualization) below.
+
 ## Reproducing the paper — start here
 
 You do **not** need to retrain anything or run the pipeline. The paper's numbers
@@ -164,6 +173,9 @@ permutation null, etc.). Each is documented in its own `--help`.
 
 ## 3. Load the visualization
 
+> A hosted instance is already running at <https://geopedia.studio/> — use that
+> unless you need to browse your own analysis output.
+
 GeoPedia is a single-page React app served by FastAPI. It expects each
 SAE's analysis output (the per-feature pipeline outputs from step 2)
 under `trained_models/layer_<N>/<run>/analysis/`.
@@ -230,7 +242,7 @@ modes:
 | **A** (default) | Tables 1–4 and Figure 6 from the released artifacts | CPU, 30–90 min, 32 MB – 17 GB depending on target |
 | **B** | Re-run the pipeline from raw sequences | GPU cluster, days–weeks — opt-in only |
 | **C** | ESM2-35M layer 6 generalization check (not a paper claim) | CPU, minutes |
-| **D** | Figure 5 contact-prediction ablation | CPU, ~15 min, needs unreleased inputs |
+| **D** | Figure 5 contact-prediction ablation | CPU, ~15 min |
 
 Download only what you need — the per-target artifact map, with verified sizes
 and expected file counts, is in
@@ -246,13 +258,6 @@ skill's *Known discrepancies* section. Currently open:
 
 - **Layer 2, Table 1** runs +1.15 to +2.30 pp high on four of six measures
   (layers 4 and 6 match). Unresolved snapshot difference.
-- **Table 4** reproduces for all three layers.
-- **Figure 5** reproduces in its left and middle panels but *not from the
-  release*: it uses an unpublished layer-3 SAE (`fiery-sweep`, 5,120 features),
-  not the paper's layer-4 run. Its right panel does not reproduce — the
-  92-feature population came from a curated list that was never published.
-- **Figure 5's** contact-ablation scripts need `torch >= 2.2`; the `geopedia` env
-  cannot run them.
 - **Figures 1–4** have no deterministic renderer; **Tables 5–6** need a pinned
   W&B export that is not identified.
 
@@ -283,4 +288,21 @@ docs/                           paper-companion docs
 
 ## Citation
 
-Citation will be added after review.
+<!-- PLACEHOLDER — replace with the real entry before release. -->
+
+If you use GeoPedia, the released SAEs, or the analysis artifacts, please cite:
+
+```bibtex
+@article{TODO_citekey,
+  title   = {TODO: paper title},
+  author  = {TODO: author list},
+  journal = {TODO: venue},
+  year    = {TODO},
+  url     = {TODO},
+  doi     = {TODO},
+}
+```
+
+Please also cite [InterPLM](https://github.com/ElanaPearl/interPLM) (Simon &
+Zou), which the SAE training stack is based on — see the acknowledgement at the
+top of this file.

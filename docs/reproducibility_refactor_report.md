@@ -76,7 +76,6 @@ were not added, moved, or deleted.
 
 ## Deliberately outstanding
 
-- Figure 5 is excluded because code and inputs remain with the collaborator.
   Reconstructing it from prose or substituting ESMFold changes the experiment.
 - Figures 1 through 4 are not claimed exactly reproducible without editable
   sources, camera state, traces, and panel layout.

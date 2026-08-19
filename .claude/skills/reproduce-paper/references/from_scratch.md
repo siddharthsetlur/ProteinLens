@@ -127,18 +127,3 @@ it must come after stages 5c/6c/7b/8 and after the nulls.
 
 Identical to Mode A step 4 — point the generators at your new analysis directory
 via `--analysis LABEL=PATH` / `--data-dir` / `--analysis-dir`.
-
-## Running on EIDF
-
-`k8s/INSTRUCTIONS.md` and `k8s/Dockerfile.pipeline` are the tracked entry points.
-Per-run job YAMLs are generated locally and deliberately gitignored, so a fresh
-clone will not have them — template from `k8s/INSTRUCTIONS.md`.
-
-Cluster conventions that cost real time when missed:
-- Ship new scripts via an image rebuild under a non-`latest` tag plus a Job, not
-  `kubectl exec` pipes.
-- Move data with `rsync` through a sync pod, never `kubectl cp`; trailing slash on
-  both source and destination.
-- On CephFS, glob a directory once — never `exists()` per file.
-- Per-feature JSON writers need atomic writes and a skip-zero-byte resume; an
-  OOM kill leaves stub files that silently corrupt the next resume.

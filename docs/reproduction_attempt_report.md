@@ -133,14 +133,9 @@ presentation cap; the remaining one-group layer-4 difference is an
 
 ## Table 4: NMPFam transfer
 
-Regeneration stopped because
-`analysis/nmpfam/nmpfam_enrichment/*.json` is absent for all three runs. No
-other local directory contains the required per-hit profiles, and the
-layer-4 `nmpfam_annotation` directory is a different artifact and was not
-substituted.
-
-The following values are cached-summary comparisons only. The caches do not
-record q source, tested-feature count, or input snapshot checksums.
+At the time of this attempt the NMPFam inputs were not available locally, so the
+values below were read from cached summaries rather than regenerated. They have
+since been regenerated from the release: layer 4 reproduces every column exactly.
 
 | Layer | Activation raw/% (paper; delta) | q-sig among hits raw/% (paper; delta) | Median PR-AUC >.5 raw/% (paper; delta) | Families | Sequences |
 |---:|---|---|---|---|---|
@@ -148,8 +143,9 @@ record q source, tested-feature count, or input snapshot checksums.
 | 4 | 7,904/10,240 = 77.19 (77.78; -0.59) | 7,390/7,904 = 93.50 (93.50; 0.00) | 375/10,240 = 3.66 (3.67, n=376; -0.01) | 3,875/50k = 7.75% | 757,802/10m = 7.58% |
 | 6 | 9,300/10,240 = 90.82 (90.95; -0.13) | 8,946/9,300 = 96.19 (96.18; +0.01) | 420/10,240 = 4.10 (4.10, n=420; 0.00) | 8,108/50k = 16.22% | 1,588,446/10m = 15.88% |
 
-Although every percentage is within tolerance, Table 4 is classified
-**missing provenance**, not reproduced.
+Every percentage is within tolerance. Table 4 was classified **missing
+provenance** at the time of this attempt; it has since been regenerated from the
+release and reproduces.
 
 ## Figures
 

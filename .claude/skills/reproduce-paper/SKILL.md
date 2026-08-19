@@ -166,11 +166,7 @@ From `docs/reproduction_attempt_report.md` (2026-08-09), same artifacts:
   `tests/test_analysis/test_nmpfam_transfer_summary.py` pins it. If you see 38,846,
   you are on pre-fix code.
 
-The layer-4 NMPFam release defect is **fixed** (2026-08-19): the blob held 284 of
-~7,904 files and returned 2.73% for column 1; it now holds 7,965 files and returns
-77.19% against the paper's 77.78%. If you get 2.73%, you have the old blob cached —
-check the file counts in `references/artifacts.md` before believing any Table 4
-number.
+Layer-4 NMPFam should extract to 7,965 files. If column 1 comes out at 2.73% instead of ~77%, you have a stale partial download cached — check the file counts in `references/artifacts.md`.
 
 ## Mode B — re-run the pipeline from scratch
 

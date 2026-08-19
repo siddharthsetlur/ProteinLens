@@ -111,8 +111,10 @@ code's 50-step grid generated the snapshot.
 
 ## Known exclusions
 
-- Figure 5 contact-map ablation code remains with the collaborator. No ESMFold
-  steering experiment is substituted.
+- Figure 5's contact-prediction ablation code is now in the repo, and its left and
+  middle panels reproduce — but not from the release. It uses an unpublished
+  layer-3 SAE (`fiery-sweep`, 5,120 features), not the paper's layer-4 run, and
+  its right panel does not reproduce. See `docs/figure5_reproduction.md`.
 - Exact renderers/editable sources for Figures 1 through 4 are unavailable.
   Known feature and protein identities are frozen in paper_manifest.yaml.
 - Tables 5 and 6 need a pinned W&B export that is not currently identified.

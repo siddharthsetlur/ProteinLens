@@ -7,7 +7,7 @@ import pandas as pd
 from scipy import sparse
 from tqdm import trange
 
-from interplm.analysis.concepts.concept_constants import (
+from proteinlens.analysis.concepts.concept_constants import (
     subconcepts_to_exclude_from_evals,
 )
 

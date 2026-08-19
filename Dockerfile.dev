@@ -31,17 +31,17 @@ RUN conda env create -f environment.yml && \
     conda clean -afy
 
 #     # Install PyTorch with CUDA 12.8 support
-# RUN /opt/conda/envs/interplm/bin/pip install torch==2.9.0 torchvision==0.24.0 --index-url https://download.pytorch.org/whl/cu128
+# RUN /opt/conda/envs/geopedia/bin/pip install torch==2.9.0 torchvision==0.24.0 --index-url https://download.pytorch.org/whl/cu128
 
     # Activate environment by default
-ENV CONDA_DEFAULT_ENV=interplm
-ENV PATH=$CONDA_DIR/envs/interplm/bin:$PATH
+ENV CONDA_DEFAULT_ENV=geopedia
+ENV PATH=$CONDA_DIR/envs/geopedia/bin:$PATH
 
 # Copy the entire project
 COPY . /workspace
 
 # Install proteinlens package in editable mode
-RUN /opt/conda/envs/interplm/bin/pip install -e .
+RUN /opt/conda/envs/geopedia/bin/pip install -e .
 
 # Set default shell to bash with conda activated
 SHELL ["/bin/bash", "-c"]

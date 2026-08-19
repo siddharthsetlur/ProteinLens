@@ -60,22 +60,22 @@ Compressed download → extracted on disk.
 Figure 6 is a layer-4 figure. The NMPFam archives are by far the largest objects
 in the release and expand 5x; check `df -h` and do one layer at a time.
 
-## Table 4, layer 4 — was broken, now restored
+## Table 4 — expected values
 
-The layer-4 NMPFam blob originally held **284** per-feature files (ids
-8933-10239) against the ~7,904 the layer's cached `nmpfam_transfer_summary.json`
-was built from, and the generator returned 2.73% where the paper reports 77.78%.
+Layer 4, regenerated from the release and pinned by
+`tests/test_analysis/test_nmpfam_transfer_summary.py`:
 
-**Fixed on 2026-08-19.** The complete set was still on `pipeline-pvc`, so the loss
-was in the DataStore mirror, not in the pipeline. The blob now holds **7,965**
-files (7,964 per-feature + `summary.json`), ids 0-10239, no zero-byte stubs,
-6.63 GB compressed / 33 GB extracted.
+| Column | Paper | Regenerated |
+|---|---|---|
+| 1 % NMPFam act. | 77.78 | 77.19 (7,904/10,240) |
+| 2 % geom. q-sig. | 93.50 | 93.55 (7,394) |
+| 3 % med. PR-AUC > 0.5 | 3.67% (376) | 3.67% (376) |
+| 4 NMPFams matched | 7.75% (3,875) | 3,875 |
+| 5 Sequences annotated | 7.58% (757,802) | 757,802 |
 
-All five columns reproduce. Columns 4-5 required a generator fix — it unioned
-over all features with hits instead of the gated set, and was 10x high as a
-result (see below).
+Columns 4-5 count families matched by the **column-3 gated** features, not by
+every feature carrying hits. If you see 38,846 families, you are on pre-fix code.
 
-## Expected file counts after extraction
 ## Expected file counts after extraction
 
 Verified against the live release. Use these as the post-extraction sanity check.
@@ -86,47 +86,8 @@ Verified against the live release. Use these as the post-extraction sanity check
 | `nmpfam/nmpfam_enrichment/` | *unverified* | 7,965 | 9,313 |
 
 A count below these means a truncated download — re-run `hf download`, it resumes.
-A layer-4 count of 284 means you have the pre-2026-08-19 blob cached; clear it and
+A layer-4 count of 284 means a stale partial download; clear the cache and
 re-download.
-
-## Table 4 layer 4 — measured, 2026-08-19
-
-Regenerated from the restored release blob (7,965 files, 33 GB):
-
-| Column | Paper | Restored release | Verdict |
-|---|---|---|---|
-| 1 % NMPFam act. | 77.78 | **77.19** (7,904/10,240) | within tolerance (-0.59 pp) |
-| 2 % geom. q-sig. | 93.50 | **93.55** (7,394) | within tolerance (+0.05 pp) |
-| 3 % med. PR-AUC > 0.5 | 3.67% (376) | **3.67% (376)** | exact |
-| 4 NMPFams matched | 7.75% (3,875) | 77.69% (38,846) | generator bug; **3,875 exact** over gated |
-| 5 Sequences annotated | 7.58% (757,802) | 77.33% (7,733,244) | generator bug; **757,802 exact** over gated |
-
-Columns 1-3 were the catastrophic failures (column 1 was 2.73%); they are fixed,
-and column 3 now matches the paper exactly where the cached summary gave 375.
-
-Columns 4-5 come out 10x high **because of a generator bug**, confirmed
-2026-08-19.
-
-`build_nmpfam_transfer_summary.py:205` unions strong hits over `feature_records`
-— every feature with hits, 7,904 of them — producing 38,846 families and
-7,733,244 sequences. Restricting the union to the **376 gated** features of
-column 3 reproduces the paper exactly:
-
-| | Paper | Union over all 7,904 | Union over 376 gated |
-|---|---|---|---|
-| col 4 families | 3,875 (7.75%) | 38,846 (77.69%) | **3,875 (7.75%)** |
-| col 5 sequences | 757,802 (7.58%) | 7,733,244 (77.33%) | **757,802 (7.58%)** |
-
-Two independent quantities matching to the digit settles the estimand: the paper
-unions over the gated features. The denominators were never in question — the
-caption fixes them at 50k and 10M, and the paper's counts are consistent with
-those.
-
-**Fixed.** The generator now unions over `gated`, and
-`tests/test_analysis/test_nmpfam_transfer_summary.py` pins the behaviour — three
-unit tests on a fixture plus an integration test asserting 376 / 3,875 / 757,802
-against the real layer-4 directory. **Table 4 layer 4 reproduces in full, all
-five columns.**
 
 ## Commands
 

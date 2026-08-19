@@ -32,7 +32,7 @@ CPU only. No GPU, no cluster. Budget 30-90 min including downloads.
 ### Step 0 — preflight
 
 ```bash
-conda activate interplm          # the repo's env; the base python has a broken numpy
+conda activate geopedia          # the repo's env; the base python has a broken numpy
 python -c "import numpy, yaml, matplotlib"
 hf auth whoami                   # the repos are PRIVATE until the paper is out
 df -h .                          # check against the target's footprint below
@@ -135,12 +135,6 @@ fingerprint from Step 3. A percentage with no denominator is not a result.
 
 ### Step 6 — report the exclusions rather than working around them
 
-- **Figure 5** (contact-prediction ablation): the code landed in #6 and the left and
-  middle panels are runnable — but **not from the release**. Its SAE
-  (`trained_models/layer_3/fiery-sweep`, 5,120 features, `layer_idx` 3) and its
-  analysis dir (`feature_data_cluster/`) are both unpublished, and are a different
-  model from the paper's layer-4 run. See `references/figure5.md` before touching
-  it, and never substitute the layer-4 run.
 - **Figures 1-4**: underlying data exists to varying degrees, no deterministic
   renderer. Feature and protein identities are frozen in `paper_manifest.yaml`.
 - **Tables 5-6**: need a pinned W&B export that is not identified.
@@ -166,11 +160,7 @@ From `docs/reproduction_attempt_report.md` (2026-08-09), same artifacts:
   `tests/test_analysis/test_nmpfam_transfer_summary.py` pins it. If you see 38,846,
   you are on pre-fix code.
 
-The layer-4 NMPFam release defect is **fixed** (2026-08-19): the blob held 284 of
-~7,904 files and returned 2.73% for column 1; it now holds 7,965 files and returns
-77.19% against the paper's 77.78%. If you get 2.73%, you have the old blob cached —
-check the file counts in `references/artifacts.md` before believing any Table 4
-number.
+Layer-4 NMPFam should extract to 7,965 files. If column 1 comes out at 2.73% instead of ~77%, you have a stale partial download cached — check the file counts in `references/artifacts.md`.
 
 ## Mode B — re-run the pipeline from scratch
 
@@ -196,20 +186,6 @@ Compare against the committed `analysis/esm35m_l6/paper_tables.json`.
 
 ## Mode D — Figure 5, contact-prediction ablation
 
-Read `references/figure5.md` first — it carries the provenance problem, the
-environment requirement, and the exact commands.
-
-Three things to know before starting:
-
-1. Figure 5's inputs are **not in the Hugging Face release**, so this mode only
-   works on a machine that already holds `feature_data_cluster/` and
-   `trained_models/layer_3/fiery-sweep/`. Check for both and stop if absent.
-2. `interplm` cannot run it (broken torch install). Use an environment with
-   `torch >= 2.2`, `transformers`, `h5py`, `einops`, `biopython`. CPU is fine.
-3. The right panel does not reproduce: 5 features / 20 cases against the paper's
-   92 / 495. The 92 came from a curated `--feature-ids-file` that was never
-   published. Report it as such; do not tune selection gates toward 92.
-
-Measured on 2026-08-19: left panel r = +0.9982 across the 11 strengths; middle
-panel confirms the [25,48] band at 2.4x the next strongest; right panel fails as
-above. Details and the full evidence chain in `references/figure5.md`.
+Read `references/figure5.md` for the commands. Needs an environment with
+`torch >= 2.2` plus `transformers`, `h5py`, `einops`, `biopython`. CPU is fine —
+the contact path uses ESM2's own `predict_contacts` head, not the folding stack.

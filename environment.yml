@@ -1,4 +1,4 @@
-name: interplm
+name: geopedia
 channels:
   - bioconda
   - pytorch

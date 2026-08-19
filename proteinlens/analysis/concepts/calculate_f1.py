@@ -13,10 +13,10 @@ import pandas as pd
 from tap import tapify
 from tqdm import tqdm
 
-from interplm.analysis.concepts.compare_activations import (
+from proteinlens.analysis.concepts.compare_activations import (
     load_concept_names,
 )
-from interplm.analysis.concepts.concept_constants import is_aa_level_concept
+from proteinlens.analysis.concepts.concept_constants import is_aa_level_concept
 
 
 def load_metadata(eval_set_dir: Path) -> Dict[str, Any]:

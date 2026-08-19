@@ -33,7 +33,7 @@ def main():
     # These are the settings for the walkthrough
 
     # Get proteinlens_DATA from environment or use default
-    INTERPLM_DATA = os.environ.get("INTERPLM_DATA", "data")
+    GEOPEDIA_DATA = os.environ.get("GEOPEDIA_DATA", "data")
     MODEL_DIR = os.environ.get("MODEL_DIR", "models")
 
     # Get LAYER from environment
@@ -42,9 +42,9 @@ def main():
         raise RuntimeError("Environment variable 'LAYER' must be set (e.g., export LAYER=3)")
 
     # Paths
-    EMBEDDINGS_DIR = Path(INTERPLM_DATA) / "training_embeddings" / "esm2_8m" / f"layer_{LAYER}"
-    EVAL_SEQ_FILE = Path(INTERPLM_DATA) / "eval_sequences.txt"
-    EVAL_FASTA = Path(INTERPLM_DATA) / "eval_shards" / "shard_0.fasta"
+    EMBEDDINGS_DIR = Path(GEOPEDIA_DATA) / "training_embeddings" / "esm2_8m" / f"layer_{LAYER}"
+    EVAL_SEQ_FILE = Path(GEOPEDIA_DATA) / "eval_sequences.txt"
+    EVAL_FASTA = Path(GEOPEDIA_DATA) / "eval_shards" / "shard_0.fasta"
     SAVE_DIR = Path(MODEL_DIR) / "relu" / f"layer_{LAYER}"
 
     # Model dimensions
@@ -61,7 +61,7 @@ def main():
     # ========================================
 
     print("=" * 60)
-    print("InterPLM SAE Training Walkthrough")
+    print("GeoPedia SAE Training Walkthrough")
     print("=" * 60)
     print(f"Training embeddings: {EMBEDDINGS_DIR}")
     print(f"Evaluation FASTA: {EVAL_FASTA}")

@@ -29,26 +29,26 @@ RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkg
 # Create conda environment from environment.yml
 RUN conda env create -f environment.yml && \
     conda clean --tarballs --index-cache -y && \
-    /opt/conda/envs/interplm/bin/mmseqs version
+    /opt/conda/envs/geopedia/bin/mmseqs version
 
 # Install MEME Suite for Stage 7b PWM motif discovery (motif_pwm module).
 # Bioconda's meme package provides the `meme` CLI used by motif_pwm._run_meme.
-RUN conda install -n interplm -c bioconda -c conda-forge -y meme && \
+RUN conda install -n geopedia -c bioconda -c conda-forge -y meme && \
     conda clean --tarballs --index-cache -y && \
-    /opt/conda/envs/interplm/bin/meme -version
+    /opt/conda/envs/geopedia/bin/meme -version
 
 # Activate environment by default
-ENV CONDA_DEFAULT_ENV=interplm
-ENV PATH=$CONDA_DIR/envs/interplm/bin:$PATH
+ENV CONDA_DEFAULT_ENV=geopedia
+ENV PATH=$CONDA_DIR/envs/geopedia/bin:$PATH
 
 # Copy the entire project
 COPY . /workspace
 
 # Install proteinlens package in editable mode
-RUN /opt/conda/envs/interplm/bin/pip install -e .
+RUN /opt/conda/envs/geopedia/bin/pip install -e .
 
 # Set default shell to bash with conda activated
 SHELL ["/bin/bash", "-c"]
 
 # Default command: run the feature pipeline
-CMD ["conda", "run", "-n", "interplm", "/bin/bash", "-c", "python scripts/run_feature_pipeline.py --sae-dir /data/trained_models/fiery-sweep --output-dir /data/feature_data --device cuda --organism-taxid 0 --max-proteins 50000"]
+CMD ["conda", "run", "-n", "geopedia", "/bin/bash", "-c", "python scripts/run_feature_pipeline.py --sae-dir /data/trained_models/fiery-sweep --output-dir /data/feature_data --device cuda --organism-taxid 0 --max-proteins 50000"]

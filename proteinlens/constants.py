@@ -1,10 +1,10 @@
-"""Constants and configuration for InterPLM."""
+"""Constants and configuration for GeoPedia."""
 
 import os
 from pathlib import Path
 
-# Base directory for InterPLM data (can be overridden by environment variable)
-DATA_DIR = Path(os.environ.get("INTERPLM_DATA", Path.home() / "interplm_data"))
+# Base directory for GeoPedia data (can be overridden by environment variable)
+DATA_DIR = Path(os.environ.get("GEOPEDIA_DATA", Path.home() / "geopedia_data"))
 
 # Standard amino acids (canonical 20)
 AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
@@ -16,4 +16,4 @@ IDX_TO_AMINO_ACID = {i: aa for i, aa in enumerate(AMINO_ACIDS)}
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # PDB directory for structure files
-PDB_DIR = Path(os.environ.get('INTERPLM_DATA', '.')) / 'pdb'
+PDB_DIR = Path(os.environ.get('GEOPEDIA_DATA', '.')) / 'pdb'

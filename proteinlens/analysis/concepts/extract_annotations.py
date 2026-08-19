@@ -25,13 +25,13 @@ from scipy import sparse
 from tap import tapify
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from interplm.analysis.concepts.concept_constants import (
+from proteinlens.analysis.concepts.concept_constants import (
     aa_map,
     binary_meta_cols,
     categorical_concepts,
     paired_binary_cols,
 )
-from interplm.analysis.concepts.parsing_utils import (
+from proteinlens.analysis.concepts.parsing_utils import (
     analyze_categorical_features,
     process_binary_feature,
     process_categorical_feature,

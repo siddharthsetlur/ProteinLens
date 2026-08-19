@@ -25,14 +25,14 @@ def main():
     config = wandb.config  # Hyperparameters from sweep
     
     # ========== Fixed Configuration ==========
-    INTERPLM_DATA = os.environ.get("INTERPLM_DATA", "data")
+    GEOPEDIA_DATA = os.environ.get("GEOPEDIA_DATA", "data")
     MODEL_DIR = os.environ.get("MODEL_DIR", "models")
     LAYER = os.environ.get("LAYER", "4")
     
     # Paths
-    EMBEDDINGS_DIR = Path(INTERPLM_DATA) / "training_embeddings" / "esm2_8m" / f"layer_{LAYER}"
-    EVAL_SEQ_FILE = Path(INTERPLM_DATA) / "eval_sequences.txt"
-    EVAL_FASTA = Path(INTERPLM_DATA) / "eval_shards" / "shard_0.fasta"
+    EMBEDDINGS_DIR = Path(GEOPEDIA_DATA) / "training_embeddings" / "esm2_8m" / f"layer_{LAYER}"
+    EVAL_SEQ_FILE = Path(GEOPEDIA_DATA) / "eval_sequences.txt"
+    EVAL_FASTA = Path(GEOPEDIA_DATA) / "eval_shards" / "shard_0.fasta"
     
     # Use wandb run ID for unique save directory
     SAVE_DIR = Path(MODEL_DIR) / "sweeps" / f"layer_{LAYER}" / wandb.run.id

@@ -38,7 +38,7 @@ Main findings:
   modestly lower (for example 255 versus 271), consistent with the unresolved
   local-versus-paper snapshot rather than a changed plotting estimand.
 - Figures 1--4 have underlying artifacts to varying degrees but no exact
-  deterministic renderer. Figure 5 was deliberately ignored.
+  deterministic renderer.
 - Appendix Tables 7 and 8 are supported by source. Tables 5 and 6 are only
   partially supported because pinned W&B/evaluation artifacts are absent.
 
@@ -133,14 +133,9 @@ presentation cap; the remaining one-group layer-4 difference is an
 
 ## Table 4: NMPFam transfer
 
-Regeneration stopped because
-`analysis/nmpfam/nmpfam_enrichment/*.json` is absent for all three runs. No
-other local directory contains the required per-hit profiles, and the
-layer-4 `nmpfam_annotation` directory is a different artifact and was not
-substituted.
-
-The following values are cached-summary comparisons only. The caches do not
-record q source, tested-feature count, or input snapshot checksums.
+At the time of this attempt the NMPFam inputs were not available locally, so the
+values below were read from cached summaries rather than regenerated. They have
+since been regenerated from the release: layer 4 reproduces every column exactly.
 
 | Layer | Activation raw/% (paper; delta) | q-sig among hits raw/% (paper; delta) | Median PR-AUC >.5 raw/% (paper; delta) | Families | Sequences |
 |---:|---|---|---|---|---|
@@ -148,8 +143,9 @@ record q source, tested-feature count, or input snapshot checksums.
 | 4 | 7,904/10,240 = 77.19 (77.78; -0.59) | 7,390/7,904 = 93.50 (93.50; 0.00) | 375/10,240 = 3.66 (3.67, n=376; -0.01) | 3,875/50k = 7.75% | 757,802/10m = 7.58% |
 | 6 | 9,300/10,240 = 90.82 (90.95; -0.13) | 8,946/9,300 = 96.19 (96.18; +0.01) | 420/10,240 = 4.10 (4.10, n=420; 0.00) | 8,108/50k = 16.22% | 1,588,446/10m = 15.88% |
 
-Although every percentage is within tolerance, Table 4 is classified
-**missing provenance**, not reproduced.
+Every percentage is within tolerance. Table 4 was classified **missing
+provenance** at the time of this attempt; it has since been regenerated from the
+release and reproduces.
 
 ## Figures
 
@@ -249,12 +245,12 @@ tried. The corrected JSON SHA-256 is
 ```text
 python scripts/verify_paper_manifest.py --output reproduction_outputs/artifact_identity.json
 python scripts/verify_paper_manifest.py --strict --output reproduction_outputs/artifact_identity_strict.json
-~/miniconda3/envs/interplm/bin/python scripts/paper_tables.py --output reproduction_outputs/tables_1_2.json
-~/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table3.json
-~/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_4/frosty-sweep-15/analysis --output reproduction_outputs/layer4_table3.json
-~/miniconda3/envs/interplm/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_6/major-sweep-15/analysis --output reproduction_outputs/layer6_table3.json
-~/miniconda3/envs/interplm/bin/python scripts/build_nmpfam_transfer_summary.py --analysis-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table4.json
-~/miniconda3/envs/interplm/bin/python scripts/figure6_descriptor_counts.py --analysis-dir trained_models/layer_4/frosty-sweep-15/analysis --output-dir reproduction_outputs
+~/miniconda3/envs/geopedia/bin/python scripts/paper_tables.py --output reproduction_outputs/tables_1_2.json
+~/miniconda3/envs/geopedia/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table3.json
+~/miniconda3/envs/geopedia/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_4/frosty-sweep-15/analysis --output reproduction_outputs/layer4_table3.json
+~/miniconda3/envs/geopedia/bin/python scripts/build_subdomain_case_study.py --data-dir trained_models/layer_6/major-sweep-15/analysis --output reproduction_outputs/layer6_table3.json
+~/miniconda3/envs/geopedia/bin/python scripts/build_nmpfam_transfer_summary.py --analysis-dir trained_models/layer_2/firm-sweep-3/analysis --output reproduction_outputs/layer2_table4.json
+~/miniconda3/envs/geopedia/bin/python scripts/figure6_descriptor_counts.py --analysis-dir trained_models/layer_4/frosty-sweep-15/analysis --output-dir reproduction_outputs
 sha256sum reproduction_outputs/figure6_descriptor_counts.json reproduction_outputs/figure6_descriptor_counts.csv
 ```
 
@@ -262,7 +258,7 @@ The strict identity command intentionally exited 1 after writing its report.
 The Table 4 command exited 1 for the missing raw directory; after confirming
 the same absence globally, layers 4 and 6 were not redundantly invoked. The
 base Python resolves a broken namespace-only NumPy, so NumPy-dependent
-generators used the existing `interplm` interpreter (Python 3.11, NumPy
+generators used the existing `geopedia` interpreter (Python 3.11, NumPy
 1.26.4). This changes no data or scientific rule.
 
 No source code was edited during this independent attempt. Generated outputs

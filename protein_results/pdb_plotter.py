@@ -78,7 +78,6 @@ def ca_backbone_from_yaml_entry(yaml_path: str | Path, entry_key: str, chain_id:
     ca_backbone(pdb_text, chain_id=chain_id)
 
 # ---- usage ----
-# ca_backbone_from_yaml_entry("/Users/s1910360/Desktop/InterPLM/folded_proteins/ProtGeom/protein_results/results/batch_1.yaml", "A2AIP0")
 
 def detect_alpha_helices_from_ca(coords: np.ndarray, min_len: int = 6):
     """

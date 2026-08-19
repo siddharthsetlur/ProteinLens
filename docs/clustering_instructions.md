@@ -3,7 +3,7 @@
 ## 1. Run clustering on the fiery-sweep SAE
 
 ```bash
-conda activate interplm
+conda activate geopedia
 python scripts/cluster_sae_features.py \
     --sae-dir trained_models/fiery-sweep \
     --n-clusters 500 \
@@ -181,7 +181,7 @@ for iv in interventions:
 **File:** `scripts/test_feature_clusters.py`
 
 ```bash
-conda activate interplm
+conda activate geopedia
 python scripts/test_feature_clusters.py
 ```
 

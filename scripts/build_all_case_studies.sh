@@ -5,7 +5,7 @@
 # which the four case-study builders and generate_scatter_plots all read.
 #
 # Usage:
-#   conda activate interplm
+#   conda activate geopedia
 #   ./scripts/build_all_case_studies.sh trained_models/layer_2/firm-sweep-3/analysis
 
 set -euo pipefail
@@ -26,7 +26,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 if ! python -c "import proteinlens" 2>/dev/null; then
-    echo "proteinlens not importable — activate the interplm conda env first." >&2
+    echo "proteinlens not importable — activate the geopedia conda env first." >&2
     exit 1
 fi
 

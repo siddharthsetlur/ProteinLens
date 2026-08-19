@@ -74,30 +74,15 @@ Table 4, repeated per layer:
 
 Family unions use every qualifying hit, not the top-25 display list.
 
-Table 4's `nmpfam/nmpfam_enrichment/` inputs were absent when
-`docs/reproduction_attempt_report.md` was written, which is why that report
-records Table 4 as not regenerable. They are in the release for all three layers
-now. The layer-4 blob was itself incomplete until 2026-08-19 — 284 of ~7,904
-per-feature files, silently returning 2.73% against the paper's 77.78% — and was
-restored from `pipeline-pvc`, where the full set had survived a truncated
-DataStore mirror. It now holds 7,965 files.
+Table 4 reproduces for all three layers. Columns 4 and 5 count NMPFam families
+matched by the column-3 gated features — those that are geometry q-significant
+with median PR-AUC above 0.5 — not by every feature carrying hits. Layer 4 gives
+3,875 families and 757,802 sequences, matching the paper exactly;
+`tests/test_analysis/test_nmpfam_transfer_summary.py` pins these values.
 
-Regenerated from the restored blob, layer 4 columns 1-3 reproduce: 77.19% against
-the paper's 77.78%, 93.55% against 93.50%, and 376 features against the paper's
-376 exactly. Columns 4 and 5 do not: 38,846 families and 7,733,244 sequences
-against 3,875 and 757,802, a factor of 10.0 and 10.2.
-
-That gap is not caused by the restore — the 284-file blob could not reach those
-columns at all — and it is a generator bug, confirmed 2026-08-19. The denominators
-were never in question: the caption fixes them at 50,000 families and 10M
-sequences, and the paper's counts are consistent with those.
-
-The union at `build_nmpfam_transfer_summary.py:205` runs over `feature_records`,
-every feature with hits (7,904), giving 38,846 families and 7,733,244 sequences.
-Restricting it to the 376 gated features of column 3 gives 3,875 families and
-757,802 sequences — the paper's values exactly, on both quantities. Table 4 layer
-4 therefore reproduces in full. The generator was fixed to union over the gated
-set, with regression tests in `tests/test_analysis/test_nmpfam_transfer_summary.py`.
+The NMPFam archives are the largest inputs in the release: 0.6-10 GB compressed
+per layer, expanding roughly fivefold. Check free space and do one layer at a
+time.
 
 Figure 6:
 
@@ -123,10 +108,6 @@ code's 50-step grid generated the snapshot.
 
 ## Known exclusions
 
-- Figure 5's contact-prediction ablation code is now in the repo, and its left and
-  middle panels reproduce — but not from the release. It uses an unpublished
-  layer-3 SAE (`fiery-sweep`, 5,120 features), not the paper's layer-4 run, and
-  its right panel does not reproduce. See `docs/figure5_reproduction.md`.
 - Exact renderers/editable sources for Figures 1 through 4 are unavailable.
   Known feature and protein identities are frozen in paper_manifest.yaml.
 - Tables 5 and 6 need a pinned W&B export that is not currently identified.

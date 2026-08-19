@@ -71,9 +71,9 @@ was in the DataStore mirror, not in the pipeline. The blob now holds **7,965**
 files (7,964 per-feature + `summary.json`), ids 0-10239, no zero-byte stubs,
 6.63 GB compressed / 33 GB extracted.
 
-All five columns reproduce. Columns 4-5 require unioning over the gated feature
-set; the shipped generator unions over all features with hits and is 10x high as
-a result (see below).
+All five columns reproduce. Columns 4-5 required a generator fix — it unioned
+over all features with hits instead of the gated set, and was 10x high as a
+result (see below).
 
 ## Expected file counts after extraction
 ## Expected file counts after extraction
@@ -122,9 +122,11 @@ unions over the gated features. The denominators were never in question — the
 caption fixes them at 50k and 10M, and the paper's counts are consistent with
 those.
 
-**So Table 4 layer 4 reproduces in full**, provided the union is taken over the
-gated set. Until the generator is fixed, its columns 4-5 output is wrong by
-construction; recompute those two over `gated` before reporting them.
+**Fixed.** The generator now unions over `gated`, and
+`tests/test_analysis/test_nmpfam_transfer_summary.py` pins the behaviour — three
+unit tests on a fixture plus an integration test asserting 376 / 3,875 / 757,802
+against the real layer-4 directory. **Table 4 layer 4 reproduces in full, all
+five columns.**
 
 ## Commands
 

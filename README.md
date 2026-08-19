@@ -217,11 +217,10 @@ skill's *Known discrepancies* section. Currently open:
 
 - **Layer 2, Table 1** runs +1.15 to +2.30 pp high on four of six measures
   (layers 4 and 6 match). Unresolved snapshot difference.
-- **Table 4, layer 4** reproduces in full, but columns 4–5 need a fix:
-  `build_nmpfam_transfer_summary.py:205` unions over all 7,904 features with hits
-  (38,846 families) instead of the 376 gated ones, which give the paper's 3,875
-  and 757,802 exactly. The released input was itself incomplete until 2026-08-19
-  (284 of ~7,904 files, silently returning 2.73% for column 1); if you still see
+- **Table 4, layer 4** reproduces in full, all five columns. Columns 4–5 needed a
+  generator fix (the union ran over all 7,904 features with hits rather than the
+  376 gated ones). The released input was itself incomplete until 2026-08-19 (284
+  of ~7,904 files, silently returning 2.73% for column 1); if you still see
   2.73%, clear your cached download.
 - **Figure 5** reproduces in its left and middle panels but *not from the
   release*: it uses an unpublished layer-3 SAE (`fiery-sweep`, 5,120 features),

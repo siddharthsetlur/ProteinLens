@@ -96,7 +96,8 @@ The union at `build_nmpfam_transfer_summary.py:205` runs over `feature_records`,
 every feature with hits (7,904), giving 38,846 families and 7,733,244 sequences.
 Restricting it to the 376 gated features of column 3 gives 3,875 families and
 757,802 sequences — the paper's values exactly, on both quantities. Table 4 layer
-4 therefore reproduces in full; the generator should union over the gated set.
+4 therefore reproduces in full. The generator was fixed to union over the gated
+set, with regression tests in `tests/test_analysis/test_nmpfam_transfer_summary.py`.
 
 Figure 6:
 

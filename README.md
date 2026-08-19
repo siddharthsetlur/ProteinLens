@@ -152,14 +152,32 @@ Then open http://localhost:8050.
 
 `trained_models/`, `feature_data_*/`, `results/`, `models/`, `wandb/`,
 and the `analysis/` symlink dir are gitignored — they are distributed
-separately:
+separately, on Hugging Face:
 
-- **Trained SAEs** and **pre-computed analysis directories**: <HF / Zenodo link>
-- **Sample feature_data** for testing (`feature_data_test_500/`): <HF / Zenodo link>
+| Repo | Type | Contents |
+|---|---|---|
+| [`Sidd2010/proteinlens-sae-esm2-8m`](https://huggingface.co/Sidd2010/proteinlens-sae-esm2-8m) | model | Trained SAEs (layers 2/4/6), run configs |
+| [`Sidd2010/proteinlens-paper-artifacts`](https://huggingface.co/datasets/Sidd2010/proteinlens-paper-artifacts) | dataset | Null tests, enrichment, NMPFam — Tables 1–4 and Figure 6 |
+| [`Sidd2010/proteinlens-geopedia-analysis`](https://huggingface.co/datasets/Sidd2010/proteinlens-geopedia-analysis) | dataset | Per-feature payloads for the visualizer, plus `geometry_enrichment` / `cath_enrichment` (needed by Table 3 and Figure 6) |
 
-After downloading, place each archive under the matching path at the
-repo root (`trained_models/layer_4/<run>/`, etc.) and the viz / pipeline
-will pick it up.
+The repos are **private until publication**; `hf auth login` with an account that
+has access.
+
+The layout mirrors the repo, so a download drops straight in at the repo root
+(`trained_models/layer_4/frosty-sweep-15/analysis/...`) with no path rewriting.
+Directories ship as one `.tar.zst` each — a Hugging Face repo caps at 10,000 files
+per directory and several of these hold more. Extract in place:
+
+```bash
+sh EXTRACT.sh    # find . -name '*.tar.zst' -execdir tar --zstd -xf {} \; -delete
+```
+
+## Reproducing the paper
+
+Run `/reproduce-paper` in Claude Code (`.claude/skills/reproduce-paper/`): it
+selects and downloads the artifacts a given table needs, regenerates it, and
+writes a comparison report. Manual instructions, the comparison policy, and the
+known exclusions are in [docs/paper_reproduction.md](docs/paper_reproduction.md).
 
 ## Repo layout
 

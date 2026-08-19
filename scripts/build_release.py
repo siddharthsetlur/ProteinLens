@@ -82,6 +82,7 @@ VIZ_EXTRA_ANALYSIS_ITEMS = [
     "survey_top20.json",
     "sequences.json",
     "pipeline_state.json",          # index_builder.py:156
+    "transfer_metrics",             # api.py:292 reads transfer_metrics/metric_B.json
 ]
 
 # Excluded on purpose. Recorded so the dataset card can state why.

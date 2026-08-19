@@ -200,11 +200,17 @@ def build_summary(
     ]
     gated.sort(key=lambda r: -r["max_prauc"])
 
-    # Cluster matched: # of NMPFam families that have *any* feature with
-    # PR-AUC > 0.5 firing on them (deduplicated). Sequences annotated is the
-    # union sequence_count across those distinct families.
+    # Table 4 columns 4 and 5: NMPFam families hit at PR-AUC > 0.5 by one of the
+    # COLUMN-3 GATED features (deduplicated), and the union sequence_count across
+    # those families.
+    #
+    # The union runs over `gated`, not over every feature with hits. Unioning over
+    # all features inflates layer 4 to 38,846 families / 7,733,244 sequences
+    # against the paper's 3,875 / 757,802; restricting to the gated set reproduces
+    # both exactly. Two independent quantities matching to the digit is what fixes
+    # the estimand -- see tests/test_analysis/test_nmpfam_transfer_summary.py.
     matched_families: dict[str, int] = {}
-    for r in feature_records:
+    for r in gated:
         for h in r["_strong_hits"]:
             fam = h.get("family_id")
             if not fam:

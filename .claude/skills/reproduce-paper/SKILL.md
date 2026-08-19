@@ -160,12 +160,17 @@ From `docs/reproduction_attempt_report.md` (2026-08-09), same artifacts:
   the reported statistic. If a run yields ~100 groups, the cap leaked into the
   computation — that one *is* a bug.
 
-And one release defect, which is **not** a tolerable discrepancy:
+- **Table 4 layer 4** reproduces in full, all five columns. Columns 4-5 needed a
+  generator fix (it unioned strong hits over all 7,904 features with hits instead
+  of the 376 gated ones, giving 38,846 families against the paper's 3,875);
+  `tests/test_analysis/test_nmpfam_transfer_summary.py` pins it. If you see 38,846,
+  you are on pre-fix code.
 
-- **Table 4 layer 4 cannot be reported from this release.** Its NMPFam input holds
-  284 of ~7,904 per-feature files. The generator does not error — it returns 2.73%
-  where the paper reports 77.78%. Use layers 2 and 6, which are intact. Verify with
-  the file counts in `references/artifacts.md` *before* running the generator.
+The layer-4 NMPFam release defect is **fixed** (2026-08-19): the blob held 284 of
+~7,904 files and returned 2.73% for column 1; it now holds 7,965 files and returns
+77.19% against the paper's 77.78%. If you get 2.73%, you have the old blob cached —
+check the file counts in `references/artifacts.md` before believing any Table 4
+number.
 
 ## Mode B — re-run the pipeline from scratch
 

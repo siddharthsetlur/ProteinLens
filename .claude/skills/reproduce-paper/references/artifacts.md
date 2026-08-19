@@ -104,24 +104,27 @@ Columns 1-3 were the catastrophic failures (column 1 was 2.73%); they are fixed,
 and column 3 now matches the paper exactly where the cached summary gave 375.
 
 Columns 4-5 are a **separate, pre-existing discrepancy** that the restore exposed
-rather than caused — the old 284-file blob could not reach them at all. The union
-at `build_nmpfam_transfer_summary.py:205` runs over every feature with hits, not
-just the 376 gated ones, matching the paper's caption, and the feature counts
-agree exactly. So the code and the population match; the per-feature hit lists
-differ.
+rather than caused — the old 284-file blob could not reach them at all.
 
-Likely cause, unconfirmed: the size of the NMPFam family database at scan time.
-A 300-feature sample of the restored data references **46,621 distinct families**
-(mean 530 hits/feature), i.e. the full ~50,000. The paper's raw counts against a
-**5,000**-family / 1M-sequence scan would be 3,875/5,000 = 77.5% and
-757,802/1,000,000 = 75.8% — which match the restored run's 77.69% and 77.33%
-rates almost exactly, while the paper reports them against 50,000 / 10M
-denominators as 7.75% and 7.58%.
+The denominators are not in question. The caption fixes them at 50,000 families
+and 10M sequences, and the paper's counts are consistent with those:
+3,875/50,000 = 7.75% and 757,802/10,000,000 = 7.58%. The difference is in the
+**numerator**.
 
-If that is right, the paper's columns 4-5 percentages are low by 10x and the
-restored numbers are correct. **Do not assume this** — it needs the original
-run's `--n-families` to confirm. Do not adjust denominators to make either side
-agree.
+The likely cause is which feature set the union runs over.
+`build_nmpfam_transfer_summary.py:205` unions strong hits across **every** feature
+with hits — 7,904 of them — giving 38,846 families. Restricting the union to the
+**376 gated features** of column 3 gives at most 5,999 family-hits before
+deduplication (the sum of per-feature `n_strong`), which after dedup lands in the
+neighbourhood of the paper's 3,875. The caption's wording — "families for which
+at least one SAE feature achieves PR-AUC > 0.5" — is ambiguous between the two
+readings, and the generator takes the broader one.
+
+**Definitive test, not yet run:** recompute the union restricted to the gated
+features and compare against 3,875. It needs the 33 GB tree re-extracted. Until
+then, report columns 4-5 as unresolved. Do not change the generator to chase the
+paper's number before establishing which estimand the paper used — and do not
+touch the denominators, which the caption settles.
 
 ## Commands
 

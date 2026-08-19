@@ -76,16 +76,26 @@ Family unions use every qualifying hit, not the top-25 display list.
 
 Table 4's `nmpfam/nmpfam_enrichment/` inputs were absent when
 `docs/reproduction_attempt_report.md` was written, which is why that report
-records Table 4 as not regenerable. The release carries them for **layers 2 and
-6** — layer 6 holds 9,313 per-feature files, exactly the paper's 90.95% of
-10,240 — so Table 4 is now reproducible for those layers.
+records Table 4 as not regenerable. They are in the release for all three layers
+now. The layer-4 blob was itself incomplete until 2026-08-19 — 284 of ~7,904
+per-feature files, silently returning 2.73% against the paper's 77.78% — and was
+restored from `pipeline-pvc`, where the full set had survived a truncated
+DataStore mirror. It now holds 7,965 files.
 
-Layer 4 is **not**: its released `nmpfam_enrichment/` holds 284 files covering
-feature ids 8933-10239, against the ~7,904 its own cached
-`nmpfam_transfer_summary.json` was built from. The generator does not fail on the
-partial input; it silently returns 2.73% where the paper reports 77.78%. The
-datastore copy is itself partial, so this is not a transfer defect and re-running
-the transfer will not fix it. Check the file count before trusting the output.
+Regenerated from the restored blob, layer 4 columns 1-3 reproduce: 77.19% against
+the paper's 77.78%, 93.55% against 93.50%, and 376 features against the paper's
+376 exactly. Columns 4 and 5 do not: 38,846 families and 7,733,244 sequences
+against 3,875 and 757,802, a factor of 10.0 and 10.2.
+
+That gap is not caused by the restore — the 284-file blob could not reach those
+columns at all. The union runs over every feature with hits rather than the gated
+376, matching the paper's caption, and the feature counts agree exactly, so the
+estimand and population match while the per-feature hit lists differ. A
+300-feature sample of the restored data references 46,621 distinct NMPFam
+families, i.e. the full ~50,000; the paper's counts against a 5,000-family scan
+would give 77.5% and 75.8%, matching the restored rates. That would mean the
+published columns 4-5 percentages are low by 10x, but it is unconfirmed without
+the original run's `--n-families`. Do not adjust denominators to reconcile them.
 
 Figure 6:
 

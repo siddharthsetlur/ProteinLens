@@ -54,26 +54,27 @@ Compressed download → extracted on disk.
 |---|---|---|---|
 | Tables 1-2 | 30 MB → 160 MB | 32 MB → 165 MB | 33 MB → 170 MB |
 | Table 3 | 0.96 GB → 5.5 GB | 1.16 GB → 6.2 GB | 1.26 GB → 6.5 GB |
-| Table 4 | 10.3 GB → ~54 GB | *(incomplete — see below)* | 5.9 GB → ~31 GB |
+| Table 4 | 10.3 GB → ~54 GB | 6.6 GB → 33 GB | 5.9 GB → ~31 GB |
 | Figure 6 | — | 1.13 GB → 5.7 GB | — |
 
 Figure 6 is a layer-4 figure. The NMPFam archives are by far the largest objects
 in the release and expand 5x; check `df -h` and do one layer at a time.
 
-## Known release defect — Table 4, layer 4
+## Table 4, layer 4 — was broken, now restored
 
-`trained_models/layer_4/frosty-sweep-15/analysis/nmpfam/nmpfam_enrichment/`
-contains **284 per-feature files covering ids 8933-10239**, against the ~7,904
-the layer's own cached `nmpfam_transfer_summary.json` was built from. The
-generator runs happily on it and returns badly wrong numbers — 2.73% of features
-with NMPFam activation against the paper's 77.78%.
+The layer-4 NMPFam blob originally held **284** per-feature files (ids
+8933-10239) against the ~7,904 the layer's cached `nmpfam_transfer_summary.json`
+was built from, and the generator returned 2.73% where the paper reports 77.78%.
 
-**Do not report Table 4 for layer 4 from this release.** Layers 2 and 6 are
-intact; layer 6 holds 9,313 files, exactly the paper's 90.95% of 10,240.
+**Fixed on 2026-08-19.** The complete set was still on `pipeline-pvc`, so the loss
+was in the DataStore mirror, not in the pipeline. The blob now holds **7,965**
+files (7,964 per-feature + `summary.json`), ids 0-10239, no zero-byte stubs,
+6.63 GB compressed / 33 GB extracted.
 
-The cause is upstream of the release: the datastore copy is itself partial, so
-re-running the transfer will not fix it. The complete run lived on the cluster PVC.
+Columns 1-3 now reproduce (see below). **Columns 4 and 5 do not** — they come out
+~10x the paper's counts. Report those two separately rather than as a pass.
 
+## Expected file counts after extraction
 ## Expected file counts after extraction
 
 Verified against the live release. Use these as the post-extraction sanity check.
@@ -81,9 +82,46 @@ Verified against the live release. Use these as the post-extraction sanity check
 | Directory | Layer 2 | Layer 4 | Layer 6 |
 |---|---:|---:|---:|
 | `permutation_null/` | 9,309 | 9,587 | 9,743 |
-| `nmpfam/nmpfam_enrichment/` | *unverified* | **284 (broken)** | 9,313 |
+| `nmpfam/nmpfam_enrichment/` | *unverified* | 7,965 | 9,313 |
 
 A count below these means a truncated download — re-run `hf download`, it resumes.
+A layer-4 count of 284 means you have the pre-2026-08-19 blob cached; clear it and
+re-download.
+
+## Table 4 layer 4 — measured, 2026-08-19
+
+Regenerated from the restored release blob (7,965 files, 33 GB):
+
+| Column | Paper | Restored release | Verdict |
+|---|---|---|---|
+| 1 % NMPFam act. | 77.78 | **77.19** (7,904/10,240) | within tolerance (-0.59 pp) |
+| 2 % geom. q-sig. | 93.50 | **93.55** (7,394) | within tolerance (+0.05 pp) |
+| 3 % med. PR-AUC > 0.5 | 3.67% (376) | **3.67% (376)** | exact |
+| 4 NMPFams matched | 7.75% (3,875) | 77.69% (38,846) | **10.0x — does not reproduce** |
+| 5 Sequences annotated | 7.58% (757,802) | 77.33% (7,733,244) | **10.2x — does not reproduce** |
+
+Columns 1-3 were the catastrophic failures (column 1 was 2.73%); they are fixed,
+and column 3 now matches the paper exactly where the cached summary gave 375.
+
+Columns 4-5 are a **separate, pre-existing discrepancy** that the restore exposed
+rather than caused — the old 284-file blob could not reach them at all. The union
+at `build_nmpfam_transfer_summary.py:205` runs over every feature with hits, not
+just the 376 gated ones, matching the paper's caption, and the feature counts
+agree exactly. So the code and the population match; the per-feature hit lists
+differ.
+
+Likely cause, unconfirmed: the size of the NMPFam family database at scan time.
+A 300-feature sample of the restored data references **46,621 distinct families**
+(mean 530 hits/feature), i.e. the full ~50,000. The paper's raw counts against a
+**5,000**-family / 1M-sequence scan would be 3,875/5,000 = 77.5% and
+757,802/1,000,000 = 75.8% — which match the restored run's 77.69% and 77.33%
+rates almost exactly, while the paper reports them against 50,000 / 10M
+denominators as 7.75% and 7.58%.
+
+If that is right, the paper's columns 4-5 percentages are low by 10x and the
+restored numbers are correct. **Do not assume this** — it needs the original
+run's `--n-families` to confirm. Do not adjust denominators to make either side
+agree.
 
 ## Commands
 

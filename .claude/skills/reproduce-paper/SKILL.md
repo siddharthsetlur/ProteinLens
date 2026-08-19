@@ -160,12 +160,11 @@ From `docs/reproduction_attempt_report.md` (2026-08-09), same artifacts:
   the reported statistic. If a run yields ~100 groups, the cap leaked into the
   computation — that one *is* a bug.
 
-- **Table 4 layer 4, columns 4-5** come out ~10x the paper's counts (38,846
-  families vs 3,875; 7,733,244 sequences vs 757,802). Columns 1-3 reproduce.
-  Unresolved. The denominators are not the issue — the caption fixes them at 50k
-  and 10M and the paper's counts match those. The union runs over all 7,904
-  features with hits rather than the 376 gated ones, which is the likely cause;
-  see `references/artifacts.md`. Report columns 1-3 and 4-5 separately.
+- **Table 4 layer 4, columns 4-5**: the shipped generator is wrong by
+  construction. `build_nmpfam_transfer_summary.py:205` unions strong hits over all
+  7,904 features with hits (38,846 families) instead of the 376 gated ones, which
+  reproduce the paper exactly (3,875 families / 757,802 sequences). Recompute those
+  two columns over the gated set before reporting them.
 
 The layer-4 NMPFam release defect is **fixed** (2026-08-19): the blob held 284 of
 ~7,904 files and returned 2.73% for column 1; it now holds 7,965 files and returns

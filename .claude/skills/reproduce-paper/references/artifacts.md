@@ -71,8 +71,9 @@ was in the DataStore mirror, not in the pipeline. The blob now holds **7,965**
 files (7,964 per-feature + `summary.json`), ids 0-10239, no zero-byte stubs,
 6.63 GB compressed / 33 GB extracted.
 
-Columns 1-3 now reproduce (see below). **Columns 4 and 5 do not** — they come out
-~10x the paper's counts. Report those two separately rather than as a pass.
+All five columns reproduce. Columns 4-5 require unioning over the gated feature
+set; the shipped generator unions over all features with hits and is 10x high as
+a result (see below).
 
 ## Expected file counts after extraction
 ## Expected file counts after extraction
@@ -97,34 +98,33 @@ Regenerated from the restored release blob (7,965 files, 33 GB):
 | 1 % NMPFam act. | 77.78 | **77.19** (7,904/10,240) | within tolerance (-0.59 pp) |
 | 2 % geom. q-sig. | 93.50 | **93.55** (7,394) | within tolerance (+0.05 pp) |
 | 3 % med. PR-AUC > 0.5 | 3.67% (376) | **3.67% (376)** | exact |
-| 4 NMPFams matched | 7.75% (3,875) | 77.69% (38,846) | **10.0x — does not reproduce** |
-| 5 Sequences annotated | 7.58% (757,802) | 77.33% (7,733,244) | **10.2x — does not reproduce** |
+| 4 NMPFams matched | 7.75% (3,875) | 77.69% (38,846) | generator bug; **3,875 exact** over gated |
+| 5 Sequences annotated | 7.58% (757,802) | 77.33% (7,733,244) | generator bug; **757,802 exact** over gated |
 
 Columns 1-3 were the catastrophic failures (column 1 was 2.73%); they are fixed,
 and column 3 now matches the paper exactly where the cached summary gave 375.
 
-Columns 4-5 are a **separate, pre-existing discrepancy** that the restore exposed
-rather than caused — the old 284-file blob could not reach them at all.
+Columns 4-5 come out 10x high **because of a generator bug**, confirmed
+2026-08-19.
 
-The denominators are not in question. The caption fixes them at 50,000 families
-and 10M sequences, and the paper's counts are consistent with those:
-3,875/50,000 = 7.75% and 757,802/10,000,000 = 7.58%. The difference is in the
-**numerator**.
+`build_nmpfam_transfer_summary.py:205` unions strong hits over `feature_records`
+— every feature with hits, 7,904 of them — producing 38,846 families and
+7,733,244 sequences. Restricting the union to the **376 gated** features of
+column 3 reproduces the paper exactly:
 
-The likely cause is which feature set the union runs over.
-`build_nmpfam_transfer_summary.py:205` unions strong hits across **every** feature
-with hits — 7,904 of them — giving 38,846 families. Restricting the union to the
-**376 gated features** of column 3 gives at most 5,999 family-hits before
-deduplication (the sum of per-feature `n_strong`), which after dedup lands in the
-neighbourhood of the paper's 3,875. The caption's wording — "families for which
-at least one SAE feature achieves PR-AUC > 0.5" — is ambiguous between the two
-readings, and the generator takes the broader one.
+| | Paper | Union over all 7,904 | Union over 376 gated |
+|---|---|---|---|
+| col 4 families | 3,875 (7.75%) | 38,846 (77.69%) | **3,875 (7.75%)** |
+| col 5 sequences | 757,802 (7.58%) | 7,733,244 (77.33%) | **757,802 (7.58%)** |
 
-**Definitive test, not yet run:** recompute the union restricted to the gated
-features and compare against 3,875. It needs the 33 GB tree re-extracted. Until
-then, report columns 4-5 as unresolved. Do not change the generator to chase the
-paper's number before establishing which estimand the paper used — and do not
-touch the denominators, which the caption settles.
+Two independent quantities matching to the digit settles the estimand: the paper
+unions over the gated features. The denominators were never in question — the
+caption fixes them at 50k and 10M, and the paper's counts are consistent with
+those.
+
+**So Table 4 layer 4 reproduces in full**, provided the union is taken over the
+gated set. Until the generator is fixed, its columns 4-5 output is wrong by
+construction; recompute those two over `gated` before reporting them.
 
 ## Commands
 

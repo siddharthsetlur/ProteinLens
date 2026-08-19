@@ -88,19 +88,15 @@ the paper's 77.78%, 93.55% against 93.50%, and 376 features against the paper's
 against 3,875 and 757,802, a factor of 10.0 and 10.2.
 
 That gap is not caused by the restore — the 284-file blob could not reach those
-columns at all. The denominators are not in question: the caption fixes them at
-50,000 families and 10M sequences, and the paper's counts are consistent with
-those (3,875/50,000 = 7.75%). The difference is in the numerator.
+columns at all — and it is a generator bug, confirmed 2026-08-19. The denominators
+were never in question: the caption fixes them at 50,000 families and 10M
+sequences, and the paper's counts are consistent with those.
 
-The likely cause is which feature set the union runs over. The generator unions
-strong hits across every feature with hits (7,904), giving 38,846 families.
-Restricting the union to the 376 gated features of column 3 gives at most 5,999
-family-hits before deduplication, which after dedup lands near the paper's 3,875.
-The caption's "families for which at least one SAE feature achieves PR-AUC > 0.5"
-is ambiguous between the two readings and the generator takes the broader one.
-Confirming this requires recomputing the union over gated features only, which is
-not yet done. Until then columns 4-5 are unresolved, and the generator should not
-be changed to chase the paper's number.
+The union at `build_nmpfam_transfer_summary.py:205` runs over `feature_records`,
+every feature with hits (7,904), giving 38,846 families and 7,733,244 sequences.
+Restricting it to the 376 gated features of column 3 gives 3,875 families and
+757,802 sequences — the paper's values exactly, on both quantities. Table 4 layer
+4 therefore reproduces in full; the generator should union over the gated set.
 
 Figure 6:
 

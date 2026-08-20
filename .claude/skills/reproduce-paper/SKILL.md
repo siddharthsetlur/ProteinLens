@@ -154,9 +154,7 @@ From `docs/reproduction_attempt_report.md` (2026-08-09), same artifacts:
   the reported statistic. If a run yields ~100 groups, the cap leaked into the
   computation — that one *is* a bug.
 
-- **Table 4 layer 4** reproduces in full, all five columns. Columns 4-5 needed a
-  generator fix (it unioned strong hits over all 7,904 features with hits instead
-  of the 376 gated ones, giving 38,846 families against the paper's 3,875);
+- **Table 4 layer 4** reproduces in full, all five columns;
   `tests/test_analysis/test_nmpfam_transfer_summary.py` pins it. If you see 38,846,
   you are on pre-fix code.
 

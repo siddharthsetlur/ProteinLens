@@ -215,8 +215,6 @@ separately, on Hugging Face:
 | [`Sidd2010/proteinlens-paper-artifacts`](https://huggingface.co/datasets/Sidd2010/proteinlens-paper-artifacts) | dataset | Null tests, enrichment, NMPFam — Tables 1–4 and Figure 6 |
 | [`Sidd2010/proteinlens-geopedia-analysis`](https://huggingface.co/datasets/Sidd2010/proteinlens-geopedia-analysis) | dataset | Per-feature payloads for the visualizer, plus `geometry_enrichment` / `cath_enrichment` (needed by Table 3 and Figure 6) |
 
-The repos are **private until publication**; `hf auth login` with an account that
-has access.
 
 The layout mirrors the repo, so a download drops straight in at the repo root
 (`trained_models/layer_4/frosty-sweep-15/analysis/...`) with no path rewriting.
@@ -249,17 +247,7 @@ and expected file counts, is in
 `.claude/skills/reproduce-paper/references/artifacts.md`. Note that Table 3 and
 Figure 6 read from the `geopedia-analysis` repo, not `paper-artifacts`.
 
-### What does and does not reproduce
 
-Reproducing the *known discrepancies* is a correct outcome, not a failure. Before
-debugging a mismatch, check
-[docs/reproduction_attempt_report.md](docs/reproduction_attempt_report.md) and the
-skill's *Known discrepancies* section. Currently open:
-
-- **Layer 2, Table 1** runs +1.15 to +2.30 pp high on four of six measures
-  (layers 4 and 6 match). Unresolved snapshot difference.
-- **Figures 1–4** have no deterministic renderer; **Tables 5–6** need a pinned
-  W&B export that is not identified.
 
 ## Repo layout
 

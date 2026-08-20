@@ -230,16 +230,6 @@ tried. The corrected JSON SHA-256 is
   reproduced from source; the legacy null artifacts cannot prove they used
   100 steps because their metadata omits it.
 
-## Discrepancy classes
-
-| Class | Findings |
-|---|---|
-| Wrong identity | None at model/layer/run/dictionary level. Exact snapshot identity remains unresolved. |
-| Snapshot incompleteness/difference | Table 1 layer 2; missing Table 2 scores; Figure 6's residual count deficit despite closely reproduced descriptor shares. |
-| Missing provenance | Release ID/checksums; null threshold grid; raw Table 4 data/q source; Figures 1--4 renderers; W&B export; complete Table 6 evaluation. |
-| Changed estimand | Historical capped Table 3 (now fixed). The corrected Figure 6 generator no longer has an estimand mismatch. |
-| Unexplained | One layer-4 Table 3 group; Figure 6's exact raw-count residual remains unresolved at the snapshot level. |
-
 ## Commands and execution notes
 
 ```text

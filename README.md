@@ -282,12 +282,13 @@ If you use GeoPedia, the released SAEs, or the analysis artifacts, please cite:
 
 ```bibtex
 @article{TODO_citekey,
-  title   = {TODO: paper title},
-  author  = {TODO: author list},
-  journal = {TODO: venue},
-  year    = {TODO},
-  url     = {TODO},
-  doi     = {TODO},
+  title={Interpreting Latent Protein Language Model Features with Geometric Annotations}, 
+      author={Siddharth Setlur and Djordje Mihajlovic and Darrick Lee},
+      year={2026},
+      eprint={2608.26419},
+      archivePrefix={arXiv},
+      primaryClass={q-bio.QM},
+      url={https://arxiv.org/abs/2608.26419},
 }
 ```
 

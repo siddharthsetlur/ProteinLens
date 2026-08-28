@@ -281,7 +281,7 @@ docs/                           paper-companion docs
 If you use GeoPedia, the released SAEs, or the analysis artifacts, please cite:
 
 ```bibtex
-@article{TODO_citekey,
+@article{
   title={Interpreting Latent Protein Language Model Features with Geometric Annotations}, 
       author={Siddharth Setlur and Djordje Mihajlovic and Darrick Lee},
       year={2026},

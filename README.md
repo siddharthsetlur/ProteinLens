@@ -8,7 +8,7 @@
 > and James Zou. Please cite their work if you use this training
 > stack.
 
-Code accompanying the ProteinLens paper. The repo supports three workflows:
+Code accompanying the [GeoPedia paper](https://arxiv.org/abs/2608.26419). The repo supports three workflows:
 
 1. **Train** Sparse Autoencoders (SAEs) on masked-LM activations (the paper
    uses ESM2).

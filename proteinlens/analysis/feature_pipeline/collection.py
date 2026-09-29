@@ -32,7 +32,7 @@ from tqdm import tqdm
 
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
 from proteinlens.analysis.feature_pipeline.data_acquisition import _parse_fasta
-from proteinlens.embedders.esm import ESM
+from proteinlens.embedders import BaseEmbedder, load_embedder
 from proteinlens.sae.inference import load_sae
 from proteinlens.utils import get_device
 
@@ -102,7 +102,7 @@ def run_collection(config: PipelineConfig) -> None:
         print(f"[collection] Loading SAE from {config.sae_dir} ...")
         sae = load_sae(config.sae_dir, device=device)
         print(f"[collection] Loading ESM model {config.esm_model_name} ...")
-        esm_model = ESM(model_name=config.esm_model_name, device=device)
+        esm_model = load_embedder(config.esm_model_name, device=device)
 
     # ── Process proteins needing activations ──
     session = requests.Session()
@@ -225,7 +225,7 @@ def fetch_alphafold_pdb(
 
 
 def _compute_residue_activations(
-    esm: ESM,
+    esm: BaseEmbedder,
     sae,
     sequence: str,
     layer: int,

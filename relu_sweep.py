@@ -16,6 +16,7 @@ from proteinlens.train.configs import (
     CheckpointConfig
 )
 from proteinlens.train.fidelity import ESMFidelityConfig
+from proteinlens.train.fidelity_amplify import AmplifyFidelityConfig
 from proteinlens.train.training_run import SAETrainingRun
 
 
@@ -30,7 +31,8 @@ def main():
     LAYER = os.environ.get("LAYER", "4")
 
     # Model / embedding selection. Defaults reproduce the published ESM2-8M run
-    # exactly; override via env to train on another ESM2 size (e.g. 35M, layer 6).
+    # exactly; override via env to train on another ESM2 size (e.g. 35M, layer 6)
+    # or on AMPLIFY (ESM_MODEL_NAME=chandar-lab/AMPLIFY_120M, LAYER=12).
     EMBED_TAG = os.environ.get("EMBED_TAG", "esm2_8m")            # embeddings subdir
     EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "320"))   # ESM2 hidden dim
     ESM_MODEL_NAME = os.environ.get("ESM_MODEL_NAME", "esm2_t6_8M_UR50D")
@@ -88,7 +90,12 @@ def main():
         normalize_to_sqrt_d=False,
     )
     
-    eval_cfg = ESMFidelityConfig(
+    # AMPLIFY needs its own loss-recovered eval (remote-code model, additive
+    # attention mask, no embedding entry in hidden_states); ESM2 path unchanged.
+    fidelity_cls = (
+        AmplifyFidelityConfig if "amplify" in ESM_MODEL_NAME.lower() else ESMFidelityConfig
+    )
+    eval_cfg = fidelity_cls(
         eval_seq_path=EVAL_SEQ_FILE if EVAL_SEQ_FILE.exists() else None,
         model_name=ESM_MODEL_NAME,
         layer_idx=int(LAYER),

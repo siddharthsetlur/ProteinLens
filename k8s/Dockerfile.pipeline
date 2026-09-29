@@ -37,6 +37,14 @@ RUN conda install -n interplm -c bioconda -c conda-forge -y meme && \
     conda clean --tarballs --index-cache -y && \
     /opt/conda/envs/interplm/bin/meme -version
 
+# xformers for AMPLIFY: its HF remote code imports xformers.ops at module level
+# and uses memory_efficient_attention on CUDA. 0.0.28.post3 is the build for
+# torch 2.5.1; the cu121 index matches pytorch-cuda=12.1, and --no-deps stops pip
+# from replacing the conda torch.
+RUN /opt/conda/envs/interplm/bin/pip install --no-deps xformers==0.0.28.post3 \
+        --index-url https://download.pytorch.org/whl/cu121 && \
+    /opt/conda/envs/interplm/bin/python -c "import xformers.ops"
+
 # Activate environment by default
 ENV CONDA_DEFAULT_ENV=interplm
 ENV PATH=$CONDA_DIR/envs/interplm/bin:$PATH

@@ -227,7 +227,7 @@ def _collect_missing_residue_activations(
         _compute_residue_activations,
     )
     from proteinlens.analysis.feature_pipeline.data_acquisition import _parse_fasta
-    from proteinlens.embedders.esm import ESM
+    from proteinlens.embedders import load_embedder
     from proteinlens.sae.inference import load_sae
     from proteinlens.utils import get_device
 
@@ -235,7 +235,7 @@ def _collect_missing_residue_activations(
     print(f"[interpro_selection] Loading SAE from {config.sae_dir} ...")
     sae = load_sae(config.sae_dir, device=device)
     print(f"[interpro_selection] Loading ESM model {config.esm_model_name} ...")
-    esm_model = ESM(model_name=config.esm_model_name, device=device)
+    esm_model = load_embedder(config.esm_model_name, device=device)
 
     _, sequences = _parse_fasta(config.fasta_path)
 

@@ -34,7 +34,7 @@ from tqdm import tqdm
 from proteinlens.analysis.feature_pipeline.checkpoint import PipelineState
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
 from proteinlens.analysis.feature_pipeline.data_acquisition import _parse_fasta
-from proteinlens.embedders.esm import ESM
+from proteinlens.embedders import load_embedder
 from proteinlens.sae.inference import load_sae
 from proteinlens.utils import get_device
 
@@ -97,7 +97,7 @@ def run_survey(
     print(f"[survey] SAE has {num_features} features.")
 
     print(f"[survey] Loading ESM model {config.esm_model_name} ...")
-    esm = ESM(model_name=config.esm_model_name, device=device)
+    esm = load_embedder(config.esm_model_name, device=device)
 
     # ── Initialise or open the memmap ──
     # The memmap stores per-protein per-feature max activations.

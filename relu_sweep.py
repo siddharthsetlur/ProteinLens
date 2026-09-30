@@ -100,7 +100,10 @@ def main():
         model_name=ESM_MODEL_NAME,
         layer_idx=int(LAYER),
         eval_steps=100000,  # Evaluate during training (every 100k steps)
-        eval_batch_size=256,
+        # Fidelity batch = peak GPU memory of the run (all 100 eval seqs at once
+        # by default). Lower it to fit several agents on one GPU; the metric is a
+        # mean of per-sequence CE, so batching does not change it.
+        eval_batch_size=int(os.environ.get("EVAL_BATCH_SIZE", "256")),
     )
     
     # WandB already initialized by sweep agent

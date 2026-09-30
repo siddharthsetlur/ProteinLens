@@ -24,7 +24,8 @@ def filter_and_select_proteins(
     input_file: str,
     output_file: str,
     num_proteins: int,
-    max_length: Optional[int] = 1022
+    max_length: Optional[int] = 1022,
+    seed: Optional[int] = None,
 ) -> None:
     """
     Filter protein sequences by length and randomly select a subset.
@@ -76,7 +77,9 @@ def filter_and_select_proteins(
     # If num_proteins is greater than filtered_count, select all filtered proteins
     num_to_select = min(num_proteins, filtered_count)
 
-    # Randomly select from filtered proteins
+    # Randomly select from filtered proteins (seeded => reproducible subset)
+    if seed is not None:
+        random.seed(seed)
     selected_indices = set(random.sample(range(filtered_count), num_to_select))
 
     # Open output file (handling both compressed and uncompressed)

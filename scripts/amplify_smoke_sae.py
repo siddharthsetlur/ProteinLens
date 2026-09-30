@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import os
 from pathlib import Path
 
 import torch
@@ -48,7 +49,15 @@ def main():
     parser.add_argument("--batch-size", type=int, default=2048)
     parser.add_argument("--layer", type=int, default=12)
     parser.add_argument("--model", default="chandar-lab/AMPLIFY_120M")
+    parser.add_argument("--eval-batch-size", type=int, default=32)
+    parser.add_argument("--wandb-project", default=None,
+                        help="log the run + final metrics to this W&B project (entity from $WANDB_ENTITY)")
     args = parser.parse_args()
+
+    run_name = f"smoke-lr{args.lr:g}-l1{args.l1:g}-{args.steps}steps"
+    use_wandb = args.wandb_project is not None
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
 
     run = SAETrainingRun.from_config(TrainingRunConfig(
         dataloader_cfg=DataloaderConfig(plm_embd_dir=args.embd_dir, batch_size=args.batch_size),
@@ -67,9 +76,15 @@ def main():
             model_name=args.model,
             layer_idx=args.layer,
             eval_steps=args.steps,
-            eval_batch_size=32,
+            eval_batch_size=args.eval_batch_size,
         ),
-        wandb_cfg=WandbConfig(use_wandb=False),
+        wandb_cfg=WandbConfig(
+            use_wandb=use_wandb,
+            wandb_entity=os.environ.get("WANDB_ENTITY"),
+            wandb_project=args.wandb_project,
+            wandb_name=run_name,
+            log_steps=100,
+        ),
         checkpoint_cfg=CheckpointConfig(save_dir=args.out, save_steps=args.steps, max_ckpts_to_keep=1),
     ))
     run.run()
@@ -85,11 +100,27 @@ def main():
     dead = ((f > 0).sum(0) == 0).float().mean().item()
 
     fidelity = yaml.unsafe_load((args.out / "final_evaluation.yaml").read_text())["fidelity"]
+    peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else float("nan")
+    summary = {
+        "smoke/l0": l0,
+        "smoke/variance_explained": var_expl,
+        "smoke/dead_frac": dead,
+        "smoke/pct_loss_recovered": float(fidelity["pct_loss_recovered"]),
+        "smoke/peak_gpu_mem_gb": peak_gb,
+    }
     print(
         f"SMOKE lr={args.lr:g} l1={args.l1:g} steps={args.steps}: "
         f"L0={l0:.1f} var_explained={var_expl:.3f} dead_frac={dead:.3f} "
-        f"pct_loss_recovered={float(fidelity['pct_loss_recovered']):.1f}"
+        f"pct_loss_recovered={summary['smoke/pct_loss_recovered']:.1f} "
+        f"peak_gpu_mem_gb={peak_gb:.1f}"
     )
+    if use_wandb:
+        import wandb
+        # The training run was finished by SAETrainingRun; reopen it to attach the summary.
+        run = wandb.init(project=args.wandb_project, entity=os.environ.get("WANDB_ENTITY"),
+                         name=run_name + "-summary", job_type="smoke", config=vars(args))
+        run.summary.update(summary)
+        run.finish()
 
 
 if __name__ == "__main__":

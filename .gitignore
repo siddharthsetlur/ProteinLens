@@ -51,3 +51,5 @@ k8s/*.txt
 *.yaml
 !relu_sweep.yaml
 !matryoshka_sweep_config.yaml
+runpod/agent_state.json
+runpod/logs/*.log

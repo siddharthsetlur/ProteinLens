@@ -45,21 +45,24 @@ docker push  sidd2000/proteinlens-pipeline:amplify
 
 1. **SSH key on the account** (RunPod injects it as `PUBLIC_KEY`; `start.sh` installs it):
    `runpodctl ssh add-key --key-file ~/.ssh/id_ed25519.pub` (or Settings → SSH keys).
-2. **Secrets** (Settings → Secrets, or `runpodctl`/MCP `create-secret`): `HF_TOKEN`
-   (read token; the FASTA dataset is private), `WANDB_API_KEY`, `RUNPOD_API_KEY`
-   (for the self-stop). None exist yet.
-3. **Template** (Templates → New, or MCP `create-template`):
+2. **Secrets** (Settings → Secrets, or `runpodctl`/MCP `create-secret`), named
+   `hf-token` (read token; the FASTA dataset is private), `wandb-api-key`,
+   `runpod-api-key` (for the self-stop). None exist yet.
+3. **Agent-driven run?** `AGENT_RUNBOOK_amplify120m_sae.md` is the same flow
+   with per-phase hard budgets, tick-by-tick monitoring and gates.
+4. **Template** (Templates → New, or MCP `create-template`):
    - Image `sidd2000/proteinlens-pipeline:amplify`; container disk 20 GB
    - Container start command: `/workspace/runpod/start.sh`
    - Ports: `22/tcp`; start SSH: on; Jupyter: off
-   - Env: `HF_TOKEN={{ RUNPOD_SECRET_HF_TOKEN }}`,
-     `WANDB_API_KEY={{ RUNPOD_SECRET_WANDB_API_KEY }}`,
-     `RUNPOD_API_KEY={{ RUNPOD_SECRET_RUNPOD_API_KEY }}`,
+   - Env: `HF_TOKEN={{ RUNPOD_SECRET_hf-token }}`,
+     `WANDB_API_KEY={{ RUNPOD_SECRET_wandb-api-key }}`,
+     `RUNPOD_API_KEY={{ RUNPOD_SECRET_runpod-api-key }}`,
+     `WANDB_PROJECT=proteinlens-sae-amplify120m`,
      `WANDB_ENTITY=s-setlur-university-of-edinburgh`. `RUNPOD_POD_ID` is
      injected by RunPod.
    - **No volume in the template**: templates can't hold a network-volume mount
      (API rejects it); the volume is attached when the pod is created (§3).
-4. **Network volume**: 100 GB, STANDARD tier (~$7/month), in the data centre
+5. **Network volume**: 100 GB, STANDARD tier (~$7/month), in the data centre
    you will deploy in. A volume is pinned to its data centre and the pod must be
    in the same one, so pick the DC from GPU stock at that moment:
 
@@ -74,7 +77,7 @@ docker push  sidd2000/proteinlens-pipeline:amplify
    `dataCenter: EU-RO-1`). If A100 stock is gone when you deploy, create the
    volume in US-NE-1 and use an H100 instead; 2.2× the price, but the SAE runs
    are not GPU-bound, so don't pay for it unless A100s are unavailable.
-5. **Sweep** (laptop, once):
+6. **Sweep** (laptop, once):
    ```bash
    wandb sweep --entity s-setlur-university-of-edinburgh --project proteinlens-sae-amplify120m relu_sweep_amplify120m.yaml
    # -> s-setlur-university-of-edinburgh/proteinlens-sae-amplify120m/<sweep_id>

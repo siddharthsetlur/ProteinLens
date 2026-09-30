@@ -3,6 +3,7 @@
 # 42k proteins <=1022 aa from the same FASTA, 1000/shard, last shard held out for eval).
 # Seeded, so the subset is reproducible. Output ~35 GB under /data/data.
 set -euo pipefail
+. "$(dirname "$0")/env.sh"      # PID-1 env (secrets, RUNPOD_POD_ID) into this shell
 W=/data; D=$W/data; export HF_HOME=$W/hf_cache
 mkdir -p $D/uniprot_amplify $D/training_shards_amplify $D/eval_shards
 cd /workspace   # repo copy baked into the image

@@ -2,17 +2,19 @@
 # runpod/00_setup.sh -- first thing to run in a fresh pod (idempotent).
 # Checks the secrets, pulls the SwissProt FASTA the ESM runs used, verifies it.
 set -euo pipefail
+. "$(dirname "$0")/env.sh"      # PID-1 env (secrets, RUNPOD_POD_ID) into this shell
 W=/data                           # RunPod network volume, mounted at /data (persists across pods)
 mkdir -p $W/uniprot $W/logs $W/hf_cache
 export HF_HOME=$W/hf_cache        # model + dataset cache on the volume, not the container disk
 
 for v in HF_TOKEN WANDB_API_KEY WANDB_ENTITY RUNPOD_API_KEY RUNPOD_POD_ID; do
-  [ -n "${!v:-}" ] || { echo "ERROR: $v is not set (put it in the pod template env)"; exit 1; }
+  [ -n "${!v:-}" ] || { echo "ERROR: $v is not set (template env / {{ RUNPOD_SECRET_* }} secret missing)"; exit 1; }
 done
+command -v runpodctl >/dev/null || curl -sSL https://cli.runpod.net | bash   # for the self-stop
+runpodctl pod get "$RUNPOD_POD_ID" >/dev/null && echo "runpodctl ok (can stop this pod)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 python -c "import xformers.ops, torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 wandb login --relogin "$WANDB_API_KEY" >/dev/null && echo "wandb ok"
-pip install -q runpod            # python SDK used to stop the pod when the sweep finishes
 
 # Same FASTA as every ESM run (local copy = trained_models/layer_4/frosty-sweep-15/analysis/swissprot_all.fasta,
 # uploaded to the private HF dataset). sha256 must match or the protein universe differs.

@@ -5,6 +5,7 @@
 #   3. 5k-step AMPLIFY SAEs at the two sweep L1 values: L0 / var explained / loss recovered / peak GPU mem
 # Everything is logged to W&B project $WANDB_PROJECT (job_type=smoke). Writes under /data/smoke.
 set -euo pipefail
+. "$(dirname "$0")/env.sh"      # PID-1 env (secrets, RUNPOD_POD_ID) into this shell
 W=/data; SM=$W/smoke; export HF_HOME=$W/hf_cache
 export WANDB_PROJECT=${WANDB_PROJECT:-proteinlens-sae-amplify120m}
 mkdir -p $SM/shards $SM/heldout

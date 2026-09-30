@@ -4,6 +4,7 @@
 #   N_AGENTS = floor(0.8 * GPU memory / smoke peak_gpu_mem_gb), max 4 (one per grid point).
 # Each agent pulls grid points from W&B until the sweep is exhausted, so N agents = N runs at once.
 set -euo pipefail
+. "$(dirname "$0")/env.sh"      # PID-1 env (secrets, RUNPOD_POD_ID) into this shell
 SWEEP=${1:?sweep path}; N=${2:?number of agents}
 W=/data; export HF_HOME=$W/hf_cache
 cd /workspace   # repo copy baked into the image
@@ -23,8 +24,4 @@ kill $MON 2>/dev/null || true
 echo "=== SWEEP DONE: $(ls -d $W/models/sweeps/layer_12/*/ | wc -l) run dirs under $W/models/sweeps/layer_12 ==="
 
 # Stop billing. The volume (/data) keeps the checkpoints + logs.
-python - <<'PY'
-import os, runpod
-runpod.api_key = os.environ["RUNPOD_API_KEY"]
-print(runpod.stop_pod(os.environ["RUNPOD_POD_ID"]))
-PY
+runpodctl pod stop "$RUNPOD_POD_ID"

@@ -9,7 +9,11 @@ RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
     wget \
     git \
+    openssh-server \
+    tmux \
     && rm -rf /var/lib/apt/lists/*
+# openssh-server + tmux are for RunPod pods (runpod/start.sh brings up sshd; a
+# non-Runpod base image has no SSH/web terminal otherwise). Unused on EIDF.
 
 # Install Miniconda
 ENV CONDA_DIR=/opt/conda

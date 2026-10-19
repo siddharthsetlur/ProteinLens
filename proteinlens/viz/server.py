@@ -5,10 +5,17 @@ Multi-layer mode (recommended)::
 
     python -m proteinlens.viz.server --analysis-root analysis --port 8050
 
-``--analysis-root`` should contain one subdirectory per layer (the subdir name
-must match ``l<N>`` or ``layer_<N>``, e.g. ``l2``, ``l4``, ``l6``). Each
+``--analysis-root`` should contain one subdirectory per SAE run. Each
 subdirectory is treated as a full SAE analysis dir (the same shape that
-``--analysis-dir`` consumes in single-layer mode).
+``--analysis-dir`` consumes in single-layer mode):
+
+  * ``l<N>`` / ``layer_<N>`` (e.g. ``l2``, ``l4``, ``l6``) are the paper's
+    ESM2-8M layers. Their run id is the bare layer number, so URLs such as
+    ``/layer/4`` and ``/feature/4/4714`` are unchanged.
+  * Any other subdir with a ``dataset_stats.json`` (e.g. ``esm2-35m-l6``,
+    ``amplify-120m-l12``) is a generalization model. Its run id is the subdir
+    name, and its display label comes from ``dataset_stats.json``
+    (``esm_model`` + ``esm_layer``).
 
 Single-layer mode (back-compat)::
 
@@ -59,44 +66,52 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 
 _LAYER_SUBDIR_RE = re.compile(r"^(?:l|layer_)(\d+)$", re.IGNORECASE)
+_RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+# HF model id -> short display name.
+_MODEL_NAMES = {
+    "facebook/esm2_t6_8M_UR50D": "ESM2-8M",
+    "facebook/esm2_t12_35M_UR50D": "ESM2-35M",
+    "chandar-lab/AMPLIFY_120M": "AMPLIFY-120M",
+}
 
 
 # Paper-named features for the landing page. Numeric scores come from the
 # real per-layer feature index at startup; only the curated paper metadata
 # is hard-coded here.
 _FEATURED_BLUEPRINT: list[dict[str, Any]] = [
-    {"feature_id": 894, "layer": 4, "kind": "geom",
+    {"feature_id": 894, "layer": "4", "kind": "geom",
      "title": "Geometry-primary feature (Fig. 3)",
      "desc": ("f/894 — annotation only recoverable through the geometric "
               "pipeline. High GBM PR-AUC; no significant database / sequence "
               "match. The canonical geometry-primary case in the paper.")},
-    {"feature_id": 4714, "layer": 4, "kind": "geom",
+    {"feature_id": 4714, "layer": "4", "kind": "geom",
      "title": "Contact-related, ablation-causal (Fig. 5)",
      "desc": ("f/4714 — strong geometry-primary, contact-related feature used "
               "in the ablation experiment (linear response between ablation "
               "strength and contact-density target).")},
-    {"feature_id": 6775, "layer": 4, "kind": "both",
+    {"feature_id": 6775, "layer": "4", "kind": "both",
      "title": "Histidine kinase / HSP90-like ATPase — variant A",
      "desc": ("f/6775 (Q15120). One of four layer-4 features sharing the "
               "HSP90-like ATPase residue annotation; geometry distinguishes "
               "it from f/5508, f/8254, f/9608.")},
-    {"feature_id": 5508, "layer": 4, "kind": "both",
+    {"feature_id": 5508, "layer": "4", "kind": "both",
      "title": "HSP90-like ATPase — variant B",
      "desc": ("f/5508 (Q15120). Same residue label as f/6775 but lights up a "
               "different geometric sub-structure within the domain.")},
-    {"feature_id": 8254, "layer": 4, "kind": "both",
+    {"feature_id": 8254, "layer": "4", "kind": "both",
      "title": "HSP90-like ATPase — variant C",
      "desc": ("f/8254 (Q15120). Third member of the HSP90-like ATPase cluster.")},
-    {"feature_id": 9608, "layer": 4, "kind": "both",
+    {"feature_id": 9608, "layer": "4", "kind": "both",
      "title": "HSP90-like ATPase — variant D",
      "desc": ("f/9608 (Q15120). Fourth HSP90-like ATPase variant — biology "
               "says one label, geometry says four.")},
-    {"feature_id": 8518, "layer": 4, "kind": "geom",
+    {"feature_id": 8518, "layer": "4", "kind": "geom",
      "title": "Metagenomic-firing feature (Fig. 4)",
      "desc": ("f/8518 — geometry-significant on Swiss-Prot and fires on "
               "NMPfams metagenomic clusters. Bridges Swiss-Prot annotation "
               "onto unannotated sequences.")},
-    {"feature_id": 670, "layer": 4, "kind": "both",
+    {"feature_id": 670, "layer": "4", "kind": "both",
      "title": "Schematic figure feature (Fig. 1)",
      "desc": ("f/670 — the feature used in the paper's overview schematic to "
               "walk through the SAE → annotation pipeline.")},
@@ -107,8 +122,12 @@ def _is_sig(q: float | None) -> bool:
     return q is not None and q < Q_SIGNIFICANCE_THRESHOLD
 
 
-def _load_one_layer(analysis_dir: Path) -> LayerState:
-    """Build the in-memory state for a single analysis dir."""
+def _load_one_layer(analysis_dir: Path, run_id: str | None, primary: bool) -> LayerState:
+    """Build the in-memory state for a single analysis dir.
+
+    ``run_id`` None means "use the bare layer number" (paper ESM2-8M runs and
+    single-dir mode).
+    """
     stats = build_stats(analysis_dir)
     pipeline_status = build_pipeline_status(analysis_dir)
     feature_index = build_feature_index(analysis_dir)
@@ -120,16 +139,31 @@ def _load_one_layer(analysis_dir: Path) -> LayerState:
             f"dataset_stats.json missing 'esm_layer' field in {analysis_dir}"
         )
 
+    model_id = stats.get("dataset", {}).get("esm_model") or ""
+    model = _MODEL_NAMES.get(model_id, model_id.split("/")[-1])
+    layer_num = int(layer_num)
+    if run_id is None:
+        run_id = str(layer_num)
+    if primary:
+        label, short = f"Layer {layer_num}", f"L{layer_num}"
+    else:
+        label, short = f"{model} · Layer {layer_num}", f"{model} L{layer_num}"
+
     logger.info(
-        "Layer %d: %d features; %d annotated (%.1f%%) [from %s]",
-        layer_num,
+        "%s: %d features; %d annotated (%.1f%%) [from %s]",
+        label,
         len(feature_index),
         method_coverage["total_annotated_n"],
         method_coverage["total_annotated_pct"],
         analysis_dir,
     )
     return LayerState(
-        layer=int(layer_num),
+        layer=run_id,
+        label=label,
+        short=short,
+        model=model,
+        esm_layer=layer_num,
+        primary=primary,
         analysis_dir=analysis_dir,
         stats=stats,
         feature_index=feature_index,
@@ -138,34 +172,42 @@ def _load_one_layer(analysis_dir: Path) -> LayerState:
     )
 
 
-def _discover_layers(root: Path) -> dict[int, Path]:
-    """Find layer subdirs under ``root``: ``l2``, ``layer_4``, etc."""
-    out: dict[int, Path] = {}
+def _discover_layers(root: Path) -> list[tuple[str | None, Path, bool]]:
+    """Find run subdirs under ``root``, in display order.
+
+    Returns ``(run_id, path, primary)`` tuples: the paper's ``l<N>`` /
+    ``layer_<N>`` dirs first (by layer number, run_id None = bare layer
+    number), then every other subdir by name, keyed by that name.
+    """
     if not root.is_dir():
         raise SystemExit(f"Analysis root not found: {root}")
+    paper: list[tuple[int, Path]] = []
+    other: list[tuple[str, Path]] = []
     for child in sorted(root.iterdir()):
         if not child.is_dir():
             continue
-        m = _LAYER_SUBDIR_RE.match(child.name)
-        if not m:
-            continue
-        layer = int(m.group(1))
         if not (child / "dataset_stats.json").exists():
-            logger.warning("Skipping %s — no dataset_stats.json", child)
             continue
-        out[layer] = child
-    if not out:
+        m = _LAYER_SUBDIR_RE.match(child.name)
+        if m:
+            paper.append((int(m.group(1)), child))
+        elif _RUN_ID_RE.match(child.name):
+            other.append((child.name, child))
+        else:
+            logger.warning("Skipping %s — name is not a valid run id", child)
+    if not paper and not other:
         raise SystemExit(
-            f"No layer subdirs found under {root} (expected names like 'l2', 'layer_4')"
+            f"No analysis subdirs found under {root} (expected names like 'l2', "
+            "'layer_4' or 'esm2-35m-l6', each with a dataset_stats.json)"
         )
-    return out
+    return ([(None, p, True) for _, p in sorted(paper)]
+            + [(name, p, False) for name, p in other])
 
 
-def _build_landing(layers: dict[int, LayerState]) -> dict[str, Any]:
+def _build_landing(layers: dict[str, LayerState]) -> dict[str, Any]:
     """Build the cross-layer landing payload from the per-layer states."""
     layer_summaries: list[dict[str, Any]] = []
-    for L in sorted(layers):
-        s = layers[L]
+    for L, s in layers.items():
         idx = s.feature_index
         total = len(idx)
 
@@ -194,6 +236,11 @@ def _build_landing(layers: dict[int, LayerState]) -> dict[str, Any]:
 
         layer_summaries.append({
             "layer": L,
+            "label": s.label,
+            "short": s.short,
+            "model": s.model,
+            "esm_layer": s.esm_layer,
+            "primary": s.primary,
             "num_features": total,
             "novel_geom_count": cats["geom_only"],
             "any_pct": round(100.0 * any_n / total, 2) if total else 0.0,
@@ -224,7 +271,7 @@ def _build_landing(layers: dict[int, LayerState]) -> dict[str, Any]:
     }
 
 
-def _build_featured(layers: dict[int, LayerState]) -> list[dict[str, Any]]:
+def _build_featured(layers: dict[str, LayerState]) -> list[dict[str, Any]]:
     """Look up real per-feature scores for each paper-named feature."""
     out: list[dict[str, Any]] = []
     for entry in _FEATURED_BLUEPRINT:
@@ -253,7 +300,7 @@ def _build_featured(layers: dict[int, LayerState]) -> list[dict[str, Any]]:
     return out
 
 
-def create_app(layer_states: dict[int, LayerState]) -> FastAPI:
+def create_app(layer_states: dict[str, LayerState]) -> FastAPI:
     """
     Build the FastAPI app for one or more layers.
 
@@ -333,13 +380,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _resolve_layers(args: argparse.Namespace) -> dict[int, LayerState]:
+def _resolve_layers(args: argparse.Namespace) -> dict[str, LayerState]:
     """Pick the right input mode and return the layer-state dict."""
     if args.analysis_root:
         root = Path(args.analysis_root).resolve()
-        layer_dirs = _discover_layers(root)
-        logger.info("Discovered layers under %s: %s", root, sorted(layer_dirs.keys()))
-        return {L: _load_one_layer(p) for L, p in sorted(layer_dirs.items())}
+        runs = _discover_layers(root)
+        logger.info("Discovered runs under %s: %s", root, [p.name for _, p, _ in runs])
+        states = [_load_one_layer(p, run_id, primary) for run_id, p, primary in runs]
+        out = {s.layer: s for s in states}
+        if len(out) != len(states):
+            raise SystemExit(f"Duplicate run ids under {root}: {[s.layer for s in states]}")
+        return out
 
     raw = args.analysis_dir or args.data_dir
     if not raw:
@@ -352,7 +403,7 @@ def _resolve_layers(args: argparse.Namespace) -> dict[int, LayerState]:
         raise SystemExit(f"Analysis directory not found: {analysis_dir}")
     if not (analysis_dir / "dataset_stats.json").exists():
         raise SystemExit(f"Not a valid analysis directory (no dataset_stats.json): {analysis_dir}")
-    state = _load_one_layer(analysis_dir)
+    state = _load_one_layer(analysis_dir, None, True)
     return {state.layer: state}
 
 
@@ -365,7 +416,7 @@ def main() -> None:
     app = create_app(layer_states)
 
     logger.info("Starting GeoPedia at http://%s:%d", args.host, args.port)
-    logger.info("Layers loaded: %s", sorted(layer_states.keys()))
+    logger.info("Runs loaded: %s", list(layer_states))
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
 

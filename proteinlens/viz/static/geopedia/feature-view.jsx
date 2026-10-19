@@ -31,7 +31,7 @@ function FeatureView({ layer, featureId, onBack }) {
   const posn   = useFetch(() => API.position(layer, featureId).catch(() => null), [layer, featureId]);
 
   if (sig.loading || detail.loading) {
-    return <div className="container"><Loading what={`feature L${layer}/f${featureId}`} /></div>;
+    return <div className="container"><Loading what={`feature ${layerShort(layer)}/f${featureId}`} /></div>;
   }
   if (sig.error)    return <div className="container"><ErrorBox err={sig.error}    title={`Failed to load f/${featureId}`} /></div>;
   if (detail.error) return <div className="container"><ErrorBox err={detail.error} title={`Failed to load f/${featureId}`} /></div>;
@@ -64,7 +64,7 @@ function FeatureView({ layer, featureId, onBack }) {
       <div className="fd-header">
         <div>
           <div className="fid-line">
-            <span>Layer {layer}</span>
+            <span>{layerLabel(layer)}</span>
             <span style={{ color: 'var(--ink-3)' }}>·</span>
             <span>f/{feat.feature_id ?? featureId}</span>
             <Pill kind={cat === "geom_only" ? "geom" : cat === "bio_only" ? "bio" : cat === "both" ? "both" : ""}>

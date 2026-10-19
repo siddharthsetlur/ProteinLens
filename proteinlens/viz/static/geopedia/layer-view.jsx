@@ -47,15 +47,15 @@ function LayerView({ layer, landingSummary, onPickFeature, onOpenCaseStudy, laye
   }
   const arrow = (k) => sortKey === k ? (sortDir === "desc" ? " ↓" : " ↑") : "";
 
-  if (idx.loading) return <div className="container"><Loading what={`layer ${layer} features`} /></div>;
-  if (idx.error)   return <div className="container"><ErrorBox err={idx.error} title={`Failed to load layer ${layer}`} /></div>;
+  if (idx.loading) return <div className="container"><Loading what={`${layerLabel(layer)} features`} /></div>;
+  if (idx.error)   return <div className="container"><ErrorBox err={idx.error} title={`Failed to load ${layerLabel(layer)}`} /></div>;
 
   return (
     <div className="container">
       <div className="layer-header">
         <div>
-          <span className="eyebrow">Layer {layer}</span>
-          <h2>{(layerMeta.num_features || all.length).toLocaleString()} features in layer {layer}</h2>
+          <span className="eyebrow">{layerLabel(layer)}</span>
+          <h2>{(layerMeta.num_features || all.length).toLocaleString()} features in {layerLabel(layer)}</h2>
           <p className="desc">
             Each row is one SAE feature. Columns show the score under each annotation method;
             the geometric column is the paper's novel test. Highlighted cells are q&nbsp;&lt;&nbsp;0.05.
@@ -80,7 +80,8 @@ function LayerView({ layer, landingSummary, onPickFeature, onOpenCaseStudy, laye
             { id: 'geom-fills-db', n: '01', t: 'Geometry annotates features missing DB labels' },
             { id: 'granularity',   n: '02', t: 'Geometry is more granular than biology' },
             { id: 'metagenomic',   n: '03', t: 'Transfer to metagenomic proteins' },
-          ].map((c, i, arr) => (
+          ].filter(c => !(c.id === 'metagenomic' && LAYER_META[layer]?.primary === false))
+           .map((c, i, arr) => (
             <button key={c.id}
               onClick={() => onOpenCaseStudy(c.id)}
               style={{

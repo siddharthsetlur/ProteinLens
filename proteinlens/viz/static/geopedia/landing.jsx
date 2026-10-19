@@ -11,12 +11,16 @@ function Landing({ onPickLayer, onPickFeature }) {
 
   const data = landing.data || {};
   const layers = data.layers || [];
+  // Headline numbers describe the paper's ESM2-8M layers only; the other
+  // models are generalization runs and are shown as their own cards below.
+  const paperLayers = layers.filter(L => L.primary !== false);
+  const hasOtherModels = paperLayers.length < layers.length;
   const sae    = data.sae || {};
   const dataset = data.dataset || {};
 
   // Mean across loaded layers — used as headline numbers under the hero.
   const mean = (key) => {
-    const xs = layers.map(L => L[key]).filter(v => v != null);
+    const xs = paperLayers.map(L => L[key]).filter(v => v != null);
     return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
   };
 
@@ -37,10 +41,10 @@ function Landing({ onPickLayer, onPickFeature }) {
           <dl className="meta-grid">
             <div><dt>Model</dt><dd>{dataset.esm_model || SAE_DEFAULTS.model}</dd></div>
             <div><dt>Architecture</dt><dd>Simple ReLU SAE · {sae.activation_dim ? `${sae.activation_dim}-d` : ""} residual stream</dd></div>
-            <div><dt>Layers in atlas</dt><dd>{layers.map(L => L.layer).join(", ") || "—"}</dd></div>
+            <div><dt>Layers in atlas</dt><dd>{paperLayers.map(L => L.esm_layer ?? L.layer).join(", ") || "—"}{hasOtherModels ? ` · + ${layers.length - paperLayers.length} other model${layers.length - paperLayers.length === 1 ? "" : "s"}` : ""}</dd></div>
             <div><dt>Training proteins</dt><dd>{dataset.total_proteins ? dataset.total_proteins.toLocaleString() : "—"}</dd></div>
             <div><dt>Sequence clusters</dt><dd>{dataset.total_clusters ? dataset.total_clusters.toLocaleString() : "—"}</dd></div>
-            <div><dt>Features / layer</dt><dd>{layers[0]?.num_features?.toLocaleString() || "—"}</dd></div>
+            <div><dt>Features / layer</dt><dd>{paperLayers[0]?.num_features?.toLocaleString() || "—"}</dd></div>
             <div><dt>Mean annotated (any method)</dt><dd>{mean("any_pct") != null ? `${mean("any_pct").toFixed(1)}%` : "—"} · BH q &lt; 0.05</dd></div>
             <div><dt>Mean geometric significant</dt><dd>{mean("geom_pct") != null ? `${mean("geom_pct").toFixed(1)}%` : "—"}</dd></div>
           </dl>
@@ -56,6 +60,7 @@ function Landing({ onPickLayer, onPickFeature }) {
           </div>
           <p className="desc">
             Each ESM-2 transformer layer has its own SAE. Annotation methods are run independently per layer.
+            {hasOtherModels && " The last cards are generalization runs on other protein language models (same pipeline, CATH and NMPFam not run)."}
             Bars show the % of features each method significantly annotates (BH q&nbsp;&lt;&nbsp;0.05).
           </p>
         </div>
@@ -75,7 +80,8 @@ function Landing({ onPickLayer, onPickFeature }) {
               <button key={L.layer} className="layer-card" onClick={() => onPickLayer(L.layer)}>
                 <div>
                   <div className="layer-num">
-                    <span className="pre">Layer</span>{String(L.layer).padStart(2, "0")}
+                    {L.primary === false && <span className="pre">{L.model}</span>}
+                    <span className="pre">Layer</span>{String(L.esm_layer ?? L.layer).padStart(2, "0")}
                   </div>
                 </div>
                 <div className="bar-stack">
@@ -136,7 +142,7 @@ function Landing({ onPickLayer, onPickFeature }) {
                     </div>
                     <div className="body">
                       <div className="head-row">
-                        <span className="fid">L{f.layer}/f{f.feature_id}</span>
+                        <span className="fid">{layerShort(f.layer)}/f{f.feature_id}</span>
                         <Pill kind={f.kind === "geom" ? "geom" : f.kind === "bio" ? "bio" : "both"}>
                           {f.kind === "geom" ? "Geometry only" : f.kind === "bio" ? "Database only" : "Both"}
                         </Pill>

@@ -1,6 +1,14 @@
 // Thin client for the GeoPedia /api/* endpoints. All routes are layer-namespaced
 // except the cross-layer landing payload and a couple of shared resources.
 
+// Run id -> /api/layers row ({label, short, model, primary, ...}). Run ids are
+// strings: the paper's ESM2-8M layers are "2"/"4"/"6", other models use their
+// analysis subdir name. App fills this before rendering any view.
+const LAYER_META = {};
+function setLayerMeta(list) { for (const L of list || []) LAYER_META[L.layer] = L; }
+function layerLabel(L) { return LAYER_META[L]?.label || `Layer ${L}`; }
+function layerShort(L) { return LAYER_META[L]?.short || `L${L}`; }
+
 const API = {
   async get(path) {
     const r = await fetch(path, { credentials: "same-origin" });

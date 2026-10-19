@@ -7,17 +7,16 @@ function parseInitialView() {
   const parts = path.split("/").filter(Boolean);
   // Empty path → landing
   if (parts.length === 0) return { kind: "landing" };
-  // /layer/<N>
+  // /layer/<run id>   (run ids are strings: "4", "esm2-35m-l6", ...)
   if (parts[0] === "layer" && parts[1]) {
-    const layer = parseInt(parts[1], 10);
-    if (!Number.isNaN(layer)) return { kind: "layer", layer };
+    return { kind: "layer", layer: decodeURIComponent(parts[1]) };
   }
   // /feature/<L>/<id>  (preferred)  OR  /feature/<id>  (legacy single-layer)
   if (parts[0] === "feature") {
     if (parts.length >= 3) {
-      const layer = parseInt(parts[1], 10);
+      const layer = decodeURIComponent(parts[1]);
       const fid   = parseInt(parts[2], 10);
-      if (!Number.isNaN(layer) && !Number.isNaN(fid)) return { kind: "feature", layer, featureId: fid };
+      if (!Number.isNaN(fid)) return { kind: "feature", layer, featureId: fid };
     } else if (parts.length === 2) {
       const fid = parseInt(parts[1], 10);
       if (!Number.isNaN(fid)) return { kind: "feature", layer: null, featureId: fid };
@@ -25,8 +24,8 @@ function parseInitialView() {
   }
   // /case/<id>/<layer>[/family/<source>/<code> | /feature/<fid>]
   if (parts[0] === "case" && parts[1] && parts[2]) {
-    const layer = parseInt(parts[2], 10);
-    if (!Number.isNaN(layer)) {
+    const layer = decodeURIComponent(parts[2]);
+    {
       // Family detail under granularity
       if (parts[1] === "granularity" && parts[3] === "family" && parts[4] && parts[5]) {
         return {
@@ -71,6 +70,7 @@ function pushUrl(view) {
 function App() {
   const layersList = useFetch(API.layers, []);
   const landing    = useFetch(API.landing, []);
+  setLayerMeta(layersList.data);
 
   const [view, setView] = React.useState(parseInitialView);
 
@@ -99,7 +99,7 @@ function App() {
       {view.layer != null && (
         <React.Fragment>
           <span className="sep">/</span>
-          <a onClick={() => setView({ kind: "layer", layer: view.layer })}>Layer {view.layer}</a>
+          <a onClick={() => setView({ kind: "layer", layer: view.layer })}>{layerLabel(view.layer)}</a>
         </React.Fragment>
       )}
       {view.kind === "feature" && (
@@ -193,7 +193,7 @@ function App() {
         <nav className="topnav">
           <a onClick={() => setView({ kind: "landing" })}>Atlas</a>
           {layersAvailable.map(L => (
-            <a key={L} onClick={() => setView({ kind: "layer", layer: L })}>L{L}</a>
+            <a key={L} onClick={() => setView({ kind: "layer", layer: L })}>{layerShort(L)}</a>
           ))}
         </nav>
       </div>
@@ -222,7 +222,7 @@ function App() {
       )}
       {view.kind === "feature" && view.layer == null && (
         <div className="container" style={{ padding: 32 }}>
-          <ErrorBox title="Pick a layer first" err={`Several layers are loaded (${layersAvailable.join(", ")}). Open the feature from a specific layer page.`} />
+          <ErrorBox title="Pick a layer first" err={`Several layers are loaded (${layersAvailable.map(layerShort).join(", ")}). Open the feature from a specific layer page.`} />
         </div>
       )}
       {view.kind === "casestudy" && view.id === "geom-fills-db" && (

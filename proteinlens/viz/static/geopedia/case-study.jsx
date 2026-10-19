@@ -18,7 +18,7 @@ function CaseStudyGeometry({ layer, onPickFeature }) {
   return (
     <div className="container">
       <div style={{ padding: '24px 0 12px' }}>
-        <span className="eyebrow">Case study · 01 · Layer {layer}</span>
+        <span className="eyebrow">Case study · 01 · {layerLabel(layer)}</span>
         <h2 style={{ fontFamily: 'var(--serif)', fontSize: 40, fontWeight: 500, letterSpacing: '-0.02em', margin: '8px 0 12px', lineHeight: 1.05 }}>
           Geometry annotates features missing DB labels
         </h2>
@@ -100,7 +100,7 @@ function CaseStudyGranularity({ layer, onPickFeature, onPickFamily }) {
   return (
     <div className="container">
       <div style={{ padding: '24px 0 12px' }}>
-        <span className="eyebrow">Case study · 02 · Layer {layer}</span>
+        <span className="eyebrow">Case study · 02 · {layerLabel(layer)}</span>
         <h2 style={{ fontFamily: 'var(--serif)', fontSize: 40, fontWeight: 500, letterSpacing: '-0.02em', margin: '8px 0 12px', lineHeight: 1.05 }}>
           Geometry is more granular than biology
         </h2>
@@ -208,16 +208,22 @@ function CaseStudyMetagenomic({ layer, onPickFeature }) {
     return (
       <div className="container">
         <div style={{ padding: '24px 0 12px' }}>
-          <span className="eyebrow">Case study · 03 · Layer {layer}</span>
+          <span className="eyebrow">Case study · 03 · {layerLabel(layer)}</span>
           <h2 style={{ fontFamily: 'var(--serif)', fontSize: 40, fontWeight: 500, letterSpacing: '-0.02em', margin: '8px 0 12px', lineHeight: 1.05 }}>
             Transfer to metagenomic proteins
           </h2>
           <div className="error-box">
-            <strong>Not built for layer {layer}.</strong>
-            <div style={{ marginTop: 4 }}>
-              Run <code>python scripts/build_nmpfam_transfer_summary.py --analysis-dir analysis/l{layer}</code>
-              {' '}to generate the per-feature transfer aggregates.
-            </div>
+            <strong>Not built for {layerLabel(layer)}.</strong>
+            {LAYER_META[layer]?.primary === false ? (
+              <div style={{ marginTop: 4 }}>
+                The NMPFam metagenomic transfer was only run for the paper's ESM2-8M layers.
+              </div>
+            ) : (
+              <div style={{ marginTop: 4 }}>
+                Run <code>python scripts/build_nmpfam_transfer_summary.py --analysis-dir analysis/l{layer}</code>
+                {' '}to generate the per-feature transfer aggregates.
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -227,7 +233,7 @@ function CaseStudyMetagenomic({ layer, onPickFeature }) {
   return (
     <div className="container">
       <div style={{ padding: '24px 0 12px' }}>
-        <span className="eyebrow">Case study · 03 · Layer {layer} · §4.3</span>
+        <span className="eyebrow">Case study · 03 · {layerLabel(layer)} · §4.3</span>
         <h2 style={{ fontFamily: 'var(--serif)', fontSize: 40, fontWeight: 500, letterSpacing: '-0.02em', margin: '8px 0 12px', lineHeight: 1.05 }}>
           Geometric annotation transfers to metagenomic proteins
         </h2>
@@ -435,7 +441,7 @@ function CaseStudyFamilyDetail({ layer, family, onBack, onPickFeature }) {
     return (
       <div className="container">
         <div className="error-box">
-          <strong>Family {family.code} not found in layer {layer}.</strong>
+          <strong>Family {family.code} not found in {layerLabel(layer)}.</strong>
         </div>
       </div>
     );
@@ -451,7 +457,7 @@ function CaseStudyFamilyDetail({ layer, family, onBack, onPickFeature }) {
           ← back to family list
         </a>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginTop: 12 }}>
-          <span className="eyebrow">{family.source === "interpro" ? "InterPro residue group" : "CATH residue group"} · Layer {layer}</span>
+          <span className="eyebrow">{family.source === "interpro" ? "InterPro residue group" : "CATH residue group"} · {layerLabel(layer)}</span>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-3)' }}>{family.code}</span>
         </div>
         <h2 style={{ fontFamily: 'var(--serif)', fontSize: 36, fontWeight: 500, letterSpacing: '-0.02em', margin: '8px 0 12px', lineHeight: 1.05 }}>
@@ -762,7 +768,7 @@ function CaseStudyMetagenomicDetail({ layer, featureId, onBack, onOpenFeaturePag
           ← back to feature list
         </a>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginTop: 12 }}>
-          <span className="eyebrow">Case study · 03 · Layer {layer} · §4.3</span>
+          <span className="eyebrow">Case study · 03 · {layerLabel(layer)} · §4.3</span>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-3)' }}>f/{featureId}</span>
         </div>
         <h2 style={{ fontFamily: 'var(--serif)', fontSize: 36, fontWeight: 500, letterSpacing: '-0.02em', margin: '8px 0 12px', lineHeight: 1.05 }}>

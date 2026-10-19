@@ -1,11 +1,13 @@
 """
 API route handlers for the GeoPedia SAE feature visualizer.
 
-The server can serve **one or many** SAE layers in a single process. Each
-layer's analysis dir (with its enrichment JSONs, geometry-primary analysis,
-case-study payloads, PDB cache, etc.) is registered under a layer number
-at startup; routes that touch per-layer data live under
-``/api/layers/{layer}/...``.
+The server can serve **one or many** SAE runs in a single process. Each
+run's analysis dir (with its enrichment JSONs, geometry-primary analysis,
+case-study payloads, PDB cache, etc.) is registered under a string run id
+at startup: the paper's ESM2-8M layers keep their bare layer number ("2",
+"4", "6") so existing URLs are unchanged, and other models use their
+analysis subdir name (e.g. "esm2-35m-l6"). Routes that touch per-run data
+live under ``/api/layers/{layer}/...``.
 
 Endpoints:
   GET /api/layers                               -> registered layers + summary
@@ -54,18 +56,28 @@ router = APIRouter(prefix="/api")
 
 @dataclass
 class LayerState:
-    """Per-layer in-memory state, populated once at startup."""
-    layer: int
+    """Per-run in-memory state, populated once at startup.
+
+    ``layer`` is the run id used in URLs; ``label``/``short`` are its display
+    names; ``primary`` marks the paper's ESM2-8M runs (used for the landing
+    headline numbers) as opposed to the generalization models.
+    """
+    layer: str
     analysis_dir: Path
     stats: dict[str, Any]
     feature_index: list[dict[str, Any]]
     pipeline_status: dict[str, Any]
     method_coverage: dict[str, Any]
+    label: str = ""
+    short: str = ""
+    model: str = ""
+    esm_layer: int | None = None
+    primary: bool = True
     feature_by_id: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
-# Layer number -> LayerState, populated by configure().
-_layers: dict[int, LayerState] = {}
+# Run id -> LayerState, in display order, populated by configure().
+_layers: dict[str, LayerState] = {}
 
 # Optional landing-page summary (set once at startup).
 _landing: dict[str, Any] = {}
@@ -73,7 +85,7 @@ _featured: list[dict[str, Any]] = []
 
 
 def configure(
-    layer_states: dict[int, LayerState],
+    layer_states: dict[str, LayerState],
     landing: dict[str, Any] | None = None,
     featured: list[dict[str, Any]] | None = None,
 ) -> None:
@@ -84,16 +96,16 @@ def configure(
     _featured = list(featured or [])
     for L, s in _layers.items():
         s.feature_by_id = {row["feature_id"]: row for row in s.feature_index}
-    logger.info("API configured for layers: %s", sorted(_layers.keys()))
+    logger.info("API configured for layers: %s", list(_layers))
 
 
-def _get_layer(layer: int) -> LayerState:
+def _get_layer(layer: str) -> LayerState:
     """Look up a layer state or 404 if it's not registered."""
     s = _layers.get(layer)
     if s is None:
         raise HTTPException(
             status_code=404,
-            detail=f"Layer {layer} not loaded. Available: {sorted(_layers.keys())}",
+            detail=f"Layer {layer} not loaded. Available: {list(_layers)}",
         )
     return s
 
@@ -115,11 +127,16 @@ def list_layers() -> list[dict[str, Any]]:
     return [
         {
             "layer": L,
+            "label": s.label,
+            "short": s.short,
+            "model": s.model,
+            "esm_layer": s.esm_layer,
+            "primary": s.primary,
             "num_features": len(s.feature_index),
             "num_annotated": s.method_coverage.get("total_annotated_n"),
             "pct_annotated": s.method_coverage.get("total_annotated_pct"),
         }
-        for L, s in sorted(_layers.items())
+        for L, s in _layers.items()
     ]
 
 
@@ -150,26 +167,26 @@ for _k in range(1, 8):
 
 
 @router.get("/layers/{layer}/stats")
-def get_stats(layer: int) -> dict[str, Any]:
+def get_stats(layer: str) -> dict[str, Any]:
     """Return merged dataset stats + SAE config + pipeline status for the layer."""
     s = _get_layer(layer)
     return {**s.stats, "pipeline": s.pipeline_status, "layer": layer}
 
 
 @router.get("/layers/{layer}/index")
-def get_index(layer: int) -> list[dict[str, Any]]:
+def get_index(layer: str) -> list[dict[str, Any]]:
     """Return the full feature index for the layer table view."""
     return _get_layer(layer).feature_index
 
 
 @router.get("/layers/{layer}/method-coverage")
-def get_method_coverage(layer: int) -> dict[str, Any]:
+def get_method_coverage(layer: str) -> dict[str, Any]:
     """Return per-method q<0.05 coverage and the union total annotated count."""
     return _get_layer(layer).method_coverage
 
 
 @router.get("/layers/{layer}/feature/{feature_id}/significance")
-def get_feature_significance(layer: int, feature_id: int) -> dict[str, Any]:
+def get_feature_significance(layer: str, feature_id: int) -> dict[str, Any]:
     """Return the 7-method score/label/q-value row for a single feature."""
     s = _get_layer(layer)
     row = s.feature_by_id.get(feature_id)
@@ -179,84 +196,84 @@ def get_feature_significance(layer: int, feature_id: int) -> dict[str, Any]:
 
 
 @router.get("/layers/{layer}/feature/{feature_id}")
-def get_feature(layer: int, feature_id: int) -> dict[str, Any]:
+def get_feature(layer: str, feature_id: int) -> dict[str, Any]:
     """Return the per-feature JSON (top_sequences, activation_bins, coverage, ...)."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "features" / f"{feature_id:04d}.json")
 
 
 @router.get("/layers/{layer}/feature/{feature_id}/interpro")
-def get_feature_interpro(layer: int, feature_id: int) -> dict[str, Any]:
+def get_feature_interpro(layer: str, feature_id: int) -> dict[str, Any]:
     """Return InterPro enrichment results for a feature."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "interpro_enrichment" / f"{feature_id:04d}.json")
 
 
 @router.get("/layers/{layer}/feature/{feature_id}/motif")
-def get_feature_motif(layer: int, feature_id: int) -> dict[str, Any]:
+def get_feature_motif(layer: str, feature_id: int) -> dict[str, Any]:
     """Return MEME/PWM motif enrichment results for a feature."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "motif_pwm_enrichment" / f"{feature_id:04d}.json")
 
 
 @router.get("/layers/{layer}/feature/{feature_id}/position")
-def get_feature_position(layer: int, feature_id: int) -> dict[str, Any]:
+def get_feature_position(layer: str, feature_id: int) -> dict[str, Any]:
     """Return sequence position enrichment results for a feature."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "position_enrichment" / f"{feature_id:04d}.json")
 
 
 @router.get("/layers/{layer}/feature/{feature_id}/geometry")
-def get_feature_geometry(layer: int, feature_id: int) -> dict[str, Any]:
+def get_feature_geometry(layer: str, feature_id: int) -> dict[str, Any]:
     """Return geometry enrichment results for a feature."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "geometry_enrichment" / f"{feature_id:04d}.json")
 
 
 @router.get("/layers/{layer}/feature/{feature_id}/cath")
-def get_feature_cath(layer: int, feature_id: int) -> dict[str, Any]:
+def get_feature_cath(layer: str, feature_id: int) -> dict[str, Any]:
     """Return CATH enrichment results for a feature."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "cath_enrichment" / f"{feature_id:04d}.json")
 
 
 @router.get("/layers/{layer}/feature/{feature_id}/nmpfam")
-def get_feature_nmpfam(layer: int, feature_id: int) -> dict[str, Any]:
+def get_feature_nmpfam(layer: str, feature_id: int) -> dict[str, Any]:
     """Return NMPFams novel-protein annotation for a feature."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "nmpfam" / "nmpfam_enrichment" / f"{feature_id:04d}.json")
 
 
 @router.get("/layers/{layer}/geometry-primary")
-def get_geometry_primary(layer: int) -> dict[str, Any]:
+def get_geometry_primary(layer: str) -> dict[str, Any]:
     """Return geometry-primary analysis results."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "geometry_primary_analysis.json")
 
 
 @router.get("/layers/{layer}/cross-family-geometry")
-def get_cross_family_geometry(layer: int) -> dict[str, Any]:
+def get_cross_family_geometry(layer: str) -> dict[str, Any]:
     """Case study 01: features without DB labels but with significant geometry."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "cross_family_geometry.json")
 
 
 @router.get("/layers/{layer}/subdomain-case-study")
-def get_subdomain_case_study(layer: int) -> dict[str, Any]:
+def get_subdomain_case_study(layer: str) -> dict[str, Any]:
     """Case study 02: shared DB labels split by geometry."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "subdomain_case_study.json")
 
 
 @router.get("/layers/{layer}/nmpfam-case-study")
-def get_nmpfam_case_study(layer: int) -> dict[str, Any]:
+def get_nmpfam_case_study(layer: str) -> dict[str, Any]:
     """Case study 03: NMPFams metagenomic transfer (not all layers have this)."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "nmpfam_case_study.json")
 
 
 @router.get("/layers/{layer}/nmpfam-transfer-summary")
-def get_nmpfam_transfer_summary(layer: int) -> dict[str, Any]:
+def get_nmpfam_transfer_summary(layer: str) -> dict[str, Any]:
     """Per-feature transfer aggregates (max / median PR-AUC over NMPFam hits)
     plus the per-layer Table 4 stats. Built by
     ``scripts/build_nmpfam_transfer_summary.py``."""
@@ -265,35 +282,35 @@ def get_nmpfam_transfer_summary(layer: int) -> dict[str, Any]:
 
 
 @router.get("/layers/{layer}/meme-case-study-families")
-def get_meme_case_study_families(layer: int) -> dict[str, Any]:
+def get_meme_case_study_families(layer: str) -> dict[str, Any]:
     """Return MEME/PWM case-study families."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "meme_case_study_families.json")
 
 
 @router.get("/layers/{layer}/nmpfam-annotations")
-def get_nmpfam_annotations(layer: int) -> dict[str, Any]:
+def get_nmpfam_annotations(layer: str) -> dict[str, Any]:
     """q-value-tiered NMPFam annotations master index."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "nmpfam_annotation" / "annotations.json")
 
 
 @router.get("/layers/{layer}/nmpfam-annotations/{feature_id}")
-def get_nmpfam_annotation_feature(layer: int, feature_id: int) -> dict[str, Any]:
+def get_nmpfam_annotation_feature(layer: str, feature_id: int) -> dict[str, Any]:
     """Per-feature NMPFam annotation payload with all hit tiers."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "nmpfam_annotation" / f"{feature_id:04d}.json")
 
 
 @router.get("/layers/{layer}/transfer-metrics/B")
-def get_transfer_metric_b(layer: int) -> dict[str, Any]:
+def get_transfer_metric_b(layer: str) -> dict[str, Any]:
     """Metric B — predictive transfer of SwissProt GBM to NMPFams."""
     s = _get_layer(layer)
     return _read_json(s.analysis_dir / "transfer_metrics" / "metric_B.json")
 
 
 @router.get("/layers/{layer}/static-plot/{filename}")
-def get_static_plot(layer: int, filename: str) -> Response:
+def get_static_plot(layer: str, filename: str) -> Response:
     """Serve a pre-generated scatter plot PNG from the layer's static_plots/."""
     if not re.match(r"^[a-z0-9_]+\.png$", filename):
         raise HTTPException(status_code=400, detail="Invalid filename")

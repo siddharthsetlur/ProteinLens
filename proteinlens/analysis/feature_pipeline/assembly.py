@@ -21,6 +21,7 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
+from proteinlens.analysis.feature_pipeline.checkpoint import write_json_atomic
 from proteinlens.analysis.feature_pipeline.collection import _has_pdb
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
 from proteinlens.analysis.feature_pipeline.data_acquisition import _parse_fasta
@@ -129,7 +130,7 @@ def run_assembly(config: PipelineConfig) -> None:
     for feat_idx in tqdm(range(num_features), desc="Assembling features"):
         feat_key = str(feat_idx)
         out_path = config.features_dir / f"{feat_idx:04d}.json"
-        if out_path.exists():
+        if out_path.exists() and out_path.stat().st_size > 0:
             # Still track accessions from the selection data (cheap)
             sel = selection["per_feature"].get(feat_key, {})
             all_referenced_accessions.update(sel.get("top", []))
@@ -161,8 +162,7 @@ def run_assembly(config: PipelineConfig) -> None:
                 all_referenced_accessions.add(entry["accession"])
 
         # Write per-feature JSON
-        with open(out_path, "w") as f:
-            json.dump(feat_data, f, indent=2)
+        write_json_atomic(out_path, feat_data)
 
     if n_skipped:
         print(f"[assembly] Resumed: skipped {n_skipped} already-assembled features.")

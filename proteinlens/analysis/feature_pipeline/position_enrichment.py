@@ -48,6 +48,7 @@ from typing import Any, Callable, Dict, List, Optional
 import numpy as np
 from tqdm import tqdm
 
+from proteinlens.analysis.feature_pipeline.checkpoint import write_json_atomic
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
 from proteinlens.analysis.feature_pipeline.motif_enrichment import (
     _compute_best_motif_f1,
@@ -273,9 +274,9 @@ def run_position_enrichment(config: PipelineConfig) -> None:
                         "n_predicates_tested": existing.get("n_predicates_tested", 0),
                     }
                 n_analyzed += 1
+                continue
             except (json.JSONDecodeError, KeyError):
-                pass
-            continue
+                pass  # truncated/stub output from a killed run: recompute
 
         feat_path = features_dir / f"{feat_idx:04d}.json"
         if not feat_path.exists():
@@ -291,8 +292,7 @@ def run_position_enrichment(config: PipelineConfig) -> None:
             n_skipped += 1
             continue
 
-        with open(out_path, "w") as f:
-            json.dump(result, f, indent=2)
+        write_json_atomic(out_path, result)
 
         fid_str = str(feat_idx)
         if result["top_positions"]:

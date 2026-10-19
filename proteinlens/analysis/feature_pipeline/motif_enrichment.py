@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from tqdm import tqdm
 
+from proteinlens.analysis.feature_pipeline.checkpoint import write_json_atomic
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
 
 # 20 standard amino acids — any character outside this set is skipped
@@ -387,9 +388,9 @@ def run_motif_enrichment(config: PipelineConfig) -> None:
                         "n_kmers_tested": existing.get("n_unique_kmers_tested", 0),
                     }
                 n_analyzed += 1
+                continue
             except (json.JSONDecodeError, KeyError):
-                pass
-            continue
+                pass  # truncated/stub output from a killed run: recompute
 
         # Load per-feature JSON
         feat_path = features_dir / f"{feat_idx:04d}.json"
@@ -407,8 +408,7 @@ def run_motif_enrichment(config: PipelineConfig) -> None:
             continue
 
         # Write per-feature output
-        with open(out_path, "w") as f:
-            json.dump(result, f, indent=2)
+        write_json_atomic(out_path, result)
 
         # Add to summary
         fid_str = str(feat_idx)

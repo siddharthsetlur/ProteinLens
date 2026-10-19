@@ -56,6 +56,7 @@ import numpy as np
 from sklearn.metrics import average_precision_score
 from tqdm import tqdm
 
+from proteinlens.analysis.feature_pipeline.checkpoint import write_json_atomic
 from proteinlens.analysis.feature_pipeline.config import PipelineConfig
 from proteinlens.analysis.feature_pipeline.motif_enrichment import (
     _pool_proteins_for_feature,
@@ -674,9 +675,9 @@ def run_motif_pwm_enrichment(config: PipelineConfig) -> None:
                         "n_motifs": len(existing["motifs"]),
                     }
                 n_analyzed += 1
+                continue
             except (json.JSONDecodeError, KeyError):
-                pass
-            continue
+                pass  # truncated/stub output from a killed run: recompute
 
         feat_path = features_dir / f"{feat_idx:04d}.json"
         if not feat_path.exists():
@@ -691,8 +692,7 @@ def run_motif_pwm_enrichment(config: PipelineConfig) -> None:
             n_skipped += 1
             continue
 
-        with open(out_path, "w") as f:
-            json.dump(result, f, indent=2)
+        write_json_atomic(out_path, result)
 
         m0 = result["motifs"][0]
         summary_features[str(feat_idx)] = {

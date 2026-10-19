@@ -9,7 +9,20 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
+
+
+
+def write_json_atomic(path: Path, obj: Any) -> None:
+    """Write ``obj`` as JSON to ``path`` via a PID-suffixed temp file + rename.
+
+    A kill mid-write leaves only the temp file, never a truncated ``path`` —
+    the per-feature resume checks treat ``path.exists()`` as "done".
+    """
+    tmp_path = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
+    with open(tmp_path, "w") as f:
+        json.dump(obj, f, indent=2)
+    os.replace(tmp_path, path)
 
 
 class PipelineState:
